@@ -48,12 +48,12 @@ end
 
 function pred:GetChargeTimeAndSpeed()
 	local charge_time = 0.0
-	local projectile_speed = self.weapon_info:GetVelocity(0):Length()
+	local velocity_vector = self.weapon_info:GetVelocity(0)
 
 	if self.pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_COMPOUND_BOW then
 		-- check if bow is currently being charged
 		local charge_begin_time = self.pWeapon:GetChargeBeginTime()
-		projectile_speed = self.weapon_info:GetVelocity(charge_begin_time or 0):Length()
+		velocity_vector = self.weapon_info:GetVelocity(charge_begin_time or 0)
 
 		-- if charge_begin_time is 0, the bow isn't charging
 		if charge_begin_time > 0 then
@@ -63,14 +63,14 @@ function pred:GetChargeTimeAndSpeed()
 
 			-- apply charge multiplier to projectile speed
 			local charge_multiplier = 1.0 + (charge_time * 0.44) -- 44% speed increase at full charge
-			projectile_speed = projectile_speed * charge_multiplier
+			velocity_vector = velocity_vector * charge_multiplier
 		else
 			-- bow is not charging, use minimum speed
 			charge_time = 0.0
 		end
 	elseif self.pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_PIPEBOMBLAUNCHER then
 		local charge_begin_time = self.pWeapon:GetChargeBeginTime()
-		projectile_speed = self.weapon_info:GetVelocity(charge_begin_time or 0):Length()
+		velocity_vector = self.weapon_info:GetVelocity(charge_begin_time or 0)
 
 		if charge_begin_time > 0 then
 			charge_time = globals.CurTime() - charge_begin_time
@@ -80,7 +80,7 @@ function pred:GetChargeTimeAndSpeed()
 		end
 	end
 
-	return charge_time, projectile_speed
+	return charge_time, velocity_vector
 end
 
 ---@param pWeapon Entity
@@ -105,11 +105,16 @@ function pred:Run()
 		return nil
 	end
 
-	local charge_time, projectile_speed = self:GetChargeTimeAndSpeed()
+	local charge_time, velocity_vector = self:GetChargeTimeAndSpeed()
 	local gravity = self.weapon_info:GetGravity(charge_time) * 800 --- example: 200
 
+	-- Extract velocity components for calculations
+	local forward_speed = velocity_vector.x
+	local upward_speed = velocity_vector.z or 0
+	local total_speed = velocity_vector:Length()
+
 	local detonate_time = self.pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_PIPEBOMBLAUNCHER and 0.7 or 0
-	local travel_time_est = (vecTargetOrigin - self.vecShootPos):Length() / projectile_speed
+	local travel_time_est = (vecTargetOrigin - self.vecShootPos):Length() / total_speed
 	local total_time = travel_time_est + self.nLatency + detonate_time
 	if total_time > self.settings.max_sim_time or total_time > self.weapon_info.m_flLifetime then
 		return nil
@@ -157,11 +162,6 @@ function pred:Run()
 	end
 
 	if gravity > 0 then
-		-- Get velocity components from weapon info
-		local velocity_vector = self.weapon_info:GetVelocity(charge_time)
-		local forward_speed = velocity_vector.x
-		local upward_speed = velocity_vector.z or 0
-
 		-- Use the new ballistic calculation that properly handles upward velocity
 		local ballistic_dir = self.math_utils.SolveBallisticArcWithUpwardVelocity(
 			self.vecShootPos,
@@ -175,7 +175,7 @@ function pred:Run()
 			aim_dir = ballistic_dir
 		else
 			-- Fallback to old method if new calculation fails
-			ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, predicted_target_pos, projectile_speed,
+			ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, predicted_target_pos, total_speed,
 				gravity)
 			if ballistic_dir then
 				aim_dir = ballistic_dir

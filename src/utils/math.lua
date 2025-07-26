@@ -145,33 +145,76 @@ function Math.SolveBallisticArcWithUpwardVelocity(p0, p1, forward_speed, upward_
 	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
 	local dy = diff.z
 
-	-- Calculate the angle needed to hit the target with given upward velocity
 	local g = gravity
 	local v0z = upward_speed
 	local v0xy = forward_speed
 
-	-- Time of flight equation: dy = v0z * t - 0.5 * g * t^2
-	-- Horizontal distance: dx = v0xy * t
-	-- Solve for t from horizontal: t = dx / v0xy
-	-- Substitute into vertical equation: dy = v0z * (dx/v0xy) - 0.5 * g * (dx/v0xy)^2
+	-- For weapons with inherent upward velocity (like grenade launchers),
+	-- the projectile already has an upward component, so we need to calculate
+	-- the horizontal angle that will make it hit the target
 
-	local t = dx / v0xy
-	local expected_dy = v0z * t - 0.5 * g * t * t
+	-- The projectile's velocity will be: (v0xy * cos(angle), v0xy * sin(angle), v0z)
+	-- We need to find the angle that makes the projectile hit the target
 
-	-- If the expected vertical position doesn't match target, adjust the aim
-	local vertical_diff = dy - expected_dy
+	-- Time of flight: t = dx / (v0xy * cos(angle))
+	-- Vertical position at time t: y = v0z * t - 0.5 * g * t^2
+	-- We want y = dy
 
-	-- Calculate the angle adjustment needed
-	local angle_adjustment = math.atan(vertical_diff / dx)
+	-- Substitute t into the vertical equation:
+	-- dy = v0z * (dx / (v0xy * cos(angle))) - 0.5 * g * (dx / (v0xy * cos(angle)))^2
+	-- dy = (v0z * dx) / (v0xy * cos(angle)) - 0.5 * g * dx^2 / (v0xy^2 * cos(angle)^2)
 
-	-- Create the aim direction
+	-- This is a complex equation. Let's solve it iteratively:
+	-- Start with a reasonable guess and refine it
+
+	local function calculate_vertical_position(angle)
+		local cos_angle = math.cos(angle)
+		if math.abs(cos_angle) < 0.001 then
+			return nil -- Invalid angle
+		end
+
+		local t = dx / (v0xy * cos_angle)
+		return v0z * t - 0.5 * g * t * t
+	end
+
+	-- Start with the direct angle to target
+	local base_angle = math.atan2(diff.y, diff.x)
+	local current_angle = base_angle
+	local max_iterations = 10
+	local tolerance = 0.1
+
+	for i = 1, max_iterations do
+		local predicted_y = calculate_vertical_position(current_angle)
+		if not predicted_y then
+			return nil -- Invalid angle
+		end
+
+		local error = dy - predicted_y
+		if math.abs(error) < tolerance then
+			-- We found a good solution
+			local dir_xy = NormalizeVector(Vector3(diff.x, diff.y, 0))
+			local aim = Vector3(
+				dir_xy.x * math.cos(current_angle),
+				dir_xy.y * math.cos(current_angle),
+				math.sin(current_angle)
+			)
+			return NormalizeVector(aim)
+		end
+
+		-- Adjust the angle based on the error
+		-- If we're shooting too high, decrease the angle
+		-- If we're shooting too low, increase the angle
+		local angle_adjustment = error * 0.1 -- Small adjustment factor
+		current_angle = current_angle + angle_adjustment
+	end
+
+	-- If we didn't converge, return the best guess
 	local dir_xy = NormalizeVector(Vector3(diff.x, diff.y, 0))
 	local aim = Vector3(
-		dir_xy.x * math.cos(angle_adjustment),
-		dir_xy.y * math.cos(angle_adjustment),
-		math.sin(angle_adjustment)
+		dir_xy.x * math.cos(current_angle),
+		dir_xy.y * math.cos(current_angle),
+		math.sin(current_angle)
 	)
-
 	return NormalizeVector(aim)
 end
 
