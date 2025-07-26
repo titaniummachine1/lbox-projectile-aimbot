@@ -157,12 +157,30 @@ function pred:Run()
 	end
 
 	if gravity > 0 then
-		local ballistic_dir =
-			self.math_utils.SolveBallisticArc(self.vecShootPos, predicted_target_pos, projectile_speed, gravity)
-		if not ballistic_dir then
-			return nil
+		-- Get velocity components from weapon info
+		local velocity_vector = self.weapon_info:GetVelocity(charge_time)
+		local forward_speed = velocity_vector.x
+		local upward_speed = velocity_vector.z or 0
+
+		-- Use the new ballistic calculation that properly handles upward velocity
+		local ballistic_dir = self.math_utils.SolveBallisticArcWithUpwardVelocity(
+			self.vecShootPos,
+			predicted_target_pos,
+			forward_speed,
+			upward_speed,
+			gravity
+		)
+
+		if ballistic_dir then
+			aim_dir = ballistic_dir
+		else
+			-- Fallback to old method if new calculation fails
+			ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, predicted_target_pos, projectile_speed,
+				gravity)
+			if ballistic_dir then
+				aim_dir = ballistic_dir
+			end
 		end
-		aim_dir = ballistic_dir
 	end
 
 	return {

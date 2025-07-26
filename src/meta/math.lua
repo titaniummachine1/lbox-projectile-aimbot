@@ -51,4 +51,20 @@ function Math.DirectionToAngles(direction) end
 ---@param direction Vector3
 function Math.RotateOffsetAlongDirection(offset, direction) end
 
+---@param p0 Vector3 Starting position
+---@param p1 Vector3 Target position
+---@param forward_speed number Forward velocity component
+---@param upward_speed number Upward velocity component
+---@param gravity number Gravity value
+---@return Vector3|nil Aim direction
+function Math.SolveBallisticArcWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity) end
+
+---@param p0 Vector3 Starting position
+---@param p1 Vector3 Target position
+---@param forward_speed number Forward velocity component
+---@param upward_speed number Upward velocity component
+---@param gravity number Gravity value
+---@return number|nil Flight time
+function Math.GetBallisticFlightTimeWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity) end
+
 return Math

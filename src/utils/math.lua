@@ -133,5 +133,94 @@ function Math.RotateOffsetAlongDirection(offset, direction)
 	return forward * offset.x + right * offset.y + up * offset.z
 end
 
+-- New function to calculate ballistic trajectory with upward velocity
+---@param p0 Vector3 Starting position
+---@param p1 Vector3 Target position
+---@param forward_speed number Forward velocity component
+---@param upward_speed number Upward velocity component
+---@param gravity number Gravity value
+---@return Vector3|nil Aim direction
+function Math.SolveBallisticArcWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity)
+	local diff = p1 - p0
+	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
+	local dy = diff.z
+
+	-- Calculate the angle needed to hit the target with given upward velocity
+	local g = gravity
+	local v0z = upward_speed
+	local v0xy = forward_speed
+
+	-- Time of flight equation: dy = v0z * t - 0.5 * g * t^2
+	-- Horizontal distance: dx = v0xy * t
+	-- Solve for t from horizontal: t = dx / v0xy
+	-- Substitute into vertical equation: dy = v0z * (dx/v0xy) - 0.5 * g * (dx/v0xy)^2
+
+	local t = dx / v0xy
+	local expected_dy = v0z * t - 0.5 * g * t * t
+
+	-- If the expected vertical position doesn't match target, adjust the aim
+	local vertical_diff = dy - expected_dy
+
+	-- Calculate the angle adjustment needed
+	local angle_adjustment = math.atan(vertical_diff / dx)
+
+	-- Create the aim direction
+	local dir_xy = NormalizeVector(Vector3(diff.x, diff.y, 0))
+	local aim = Vector3(
+		dir_xy.x * math.cos(angle_adjustment),
+		dir_xy.y * math.cos(angle_adjustment),
+		math.sin(angle_adjustment)
+	)
+
+	return NormalizeVector(aim)
+end
+
+-- New function to calculate flight time with upward velocity
+---@param p0 Vector3 Starting position
+---@param p1 Vector3 Target position
+---@param forward_speed number Forward velocity component
+---@param upward_speed number Upward velocity component
+---@param gravity number Gravity value
+---@return number|nil Flight time
+function Math.GetBallisticFlightTimeWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity)
+	local diff = p1 - p0
+	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
+	local dy = diff.z
+
+	local g = gravity
+	local v0z = upward_speed
+	local v0xy = forward_speed
+
+	-- Time from horizontal distance
+	local t_horizontal = dx / v0xy
+
+	-- Check if this time gives us the right vertical position
+	local expected_dy = v0z * t_horizontal - 0.5 * g * t_horizontal * t_horizontal
+
+	if math.abs(expected_dy - dy) < 1.0 then
+		return t_horizontal
+	end
+
+	-- If not, solve the quadratic equation for vertical motion
+	-- dy = v0z * t - 0.5 * g * t^2
+	-- 0.5 * g * t^2 - v0z * t + dy = 0
+
+	local a = 0.5 * g
+	local b = -v0z
+	local c = dy
+
+	local discriminant = b * b - 4 * a * c
+	if discriminant < 0 then
+		return nil -- No solution
+	end
+
+	local sqrt_discriminant = math.sqrt(discriminant)
+	local t1 = (-b + sqrt_discriminant) / (2 * a)
+	local t2 = (-b - sqrt_discriminant) / (2 * a)
+
+	-- Return the positive time
+	return math.max(t1, t2)
+end
+
 Math.NormalizeVector = NormalizeVector
 return Math
