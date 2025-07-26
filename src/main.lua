@@ -482,6 +482,103 @@ local function CreateMove_Draw(uCmd)
 	local vecMins, vecMaxs = weaponInfo.m_vecMins, weaponInfo.m_vecMaxs
 	local trace = engine.TraceHull(vecWeaponFirePos, vec_bestPos, vecMins, vecMaxs, MASK_SHOT_HULL, shouldHit)
 
+	-- If trace fails and multipoint is enabled, try multipoint fallback
+	if (trace and trace.fraction < 1) and settings.multipointing then
+		printc(255, 100, 100, 255, "[PROJ AIMBOT] Trace failed, trying multipoint fallback")
+
+		local multipoint = require("src.multipoint")
+		local bSplashWeapon = pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ROCKET
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_PIPEBOMB_REMOTE
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_PIPEBOMB_PRACTICE
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_CANNONBALL
+
+		local viewPos = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
+
+		multipoint:Set(
+			pLocal,
+			pWeapon,
+			pTarget,
+			bIsHuntsman,
+			bAimAtTeamMates,
+			viewPos,
+			pred_result.vecPos,
+			weaponInfo,
+			math_utils,
+			settings.max_distance,
+			bSplashWeapon,
+			ent_utils,
+			settings
+		)
+
+		-- Try all multipoint positions until one works
+		local all_points = multipoint:GetAllHitPoints()
+		if all_points then
+			printc(150, 255, 150, 255, string.format("[PROJ AIMBOT] Found %d multipoint positions to try", #all_points))
+			for i, multipoint_pos in ipairs(all_points) do
+				-- Try ballistic calculation for this multipoint position
+				local gravity = weaponInfo:GetGravity(0) * 800
+				if gravity > 0 then
+					local velocity_vector = weaponInfo:GetVelocity(0)
+					local total_speed = velocity_vector:Length()
+
+					local multipoint_aim_dir = math_utils.GetProjectileAimDirection(
+						vecWeaponFirePos,
+						multipoint_pos,
+						total_speed,
+						gravity
+					)
+
+					if multipoint_aim_dir then
+						-- Update the aim direction and try trace again
+						pred_result.vecAimDir = multipoint_aim_dir
+						trace = engine.TraceHull(vecWeaponFirePos, multipoint_pos, vecMins, vecMaxs, MASK_SHOT_HULL,
+							shouldHit)
+						if trace and trace.fraction >= 1 then
+							-- This multipoint position works, continue
+							printc(150, 255, 150, 255, string.format("[PROJ AIMBOT] Multipoint position %d succeeded", i))
+							goto continue_with_multipoint
+						else
+							printc(255, 100, 100, 255,
+								string.format("[PROJ AIMBOT] Multipoint position %d trace failed (fraction: %.2f)", i,
+									trace and trace.fraction or 0))
+						end
+					else
+						-- Try fallback ballistic method
+						local fallback_dir = math_utils.SolveBallisticArc(vecWeaponFirePos, multipoint_pos, total_speed,
+							gravity)
+						if fallback_dir then
+							pred_result.vecAimDir = fallback_dir
+							trace = engine.TraceHull(vecWeaponFirePos, multipoint_pos, vecMins, vecMaxs, MASK_SHOT_HULL,
+								shouldHit)
+							if trace and trace.fraction >= 1 then
+								-- This multipoint position works, continue
+								printc(150, 255, 150, 255,
+									string.format("[PROJ AIMBOT] Multipoint position %d succeeded (fallback)", i))
+								goto continue_with_multipoint
+							else
+								printc(255, 100, 100, 255,
+									string.format(
+									"[PROJ AIMBOT] Multipoint position %d trace failed (fallback, fraction: %.2f)", i,
+										trace and trace.fraction or 0))
+							end
+						else
+							printc(255, 100, 100, 255,
+								string.format("[PROJ AIMBOT] Multipoint position %d ballistic calculation failed", i))
+						end
+					end
+				end
+			end
+		else
+			printc(255, 100, 100, 255, "[PROJ AIMBOT] No multipoint positions found")
+		end
+
+		-- If we get here, all multipoint positions failed, return without firing
+		printc(255, 100, 100, 255, "[PROJ AIMBOT] All multipoint positions failed, not firing")
+		return
+	end
+
+	::continue_with_multipoint::
+
 	if trace and trace.fraction < 1 then
 		return
 	end
@@ -590,6 +687,82 @@ local function CreateMove(uCmd)
 	-- Use the muzzle position for the trace check instead of the head position
 	local vecMins, vecMaxs = weaponInfo.m_vecMins, weaponInfo.m_vecMaxs
 	local trace = engine.TraceHull(vecWeaponFirePos, vec_bestPos, vecMins, vecMaxs, MASK_SHOT_HULL, shouldHit)
+
+	-- If trace fails and multipoint is enabled, try multipoint fallback
+	if (trace and trace.fraction < 1) and settings.multipointing then
+		local multipoint = require("src.multipoint")
+		local bSplashWeapon = pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ROCKET
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_PIPEBOMB_REMOTE
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_PIPEBOMB_PRACTICE
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_CANNONBALL
+
+		local viewPos = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
+
+		multipoint:Set(
+			pLocal,
+			pWeapon,
+			pTarget,
+			bIsHuntsman,
+			bAimAtTeamMates,
+			viewPos,
+			pred_result.vecPos,
+			weaponInfo,
+			math_utils,
+			settings.max_distance,
+			bSplashWeapon,
+			ent_utils,
+			settings
+		)
+
+		-- Try all multipoint positions until one works
+		local all_points = multipoint:GetAllHitPoints()
+		if all_points then
+			for _, multipoint_pos in ipairs(all_points) do
+				-- Try ballistic calculation for this multipoint position
+				local gravity = weaponInfo:GetGravity(0) * 800
+				if gravity > 0 then
+					local velocity_vector = weaponInfo:GetVelocity(0)
+					local total_speed = velocity_vector:Length()
+
+					local multipoint_aim_dir = math_utils.GetProjectileAimDirection(
+						vecWeaponFirePos,
+						multipoint_pos,
+						total_speed,
+						gravity
+					)
+
+					if multipoint_aim_dir then
+						-- Update the aim direction and try trace again
+						pred_result.vecAimDir = multipoint_aim_dir
+						trace = engine.TraceHull(vecWeaponFirePos, multipoint_pos, vecMins, vecMaxs, MASK_SHOT_HULL,
+							shouldHit)
+						if trace and trace.fraction >= 1 then
+							-- This multipoint position works, continue
+							goto continue_with_multipoint
+						end
+					else
+						-- Try fallback ballistic method
+						local fallback_dir = math_utils.SolveBallisticArc(vecWeaponFirePos, multipoint_pos, total_speed,
+							gravity)
+						if fallback_dir then
+							pred_result.vecAimDir = fallback_dir
+							trace = engine.TraceHull(vecWeaponFirePos, multipoint_pos, vecMins, vecMaxs, MASK_SHOT_HULL,
+								shouldHit)
+							if trace and trace.fraction >= 1 then
+								-- This multipoint position works, continue
+								goto continue_with_multipoint
+							end
+						end
+					end
+				end
+			end
+		end
+
+		-- If we get here, all multipoint positions failed, return without firing
+		return
+	end
+
+	::continue_with_multipoint::
 
 	if trace and trace.fraction < 1 then
 		return

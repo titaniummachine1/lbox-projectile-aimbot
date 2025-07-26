@@ -52,7 +52,7 @@ function pred:GetChargeTimeAndSpeed()
 
 	-- Get charge time for weapons that support it
 	local charge_begin_time = self.pWeapon:GetChargeBeginTime()
-	if charge_begin_time > 0 then
+	if charge_begin_time and charge_begin_time > 0 then
 		charge_time = globals.CurTime() - charge_begin_time
 
 		-- Weapon-specific charge time limits
@@ -136,13 +136,6 @@ function pred:Run()
 				)
 			end
 		end
-
-		-- Debug: print when ballistic solver fails
-		if not ballistic_dir then
-			printc(255, 100, 100, 255,
-				string.format("[PROJ AIMBOT] Ballistic solver failed - gravity: %.2f, forward: %.1f, upward: %.1f",
-					gravity / 800, forward_speed, upward_speed))
-		end
 	end
 
 	-- If no ballistic solution or no gravity, use linear calculation
@@ -164,35 +157,9 @@ function pred:Run()
 	end
 
 	local predicted_target_pos = player_positions[#player_positions] or self.pTarget:GetAbsOrigin()
-	local aim_dir = self.math_utils.NormalizeVector(predicted_target_pos - self.vecShootPos)
-	if not aim_dir then
-		return nil
-	end
 
-	-- For ballistic weapons, calculate aim direction first
-	if gravity > 0 then
-		-- Use the new ballistic calculation that properly handles upward velocity
-		local ballistic_dir = self.math_utils.GetProjectileAimDirection(
-			self.vecShootPos,
-			predicted_target_pos,
-			forward_speed,
-			upward_speed,
-			gravity
-		)
-
-		if ballistic_dir then
-			aim_dir = ballistic_dir
-		else
-			-- Fallback to old method if new calculation fails
-			ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, predicted_target_pos, total_speed,
-				gravity)
-			if ballistic_dir then
-				aim_dir = ballistic_dir
-			end
-		end
-	end
-
-	-- Now use multipoint with the calculated aim direction
+	-- Use multipoint to determine the default aim point
+	local default_aim_pos = predicted_target_pos
 	if self.settings.multipointing then
 		local bSplashWeapon = IsSplashDamageWeapon(self.pWeapon)
 		local viewPos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
@@ -203,7 +170,7 @@ function pred:Run()
 			self.pTarget,
 			self.bIsHuntsman,
 			self.bAimAtTeamMates,
-			viewPos, -- Use view position, not calculated shoot position
+			viewPos,
 			predicted_target_pos,
 			self.weapon_info,
 			self.math_utils,
@@ -213,36 +180,50 @@ function pred:Run()
 			self.settings
 		)
 
-		---@diagnostic disable-next-line: cast-local-type
 		local multipoint_pos = multipoint:GetBestHitPoint()
-
 		if multipoint_pos then
-			-- Recalculate ballistic aim direction for the multipoint position
-			if gravity > 0 then
-				local new_ballistic_dir = self.math_utils.GetProjectileAimDirection(
-					self.vecShootPos,
-					multipoint_pos,
-					forward_speed,
-					upward_speed,
-					gravity
-				)
+			default_aim_pos = multipoint_pos
+		end
+	end
 
-				if new_ballistic_dir then
-					aim_dir = new_ballistic_dir
-					predicted_target_pos = multipoint_pos
-				else
-					-- If ballistic solver fails for multipoint, fallback to old method
-					local fallback_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, multipoint_pos, total_speed,
-						gravity)
-					if fallback_dir then
-						aim_dir = fallback_dir
-						predicted_target_pos = multipoint_pos
-					end
-				end
+	-- Calculate ballistic aim direction for the default aim point
+	local aim_dir = self.math_utils.NormalizeVector(default_aim_pos - self.vecShootPos)
+	if not aim_dir then
+		return nil
+	end
+
+	-- For ballistic weapons, calculate aim direction first
+	if gravity > 0 then
+		-- Use the improved ballistic calculation with total speed
+		local velocity_vector = self.weapon_info:GetVelocity(0)
+		local total_speed = velocity_vector:Length()
+
+		local ballistic_dir = self.math_utils.GetProjectileAimDirection(
+			self.vecShootPos,
+			default_aim_pos,
+			total_speed,
+			gravity
+		)
+
+		if ballistic_dir then
+			aim_dir = ballistic_dir
+			printc(150, 255, 150, 255,
+				string.format("[PROJ AIMBOT] Ballistic calculation succeeded - gravity: %.2f, total_speed: %.1f",
+					gravity / 800, total_speed))
+		else
+			-- Fallback to old method if new calculation fails
+			ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, default_aim_pos, total_speed,
+				gravity)
+			if ballistic_dir then
+				aim_dir = ballistic_dir
+				printc(150, 255, 150, 255,
+					string.format(
+					"[PROJ AIMBOT] Fallback ballistic calculation succeeded - gravity: %.2f, total_speed: %.1f",
+						gravity / 800, total_speed))
 			else
-				-- For non-ballistic weapons, just use multipoint position
-				predicted_target_pos = multipoint_pos
-				aim_dir = self.math_utils.NormalizeVector(multipoint_pos - self.vecShootPos)
+				printc(255, 100, 100, 255,
+					string.format("[PROJ AIMBOT] Ballistic calculation failed - gravity: %.2f, total_speed: %.1f",
+						gravity / 800, total_speed))
 			end
 		end
 	end
@@ -253,6 +234,7 @@ function pred:Run()
 		nChargeTime = charge_time,
 		vecAimDir = aim_dir,
 		vecPlayerPath = player_positions,
+		defaultAimPos = default_aim_pos, -- Store the default aim position for fallback
 	}
 end
 

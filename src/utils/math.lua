@@ -111,42 +111,37 @@ function Math.RotateOffsetAlongDirection(offset, direction)
 	return forward * offset.x + right * offset.y + up * offset.z
 end
 
--- Calculate aim direction for projectile with both forward and upward velocity
+-- Calculate aim direction for projectile with proper ballistic trajectory
 ---@param p0 Vector3 Starting position
 ---@param p1 Vector3 Target position
----@param forward_speed number Forward velocity component
----@param upward_speed number Upward velocity component
+---@param speed number Total projectile speed
 ---@param gravity number Gravity value
 ---@return Vector3|nil Aim direction
-function Math.GetProjectileAimDirection(p0, p1, forward_speed, upward_speed, gravity)
+function Math.GetProjectileAimDirection(p0, p1, speed, gravity)
 	local diff = p1 - p0
 	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
 	local dy = diff.z
-
+	local speed2 = speed * speed
 	local g = gravity
-	local v0z = upward_speed
-	local v0xy = forward_speed
 
-	-- Simple approach: calculate the angle needed if there was no upward velocity
-	-- then adjust for the fact that the projectile has inherent upward velocity
+	-- Solve the quadratic equation for ballistic trajectory
+	local root = speed2 * speed2 - g * (g * dx * dx + 2 * dy * speed2)
+	if root < 0 then
+		return nil -- no solution
+	end
 
-	-- First, calculate what the vertical position would be with just forward velocity
-	local time_to_target = dx / v0xy
-	local natural_rise = v0z * time_to_target - 0.5 * g * time_to_target * time_to_target
+	local sqrt_root = math.sqrt(root)
+	local angle
 
-	-- Calculate the angle adjustment needed
-	-- If the projectile naturally rises, we need to aim lower
-	local vertical_adjustment = dy - natural_rise
-	local angle_adjustment = math.atan(vertical_adjustment / dx)
+	-- Use the low arc solution (more accurate for most cases)
+	angle = math.atan((speed2 - sqrt_root) / (g * dx))
 
-	-- Create the aim direction
+	if isNaN(angle) then
+		return nil
+	end
+
 	local dir_xy = NormalizeVector(Vector3(diff.x, diff.y, 0))
-	local aim = Vector3(
-		dir_xy.x * math.cos(angle_adjustment),
-		dir_xy.y * math.cos(angle_adjustment),
-		math.sin(angle_adjustment)
-	)
-
+	local aim = Vector3(dir_xy.x * math.cos(angle), dir_xy.y * math.cos(angle), math.sin(angle))
 	return NormalizeVector(aim)
 end
 

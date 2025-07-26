@@ -525,6 +525,103 @@ local function CreateMove_Draw(uCmd)
 	local vecMins, vecMaxs = weaponInfo.m_vecMins, weaponInfo.m_vecMaxs
 	local trace = engine.TraceHull(vecWeaponFirePos, vec_bestPos, vecMins, vecMaxs, MASK_SHOT_HULL, shouldHit)
 
+	-- If trace fails and multipoint is enabled, try multipoint fallback
+	if (trace and trace.fraction < 1) and settings.multipointing then
+		printc(255, 100, 100, 255, "[PROJ AIMBOT] Trace failed, trying multipoint fallback")
+
+		local multipoint = require("src.multipoint")
+		local bSplashWeapon = pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ROCKET
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_PIPEBOMB_REMOTE
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_PIPEBOMB_PRACTICE
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_CANNONBALL
+
+		local viewPos = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
+
+		multipoint:Set(
+			pLocal,
+			pWeapon,
+			pTarget,
+			bIsHuntsman,
+			bAimAtTeamMates,
+			viewPos,
+			pred_result.vecPos,
+			weaponInfo,
+			math_utils,
+			settings.max_distance,
+			bSplashWeapon,
+			ent_utils,
+			settings
+		)
+
+		-- Try all multipoint positions until one works
+		local all_points = multipoint:GetAllHitPoints()
+		if all_points then
+			printc(150, 255, 150, 255, string.format("[PROJ AIMBOT] Found %d multipoint positions to try", #all_points))
+			for i, multipoint_pos in ipairs(all_points) do
+				-- Try ballistic calculation for this multipoint position
+				local gravity = weaponInfo:GetGravity(0) * 800
+				if gravity > 0 then
+					local velocity_vector = weaponInfo:GetVelocity(0)
+					local total_speed = velocity_vector:Length()
+
+					local multipoint_aim_dir = math_utils.GetProjectileAimDirection(
+						vecWeaponFirePos,
+						multipoint_pos,
+						total_speed,
+						gravity
+					)
+
+					if multipoint_aim_dir then
+						-- Update the aim direction and try trace again
+						pred_result.vecAimDir = multipoint_aim_dir
+						trace = engine.TraceHull(vecWeaponFirePos, multipoint_pos, vecMins, vecMaxs, MASK_SHOT_HULL,
+							shouldHit)
+						if trace and trace.fraction >= 1 then
+							-- This multipoint position works, continue
+							printc(150, 255, 150, 255, string.format("[PROJ AIMBOT] Multipoint position %d succeeded", i))
+							goto continue_with_multipoint
+						else
+							printc(255, 100, 100, 255,
+								string.format("[PROJ AIMBOT] Multipoint position %d trace failed (fraction: %.2f)", i,
+									trace and trace.fraction or 0))
+						end
+					else
+						-- Try fallback ballistic method
+						local fallback_dir = math_utils.SolveBallisticArc(vecWeaponFirePos, multipoint_pos, total_speed,
+							gravity)
+						if fallback_dir then
+							pred_result.vecAimDir = fallback_dir
+							trace = engine.TraceHull(vecWeaponFirePos, multipoint_pos, vecMins, vecMaxs, MASK_SHOT_HULL,
+								shouldHit)
+							if trace and trace.fraction >= 1 then
+								-- This multipoint position works, continue
+								printc(150, 255, 150, 255,
+									string.format("[PROJ AIMBOT] Multipoint position %d succeeded (fallback)", i))
+								goto continue_with_multipoint
+							else
+								printc(255, 100, 100, 255,
+									string.format(
+									"[PROJ AIMBOT] Multipoint position %d trace failed (fallback, fraction: %.2f)", i,
+										trace and trace.fraction or 0))
+							end
+						else
+							printc(255, 100, 100, 255,
+								string.format("[PROJ AIMBOT] Multipoint position %d ballistic calculation failed", i))
+						end
+					end
+				end
+			end
+		else
+			printc(255, 100, 100, 255, "[PROJ AIMBOT] No multipoint positions found")
+		end
+
+		-- If we get here, all multipoint positions failed, return without firing
+		printc(255, 100, 100, 255, "[PROJ AIMBOT] All multipoint positions failed, not firing")
+		return
+	end
+
+	::continue_with_multipoint::
+
 	if trace and trace.fraction < 1 then
 		return
 	end
@@ -633,6 +730,82 @@ local function CreateMove(uCmd)
 	-- Use the muzzle position for the trace check instead of the head position
 	local vecMins, vecMaxs = weaponInfo.m_vecMins, weaponInfo.m_vecMaxs
 	local trace = engine.TraceHull(vecWeaponFirePos, vec_bestPos, vecMins, vecMaxs, MASK_SHOT_HULL, shouldHit)
+
+	-- If trace fails and multipoint is enabled, try multipoint fallback
+	if (trace and trace.fraction < 1) and settings.multipointing then
+		local multipoint = require("src.multipoint")
+		local bSplashWeapon = pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_ROCKET
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_PIPEBOMB_REMOTE
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_PIPEBOMB_PRACTICE
+			or pWeapon:GetWeaponProjectileType() == E_ProjectileType.TF_PROJECTILE_CANNONBALL
+
+		local viewPos = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
+
+		multipoint:Set(
+			pLocal,
+			pWeapon,
+			pTarget,
+			bIsHuntsman,
+			bAimAtTeamMates,
+			viewPos,
+			pred_result.vecPos,
+			weaponInfo,
+			math_utils,
+			settings.max_distance,
+			bSplashWeapon,
+			ent_utils,
+			settings
+		)
+
+		-- Try all multipoint positions until one works
+		local all_points = multipoint:GetAllHitPoints()
+		if all_points then
+			for _, multipoint_pos in ipairs(all_points) do
+				-- Try ballistic calculation for this multipoint position
+				local gravity = weaponInfo:GetGravity(0) * 800
+				if gravity > 0 then
+					local velocity_vector = weaponInfo:GetVelocity(0)
+					local total_speed = velocity_vector:Length()
+
+					local multipoint_aim_dir = math_utils.GetProjectileAimDirection(
+						vecWeaponFirePos,
+						multipoint_pos,
+						total_speed,
+						gravity
+					)
+
+					if multipoint_aim_dir then
+						-- Update the aim direction and try trace again
+						pred_result.vecAimDir = multipoint_aim_dir
+						trace = engine.TraceHull(vecWeaponFirePos, multipoint_pos, vecMins, vecMaxs, MASK_SHOT_HULL,
+							shouldHit)
+						if trace and trace.fraction >= 1 then
+							-- This multipoint position works, continue
+							goto continue_with_multipoint
+						end
+					else
+						-- Try fallback ballistic method
+						local fallback_dir = math_utils.SolveBallisticArc(vecWeaponFirePos, multipoint_pos, total_speed,
+							gravity)
+						if fallback_dir then
+							pred_result.vecAimDir = fallback_dir
+							trace = engine.TraceHull(vecWeaponFirePos, multipoint_pos, vecMins, vecMaxs, MASK_SHOT_HULL,
+								shouldHit)
+							if trace and trace.fraction >= 1 then
+								-- This multipoint position works, continue
+								goto continue_with_multipoint
+							end
+						end
+					end
+				end
+			end
+		end
+
+		-- If we get here, all multipoint positions failed, return without firing
+		return
+	end
+
+	::continue_with_multipoint::
 
 	if trace and trace.fraction < 1 then
 		return
@@ -850,6 +1023,457 @@ printc(166, 237, 255, 255, "Lmaobox's projectile aimbot will be turned off while
 if gui.GetValue("projectile aimbot") ~= "none" then
 	gui.SetValue("projectile aimbot", "none")
 end
+
+end)
+__bundle_register("src.multipoint", function(require, _LOADED, __bundle_register, __bundle_modules)
+-- Constants
+local FL_DUCKING = 1
+
+---@class Multipoint
+---@field private pLocal Entity
+---@field private pTarget Entity
+---@field private pWeapon Entity
+---@field private bIsHuntsman boolean
+---@field private bIsSplash boolean
+---@field private vecAimDir Vector3
+---@field private vecPredictedPos Vector3
+---@field private bAimTeamMate boolean
+---@field private vecHeadPos Vector3
+---@field private weapon_info WeaponInfo
+---@field private math_utils MathLib
+---@field private iMaxDistance integer
+local multipoint = {}
+
+local offset_multipliers = {
+	splash = {
+		{ "legs",           { { 0, 0, 0 }, { 0, 0, 0.2 } } },
+		{ "chest",          { { 0, 0, 0.5 } } },
+		{ "right_shoulder", { { 0.6, 0, 0.5 } } },
+		{ "left_shoulder",  { { -0.6, 0, 0.5 } } },
+		{ "head",           { { 0, 0, 0.9 } } },
+	},
+	huntsman = {
+		{ "chest",          { { 0, 0, 0.5 } } },
+		{ "right_shoulder", { { 0.6, 0, 0.5 } } },
+		{ "left_shoulder",  { { -0.6, 0, 0.5 } } },
+		{ "legs",           { { 0, 0, 0.2 } } },
+	},
+	normal = {
+		{ "chest",          { { 0, 0, 0.5 } } },
+		{ "right_shoulder", { { 0.6, 0, 0.5 } } },
+		{ "left_shoulder",  { { -0.6, 0, 0.5 } } },
+		{ "head",           { { 0, 0, 0.9 } } },
+		{ "legs",           { { 0, 0, 0.2 } } },
+	},
+}
+
+-- Robust normalization function that handles edge cases
+local function SafeNormalize(vec)
+	if not vec then
+		return nil
+	end
+
+	local length = vec:Length()
+	if length < 0.001 then
+		return nil -- Vector is too small to normalize
+	end
+
+	-- Try the built-in Normalize method first
+	local normalized = vec:Normalize()
+	if normalized then
+		return normalized
+	end
+
+	-- Fallback: manual normalization
+	local inv_length = 1.0 / length
+	return Vector3(vec.x * inv_length, vec.y * inv_length, vec.z * inv_length)
+end
+
+---@return Vector3?
+function multipoint:GetBestHitPoint()
+	local maxs = self.pTarget:GetMaxs()
+	local mins = self.pTarget:GetMins()
+	local origin = self.pTarget:GetAbsOrigin()
+
+	local target_height = maxs.z - mins.z
+	local target_width = maxs.x - mins.x
+	local target_depth = maxs.y - mins.y
+
+	local is_on_ground = (self.pTarget:GetPropInt("m_fFlags") & FL_ONGROUND) ~= 0
+	local vecMins, vecMaxs = self.weapon_info.m_vecMins, self.weapon_info.m_vecMaxs
+
+	local function shouldHit(ent)
+		if not ent then
+			return false
+		end
+
+		if ent:GetIndex() == self.pLocal:GetIndex() then
+			return false
+		end
+
+		-- For rockets, we want to hit enemies (different team)
+		-- For healing weapons, we want to hit teammates (same team)
+		if self.bAimTeamMate then
+			return ent:GetTeamNumber() == self.pTarget:GetTeamNumber()
+		else
+			return ent:GetTeamNumber() ~= self.pTarget:GetTeamNumber()
+		end
+	end
+
+	-- Check if we can shoot from our position to the target point using the same logic as main code
+	local function canShootToPoint(target_pos)
+		if not target_pos then
+			return false
+		end
+
+		-- Use the same logic as main code: calculate aim direction first, then check if we can hit
+		local viewpos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
+
+		-- Get weapon offset and calculate weapon fire position using the same logic as main code
+		local muzzle_offset = self.weapon_info:GetOffset(
+			(self.pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0,
+			self.pWeapon:IsViewModelFlipped()
+		)
+
+		-- Calculate aim direction - use ballistic for ballistic weapons, linear for others
+		local aim_dir
+		local gravity = self.weapon_info:GetGravity(0) * 800
+
+		if gravity > 0 then
+			-- For ballistic weapons, use ballistic calculation with total speed
+			local velocity_vector = self.weapon_info:GetVelocity(0)
+			local total_speed = velocity_vector:Length()
+
+			aim_dir = self.math_utils.GetProjectileAimDirection(
+				viewpos,
+				target_pos,
+				total_speed,
+				gravity
+			)
+
+			-- If ballistic calculation fails, fallback to linear
+			if not aim_dir then
+				aim_dir = self.math_utils.NormalizeVector(target_pos - viewpos)
+			end
+		else
+			-- For non-ballistic weapons, use linear calculation
+			aim_dir = self.math_utils.NormalizeVector(target_pos - viewpos)
+		end
+
+		if not aim_dir then
+			return false
+		end
+
+		local vecWeaponFirePos =
+			viewpos
+			+ self.math_utils.RotateOffsetAlongDirection(muzzle_offset, aim_dir)
+			+ self.weapon_info.m_vecAbsoluteOffset
+
+		-- Check if we can hit using TraceHull (same as main code)
+		local trace = engine.TraceHull(vecWeaponFirePos, target_pos, vecMins, vecMaxs, MASK_SHOT_HULL, shouldHit)
+		return trace and trace.fraction >= 1
+	end
+
+	local head_pos = self.ent_utils.GetBones and self.ent_utils.GetBones(self.pTarget)[1] or nil
+	local center_pos = self.vecPredictedPos + Vector3(0, 0, target_height / 2)
+	local feet_pos = self.vecPredictedPos
+
+	local fallback_points = {
+		-- Bottom corners (feet/ground level, prioritized if feet are enabled)
+		{ pos = Vector3(-target_width / 2, -target_depth / 2, 0),                 name = "bottom_corner_1" },
+		{ pos = Vector3(target_width / 2, -target_depth / 2, 0),                  name = "bottom_corner_2" },
+		{ pos = Vector3(-target_width / 2, target_depth / 2, 0),                  name = "bottom_corner_3" },
+		{ pos = Vector3(target_width / 2, target_depth / 2, 0),                   name = "bottom_corner_4" },
+
+		-- Mid-height corners (body level)
+		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height / 2), name = "mid_corner_1" },
+		{ pos = Vector3(target_width / 2, -target_depth / 2, target_height / 2),  name = "mid_corner_2" },
+		{ pos = Vector3(-target_width / 2, target_depth / 2, target_height / 2),  name = "mid_corner_3" },
+		{ pos = Vector3(target_width / 2, target_depth / 2, target_height / 2),   name = "mid_corner_4" },
+
+		-- Mid-points on edges (body level)
+		{ pos = Vector3(0, -target_depth / 2, target_height / 2),                 name = "mid_front" },
+		{ pos = Vector3(0, target_depth / 2, target_height / 2),                  name = "mid_back" },
+		{ pos = Vector3(-target_width / 2, 0, target_height / 2),                 name = "mid_left" },
+		{ pos = Vector3(target_width / 2, 0, target_height / 2),                  name = "mid_right" },
+
+		-- Bottom mid-points (legs level)
+		{ pos = Vector3(0, -target_depth / 2, 0),                                 name = "bottom_front" },
+		{ pos = Vector3(0, target_depth / 2, 0),                                  name = "bottom_back" },
+		{ pos = Vector3(-target_width / 2, 0, 0),                                 name = "bottom_left" },
+		{ pos = Vector3(target_width / 2, 0, 0),                                  name = "bottom_right" },
+
+		-- Top corners (head level)
+		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height),     name = "top_corner_1" },
+		{ pos = Vector3(target_width / 2, -target_depth / 2, target_height),      name = "top_corner_2" },
+		{ pos = Vector3(-target_width / 2, target_depth / 2, target_height),      name = "top_corner_3" },
+		{ pos = Vector3(target_width / 2, target_depth / 2, target_height),       name = "top_corner_4" },
+
+		-- Top mid-points (head level)
+		{ pos = Vector3(0, -target_depth / 2, target_height),                     name = "top_front" },
+		{ pos = Vector3(0, target_depth / 2, target_height),                      name = "top_back" },
+		{ pos = Vector3(-target_width / 2, 0, target_height),                     name = "top_left" },
+		{ pos = Vector3(target_width / 2, 0, target_height),                      name = "top_right" },
+	}
+
+	-- 1. Bows/headshot weapons
+	if self.bIsHuntsman then
+		if self.settings.hitparts.head and head_pos and canShootToPoint(head_pos) then
+			return head_pos
+		end
+		if canShootToPoint(center_pos) then
+			return center_pos
+		end
+		if self.settings.hitparts.feet and is_on_ground and canShootToPoint(feet_pos) then
+			return feet_pos
+		end
+		for _, point in ipairs(fallback_points) do
+			local test_pos = self.vecPredictedPos + point.pos
+			if canShootToPoint(test_pos) then
+				return test_pos
+			end
+		end
+		return nil
+	end
+
+	-- 2. Explosive projectiles: feet first if enabled and on ground
+	if self.bIsSplash and self.settings.hitparts.feet and is_on_ground and canShootToPoint(feet_pos) then
+		return feet_pos
+	end
+	-- Center next
+	if canShootToPoint(center_pos) then
+		return center_pos
+	end
+
+	-- Try fallback points
+	for _, point in ipairs(fallback_points) do
+		local test_pos = self.vecPredictedPos + point.pos
+
+		if canShootToPoint(test_pos) then
+			return test_pos
+		end
+	end
+
+	-- Fallback: return center position if all else fails
+	return center_pos
+end
+
+---@return Vector3[]
+function multipoint:GetAllHitPoints()
+	local maxs = self.pTarget:GetMaxs()
+	local mins = self.pTarget:GetMins()
+	local origin = self.pTarget:GetAbsOrigin()
+
+	local target_height = maxs.z - mins.z
+	local target_width = maxs.x - mins.x
+	local target_depth = maxs.y - mins.y
+
+	local is_on_ground = (self.pTarget:GetPropInt("m_fFlags") & FL_ONGROUND) ~= 0
+	local vecMins, vecMaxs = self.weapon_info.m_vecMins, self.weapon_info.m_vecMaxs
+
+	local function shouldHit(ent)
+		if not ent then
+			return false
+		end
+
+		if ent:GetIndex() == self.pLocal:GetIndex() then
+			return false
+		end
+
+		-- For rockets, we want to hit enemies (different team)
+		-- For healing weapons, we want to hit teammates (same team)
+		if self.bAimTeamMate then
+			return ent:GetTeamNumber() == self.pTarget:GetTeamNumber()
+		else
+			return ent:GetTeamNumber() ~= self.pTarget:GetTeamNumber()
+		end
+	end
+
+	-- Check if we can shoot from our position to the target point using the same logic as main code
+	local function canShootToPoint(target_pos)
+		if not target_pos then
+			return false
+		end
+
+		-- Use the same logic as main code: calculate aim direction first, then check if we can hit
+		local viewpos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
+
+		-- Get weapon offset and calculate weapon fire position using the same logic as main code
+		local muzzle_offset = self.weapon_info:GetOffset(
+			(self.pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0,
+			self.pWeapon:IsViewModelFlipped()
+		)
+
+		-- Calculate aim direction - use ballistic for ballistic weapons, linear for others
+		local aim_dir
+		local gravity = self.weapon_info:GetGravity(0) * 800
+
+		if gravity > 0 then
+			-- For ballistic weapons, use ballistic calculation
+			local velocity_vector = self.weapon_info:GetVelocity(0)
+			local forward_speed = math.sqrt(velocity_vector.x ^ 2 + velocity_vector.y ^ 2)
+			local upward_speed = velocity_vector.z or 0
+
+			aim_dir = self.math_utils.GetProjectileAimDirection(
+				viewpos,
+				target_pos,
+				forward_speed,
+				upward_speed,
+				gravity
+			)
+
+			-- If ballistic calculation fails, fallback to linear
+			if not aim_dir then
+				aim_dir = self.math_utils.NormalizeVector(target_pos - viewpos)
+			end
+		else
+			-- For non-ballistic weapons, use linear calculation
+			aim_dir = self.math_utils.NormalizeVector(target_pos - viewpos)
+		end
+
+		if not aim_dir then
+			return false
+		end
+
+		local vecWeaponFirePos =
+			viewpos
+			+ self.math_utils.RotateOffsetAlongDirection(muzzle_offset, aim_dir)
+			+ self.weapon_info.m_vecAbsoluteOffset
+
+		-- Check if we can hit using TraceHull (same as main code)
+		local trace = engine.TraceHull(vecWeaponFirePos, target_pos, vecMins, vecMaxs, MASK_SHOT_HULL, shouldHit)
+		return trace and trace.fraction >= 1
+	end
+
+	local head_pos = self.ent_utils.GetBones and self.ent_utils.GetBones(self.pTarget)[1] or nil
+	local center_pos = self.vecPredictedPos + Vector3(0, 0, target_height / 2)
+	local feet_pos = self.vecPredictedPos
+
+	local fallback_points = {
+		-- Bottom corners (feet/ground level, prioritized if feet are enabled)
+		{ pos = Vector3(-target_width / 2, -target_depth / 2, 0),                 name = "bottom_corner_1" },
+		{ pos = Vector3(target_width / 2, -target_depth / 2, 0),                  name = "bottom_corner_2" },
+		{ pos = Vector3(-target_width / 2, target_depth / 2, 0),                  name = "bottom_corner_3" },
+		{ pos = Vector3(target_width / 2, target_depth / 2, 0),                   name = "bottom_corner_4" },
+
+		-- Mid-height corners (body level)
+		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height / 2), name = "mid_corner_1" },
+		{ pos = Vector3(target_width / 2, -target_depth / 2, target_height / 2),  name = "mid_corner_2" },
+		{ pos = Vector3(-target_width / 2, target_depth / 2, target_height / 2),  name = "mid_corner_3" },
+		{ pos = Vector3(target_width / 2, target_depth / 2, target_height / 2),   name = "mid_corner_4" },
+
+		-- Mid-points on edges (body level)
+		{ pos = Vector3(0, -target_depth / 2, target_height / 2),                 name = "mid_front" },
+		{ pos = Vector3(0, target_depth / 2, target_height / 2),                  name = "mid_back" },
+		{ pos = Vector3(-target_width / 2, 0, target_height / 2),                 name = "mid_left" },
+		{ pos = Vector3(target_width / 2, 0, target_height / 2),                  name = "mid_right" },
+
+		-- Bottom mid-points (legs level)
+		{ pos = Vector3(0, -target_depth / 2, 0),                                 name = "bottom_front" },
+		{ pos = Vector3(0, target_depth / 2, 0),                                  name = "bottom_back" },
+		{ pos = Vector3(-target_width / 2, 0, 0),                                 name = "bottom_left" },
+		{ pos = Vector3(target_width / 2, 0, 0),                                  name = "bottom_right" },
+
+		-- Top corners (head level)
+		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height),     name = "top_corner_1" },
+		{ pos = Vector3(target_width / 2, -target_depth / 2, target_height),      name = "top_corner_2" },
+		{ pos = Vector3(-target_width / 2, target_depth / 2, target_height),      name = "top_corner_3" },
+		{ pos = Vector3(target_width / 2, target_depth / 2, target_height),       name = "top_corner_4" },
+
+		-- Top mid-points (head level)
+		{ pos = Vector3(0, -target_depth / 2, target_height),                     name = "top_front" },
+		{ pos = Vector3(0, target_depth / 2, target_height),                      name = "top_back" },
+		{ pos = Vector3(-target_width / 2, 0, target_height),                     name = "top_left" },
+		{ pos = Vector3(target_width / 2, 0, target_height),                      name = "top_right" },
+	}
+
+	local valid_points = {}
+
+	-- 1. Bows/headshot weapons
+	if self.bIsHuntsman then
+		if self.settings.hitparts.head and head_pos and canShootToPoint(head_pos) then
+			table.insert(valid_points, head_pos)
+		end
+		if canShootToPoint(center_pos) then
+			table.insert(valid_points, center_pos)
+		end
+		if self.settings.hitparts.feet and is_on_ground and canShootToPoint(feet_pos) then
+			table.insert(valid_points, feet_pos)
+		end
+		for _, point in ipairs(fallback_points) do
+			local test_pos = self.vecPredictedPos + point.pos
+			if canShootToPoint(test_pos) then
+				table.insert(valid_points, test_pos)
+			end
+		end
+	else
+		-- 2. Explosive projectiles: feet first if enabled and on ground
+		if self.bIsSplash and self.settings.hitparts.feet and is_on_ground and canShootToPoint(feet_pos) then
+			table.insert(valid_points, feet_pos)
+		end
+		-- Center next
+		if canShootToPoint(center_pos) then
+			table.insert(valid_points, center_pos)
+		end
+
+		-- Try fallback points
+		for _, point in ipairs(fallback_points) do
+			local test_pos = self.vecPredictedPos + point.pos
+
+			if canShootToPoint(test_pos) then
+				table.insert(valid_points, test_pos)
+			end
+		end
+	end
+
+	return valid_points
+end
+
+---@param pLocal Entity
+---@param pWeapon Entity
+---@param pTarget Entity
+---@param bIsHuntsman boolean
+---@param bAimTeamMate boolean
+---@param vecHeadPos Vector3
+---@param vecPredictedPos Vector3
+---@param weapon_info WeaponInfo
+---@param math_utils MathLib
+---@param iMaxDistance integer
+---@param bIsSplash boolean
+---@param ent_utils table
+---@param settings table
+function multipoint:Set(
+	pLocal,
+	pWeapon,
+	pTarget,
+	bIsHuntsman,
+	bAimTeamMate,
+	vecHeadPos,
+	vecPredictedPos,
+	weapon_info,
+	math_utils,
+	iMaxDistance,
+	bIsSplash,
+	ent_utils,
+	settings
+)
+	self.pLocal = pLocal
+	self.pWeapon = pWeapon
+	self.pTarget = pTarget
+	self.bIsHuntsman = bIsHuntsman
+	self.bAimTeamMate = bAimTeamMate
+	self.vecHeadPos = vecHeadPos
+	self.vecShootPos = vecHeadPos -- Use view position as base
+	self.weapon_info = weapon_info
+	self.math_utils = math_utils
+	self.iMaxDistance = iMaxDistance
+	self.vecPredictedPos = vecPredictedPos
+	self.bIsSplash = bIsSplash
+	self.ent_utils = ent_utils
+	self.settings = settings
+end
+
+return multipoint
 
 end)
 __bundle_register("src.gui", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -2326,7 +2950,7 @@ function pred:GetChargeTimeAndSpeed()
 
 	-- Get charge time for weapons that support it
 	local charge_begin_time = self.pWeapon:GetChargeBeginTime()
-	if charge_begin_time > 0 then
+	if charge_begin_time and charge_begin_time > 0 then
 		charge_time = globals.CurTime() - charge_begin_time
 
 		-- Weapon-specific charge time limits
@@ -2410,13 +3034,6 @@ function pred:Run()
 				)
 			end
 		end
-
-		-- Debug: print when ballistic solver fails
-		if not ballistic_dir then
-			printc(255, 100, 100, 255,
-				string.format("[PROJ AIMBOT] Ballistic solver failed - gravity: %.2f, forward: %.1f, upward: %.1f",
-					gravity / 800, forward_speed, upward_speed))
-		end
 	end
 
 	-- If no ballistic solution or no gravity, use linear calculation
@@ -2438,35 +3055,9 @@ function pred:Run()
 	end
 
 	local predicted_target_pos = player_positions[#player_positions] or self.pTarget:GetAbsOrigin()
-	local aim_dir = self.math_utils.NormalizeVector(predicted_target_pos - self.vecShootPos)
-	if not aim_dir then
-		return nil
-	end
 
-	-- For ballistic weapons, calculate aim direction first
-	if gravity > 0 then
-		-- Use the new ballistic calculation that properly handles upward velocity
-		local ballistic_dir = self.math_utils.GetProjectileAimDirection(
-			self.vecShootPos,
-			predicted_target_pos,
-			forward_speed,
-			upward_speed,
-			gravity
-		)
-
-		if ballistic_dir then
-			aim_dir = ballistic_dir
-		else
-			-- Fallback to old method if new calculation fails
-			ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, predicted_target_pos, total_speed,
-				gravity)
-			if ballistic_dir then
-				aim_dir = ballistic_dir
-			end
-		end
-	end
-
-	-- Now use multipoint with the calculated aim direction
+	-- Use multipoint to determine the default aim point
+	local default_aim_pos = predicted_target_pos
 	if self.settings.multipointing then
 		local bSplashWeapon = IsSplashDamageWeapon(self.pWeapon)
 		local viewPos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
@@ -2477,7 +3068,7 @@ function pred:Run()
 			self.pTarget,
 			self.bIsHuntsman,
 			self.bAimAtTeamMates,
-			viewPos, -- Use view position, not calculated shoot position
+			viewPos,
 			predicted_target_pos,
 			self.weapon_info,
 			self.math_utils,
@@ -2487,36 +3078,50 @@ function pred:Run()
 			self.settings
 		)
 
-		---@diagnostic disable-next-line: cast-local-type
 		local multipoint_pos = multipoint:GetBestHitPoint()
-
 		if multipoint_pos then
-			-- Recalculate ballistic aim direction for the multipoint position
-			if gravity > 0 then
-				local new_ballistic_dir = self.math_utils.GetProjectileAimDirection(
-					self.vecShootPos,
-					multipoint_pos,
-					forward_speed,
-					upward_speed,
-					gravity
-				)
+			default_aim_pos = multipoint_pos
+		end
+	end
 
-				if new_ballistic_dir then
-					aim_dir = new_ballistic_dir
-					predicted_target_pos = multipoint_pos
-				else
-					-- If ballistic solver fails for multipoint, fallback to old method
-					local fallback_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, multipoint_pos, total_speed,
-						gravity)
-					if fallback_dir then
-						aim_dir = fallback_dir
-						predicted_target_pos = multipoint_pos
-					end
-				end
+	-- Calculate ballistic aim direction for the default aim point
+	local aim_dir = self.math_utils.NormalizeVector(default_aim_pos - self.vecShootPos)
+	if not aim_dir then
+		return nil
+	end
+
+	-- For ballistic weapons, calculate aim direction first
+	if gravity > 0 then
+		-- Use the improved ballistic calculation with total speed
+		local velocity_vector = self.weapon_info:GetVelocity(0)
+		local total_speed = velocity_vector:Length()
+
+		local ballistic_dir = self.math_utils.GetProjectileAimDirection(
+			self.vecShootPos,
+			default_aim_pos,
+			total_speed,
+			gravity
+		)
+
+		if ballistic_dir then
+			aim_dir = ballistic_dir
+			printc(150, 255, 150, 255,
+				string.format("[PROJ AIMBOT] Ballistic calculation succeeded - gravity: %.2f, total_speed: %.1f",
+					gravity / 800, total_speed))
+		else
+			-- Fallback to old method if new calculation fails
+			ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, default_aim_pos, total_speed,
+				gravity)
+			if ballistic_dir then
+				aim_dir = ballistic_dir
+				printc(150, 255, 150, 255,
+					string.format(
+					"[PROJ AIMBOT] Fallback ballistic calculation succeeded - gravity: %.2f, total_speed: %.1f",
+						gravity / 800, total_speed))
 			else
-				-- For non-ballistic weapons, just use multipoint position
-				predicted_target_pos = multipoint_pos
-				aim_dir = self.math_utils.NormalizeVector(multipoint_pos - self.vecShootPos)
+				printc(255, 100, 100, 255,
+					string.format("[PROJ AIMBOT] Ballistic calculation failed - gravity: %.2f, total_speed: %.1f",
+						gravity / 800, total_speed))
 			end
 		end
 	end
@@ -2527,266 +3132,11 @@ function pred:Run()
 		nChargeTime = charge_time,
 		vecAimDir = aim_dir,
 		vecPlayerPath = player_positions,
+		defaultAimPos = default_aim_pos, -- Store the default aim position for fallback
 	}
 end
 
 return pred
-
-end)
-__bundle_register("src.multipoint", function(require, _LOADED, __bundle_register, __bundle_modules)
--- Constants
-local FL_DUCKING = 1
-
----@class Multipoint
----@field private pLocal Entity
----@field private pTarget Entity
----@field private pWeapon Entity
----@field private bIsHuntsman boolean
----@field private bIsSplash boolean
----@field private vecAimDir Vector3
----@field private vecPredictedPos Vector3
----@field private bAimTeamMate boolean
----@field private vecHeadPos Vector3
----@field private weapon_info WeaponInfo
----@field private math_utils MathLib
----@field private iMaxDistance integer
-local multipoint = {}
-
-local offset_multipliers = {
-	splash = {
-		{ "legs",           { { 0, 0, 0 }, { 0, 0, 0.2 } } },
-		{ "chest",          { { 0, 0, 0.5 } } },
-		{ "right_shoulder", { { 0.6, 0, 0.5 } } },
-		{ "left_shoulder",  { { -0.6, 0, 0.5 } } },
-		{ "head",           { { 0, 0, 0.9 } } },
-	},
-	huntsman = {
-		{ "chest",          { { 0, 0, 0.5 } } },
-		{ "right_shoulder", { { 0.6, 0, 0.5 } } },
-		{ "left_shoulder",  { { -0.6, 0, 0.5 } } },
-		{ "legs",           { { 0, 0, 0.2 } } },
-	},
-	normal = {
-		{ "chest",          { { 0, 0, 0.5 } } },
-		{ "right_shoulder", { { 0.6, 0, 0.5 } } },
-		{ "left_shoulder",  { { -0.6, 0, 0.5 } } },
-		{ "head",           { { 0, 0, 0.9 } } },
-		{ "legs",           { { 0, 0, 0.2 } } },
-	},
-}
-
--- Robust normalization function that handles edge cases
-local function SafeNormalize(vec)
-	if not vec then
-		return nil
-	end
-
-	local length = vec:Length()
-	if length < 0.001 then
-		return nil -- Vector is too small to normalize
-	end
-
-	-- Try the built-in Normalize method first
-	local normalized = vec:Normalize()
-	if normalized then
-		return normalized
-	end
-
-	-- Fallback: manual normalization
-	local inv_length = 1.0 / length
-	return Vector3(vec.x * inv_length, vec.y * inv_length, vec.z * inv_length)
-end
-
----@return Vector3?
-function multipoint:GetBestHitPoint()
-	local maxs = self.pTarget:GetMaxs()
-	local mins = self.pTarget:GetMins()
-	local origin = self.pTarget:GetAbsOrigin()
-
-	local target_height = maxs.z - mins.z
-	local target_width = maxs.x - mins.x
-	local target_depth = maxs.y - mins.y
-
-	local is_on_ground = (self.pTarget:GetPropInt("m_fFlags") & FL_ONGROUND) ~= 0
-	local vecMins, vecMaxs = self.weapon_info.m_vecMins, self.weapon_info.m_vecMaxs
-
-	local function shouldHit(ent)
-		if not ent then
-			return false
-		end
-
-		if ent:GetIndex() == self.pLocal:GetIndex() then
-			return false
-		end
-
-		-- For rockets, we want to hit enemies (different team)
-		-- For healing weapons, we want to hit teammates (same team)
-		if self.bAimTeamMate then
-			return ent:GetTeamNumber() == self.pTarget:GetTeamNumber()
-		else
-			return ent:GetTeamNumber() ~= self.pTarget:GetTeamNumber()
-		end
-	end
-
-	-- Check if we can shoot from our position to the target point using the same logic as main code
-	local function canShootToPoint(target_pos)
-		if not target_pos then
-			return false
-		end
-
-		-- Use the same logic as main code: calculate aim direction first, then check if we can hit
-		local viewpos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
-
-		-- Calculate aim direction from viewpos to target
-		local aim_dir = self.math_utils.NormalizeVector(target_pos - viewpos)
-		if not aim_dir then
-			return false
-		end
-
-		-- Get weapon offset and calculate weapon fire position using the same logic as main code
-		local muzzle_offset = self.weapon_info:GetOffset(
-			(self.pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0,
-			self.pWeapon:IsViewModelFlipped()
-		)
-		local vecWeaponFirePos =
-			viewpos
-			+ self.math_utils.RotateOffsetAlongDirection(muzzle_offset, aim_dir)
-			+ self.weapon_info.m_vecAbsoluteOffset
-
-		-- Check if we can hit using TraceHull (same as main code)
-		local trace = engine.TraceHull(vecWeaponFirePos, target_pos, vecMins, vecMaxs, MASK_SHOT_HULL, shouldHit)
-		return trace and trace.fraction >= 1
-	end
-
-	local head_pos = self.ent_utils.GetBones and self.ent_utils.GetBones(self.pTarget)[1] or nil
-	local center_pos = self.vecPredictedPos + Vector3(0, 0, target_height / 2)
-	local feet_pos = self.vecPredictedPos
-
-	local fallback_points = {
-		-- Bottom corners (feet/ground level, prioritized if feet are enabled)
-		{ pos = Vector3(-target_width / 2, -target_depth / 2, 0),                 name = "bottom_corner_1" },
-		{ pos = Vector3(target_width / 2, -target_depth / 2, 0),                  name = "bottom_corner_2" },
-		{ pos = Vector3(-target_width / 2, target_depth / 2, 0),                  name = "bottom_corner_3" },
-		{ pos = Vector3(target_width / 2, target_depth / 2, 0),                   name = "bottom_corner_4" },
-
-		-- Mid-height corners (body level)
-		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height / 2), name = "mid_corner_1" },
-		{ pos = Vector3(target_width / 2, -target_depth / 2, target_height / 2),  name = "mid_corner_2" },
-		{ pos = Vector3(-target_width / 2, target_depth / 2, target_height / 2),  name = "mid_corner_3" },
-		{ pos = Vector3(target_width / 2, target_depth / 2, target_height / 2),   name = "mid_corner_4" },
-
-		-- Mid-points on edges (body level)
-		{ pos = Vector3(0, -target_depth / 2, target_height / 2),                 name = "mid_front" },
-		{ pos = Vector3(0, target_depth / 2, target_height / 2),                  name = "mid_back" },
-		{ pos = Vector3(-target_width / 2, 0, target_height / 2),                 name = "mid_left" },
-		{ pos = Vector3(target_width / 2, 0, target_height / 2),                  name = "mid_right" },
-
-		-- Bottom mid-points (legs level)
-		{ pos = Vector3(0, -target_depth / 2, 0),                                 name = "bottom_front" },
-		{ pos = Vector3(0, target_depth / 2, 0),                                  name = "bottom_back" },
-		{ pos = Vector3(-target_width / 2, 0, 0),                                 name = "bottom_left" },
-		{ pos = Vector3(target_width / 2, 0, 0),                                  name = "bottom_right" },
-
-		-- Top corners (head level)
-		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height),     name = "top_corner_1" },
-		{ pos = Vector3(target_width / 2, -target_depth / 2, target_height),      name = "top_corner_2" },
-		{ pos = Vector3(-target_width / 2, target_depth / 2, target_height),      name = "top_corner_3" },
-		{ pos = Vector3(target_width / 2, target_depth / 2, target_height),       name = "top_corner_4" },
-
-		-- Top mid-points (head level)
-		{ pos = Vector3(0, -target_depth / 2, target_height),                     name = "top_front" },
-		{ pos = Vector3(0, target_depth / 2, target_height),                      name = "top_back" },
-		{ pos = Vector3(-target_width / 2, 0, target_height),                     name = "top_left" },
-		{ pos = Vector3(target_width / 2, 0, target_height),                      name = "top_right" },
-	}
-
-	-- 1. Bows/headshot weapons
-	if self.bIsHuntsman then
-		if self.settings.hitparts.head and head_pos and canShootToPoint(head_pos) then
-			return head_pos
-		end
-		if canShootToPoint(center_pos) then
-			return center_pos
-		end
-		if self.settings.hitparts.feet and is_on_ground and canShootToPoint(feet_pos) then
-			return feet_pos
-		end
-		for _, point in ipairs(fallback_points) do
-			local test_pos = self.vecPredictedPos + point.pos
-			if canShootToPoint(test_pos) then
-				return test_pos
-			end
-		end
-		return nil
-	end
-
-	-- 2. Explosive projectiles: feet first if enabled and on ground
-	if self.bIsSplash and self.settings.hitparts.feet and is_on_ground and canShootToPoint(feet_pos) then
-		return feet_pos
-	end
-	-- Center next
-	if canShootToPoint(center_pos) then
-		return center_pos
-	end
-
-	-- Try fallback points
-	for _, point in ipairs(fallback_points) do
-		local test_pos = self.vecPredictedPos + point.pos
-
-		if canShootToPoint(test_pos) then
-			return test_pos
-		end
-	end
-
-	-- Fallback: return center position if all else fails
-	return center_pos
-end
-
----@param pLocal Entity
----@param pWeapon Entity
----@param pTarget Entity
----@param bIsHuntsman boolean
----@param bAimTeamMate boolean
----@param vecHeadPos Vector3
----@param vecPredictedPos Vector3
----@param weapon_info WeaponInfo
----@param math_utils MathLib
----@param iMaxDistance integer
----@param bIsSplash boolean
----@param ent_utils table
----@param settings table
-function multipoint:Set(
-	pLocal,
-	pWeapon,
-	pTarget,
-	bIsHuntsman,
-	bAimTeamMate,
-	vecHeadPos,
-	vecPredictedPos,
-	weapon_info,
-	math_utils,
-	iMaxDistance,
-	bIsSplash,
-	ent_utils,
-	settings
-)
-	self.pLocal = pLocal
-	self.pWeapon = pWeapon
-	self.pTarget = pTarget
-	self.bIsHuntsman = bIsHuntsman
-	self.bAimTeamMate = bAimTeamMate
-	self.vecHeadPos = vecHeadPos
-	self.vecShootPos = vecHeadPos -- Use view position as base
-	self.weapon_info = weapon_info
-	self.math_utils = math_utils
-	self.iMaxDistance = iMaxDistance
-	self.vecPredictedPos = vecPredictedPos
-	self.bIsSplash = bIsSplash
-	self.ent_utils = ent_utils
-	self.settings = settings
-end
-
-return multipoint
 
 end)
 __bundle_register("src.simulation.proj", function(require, _LOADED, __bundle_register, __bundle_modules)
@@ -3466,42 +3816,37 @@ function Math.RotateOffsetAlongDirection(offset, direction)
 	return forward * offset.x + right * offset.y + up * offset.z
 end
 
--- Calculate aim direction for projectile with both forward and upward velocity
+-- Calculate aim direction for projectile with proper ballistic trajectory
 ---@param p0 Vector3 Starting position
 ---@param p1 Vector3 Target position
----@param forward_speed number Forward velocity component
----@param upward_speed number Upward velocity component
+---@param speed number Total projectile speed
 ---@param gravity number Gravity value
 ---@return Vector3|nil Aim direction
-function Math.GetProjectileAimDirection(p0, p1, forward_speed, upward_speed, gravity)
+function Math.GetProjectileAimDirection(p0, p1, speed, gravity)
 	local diff = p1 - p0
 	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
 	local dy = diff.z
-
+	local speed2 = speed * speed
 	local g = gravity
-	local v0z = upward_speed
-	local v0xy = forward_speed
 
-	-- Simple approach: calculate the angle needed if there was no upward velocity
-	-- then adjust for the fact that the projectile has inherent upward velocity
+	-- Solve the quadratic equation for ballistic trajectory
+	local root = speed2 * speed2 - g * (g * dx * dx + 2 * dy * speed2)
+	if root < 0 then
+		return nil -- no solution
+	end
 
-	-- First, calculate what the vertical position would be with just forward velocity
-	local time_to_target = dx / v0xy
-	local natural_rise = v0z * time_to_target - 0.5 * g * time_to_target * time_to_target
+	local sqrt_root = math.sqrt(root)
+	local angle
 
-	-- Calculate the angle adjustment needed
-	-- If the projectile naturally rises, we need to aim lower
-	local vertical_adjustment = dy - natural_rise
-	local angle_adjustment = math.atan(vertical_adjustment / dx)
+	-- Use the low arc solution (more accurate for most cases)
+	angle = math.atan((speed2 - sqrt_root) / (g * dx))
 
-	-- Create the aim direction
+	if isNaN(angle) then
+		return nil
+	end
+
 	local dir_xy = NormalizeVector(Vector3(diff.x, diff.y, 0))
-	local aim = Vector3(
-		dir_xy.x * math.cos(angle_adjustment),
-		dir_xy.y * math.cos(angle_adjustment),
-		math.sin(angle_adjustment)
-	)
-
+	local aim = Vector3(dir_xy.x * math.cos(angle), dir_xy.y * math.cos(angle), math.sin(angle))
 	return NormalizeVector(aim)
 end
 

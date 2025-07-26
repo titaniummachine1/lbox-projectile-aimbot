@@ -53,11 +53,10 @@ function Math.RotateOffsetAlongDirection(offset, direction) end
 
 ---@param p0 Vector3 Starting position
 ---@param p1 Vector3 Target position
----@param forward_speed number Forward velocity component
----@param upward_speed number Upward velocity component
+---@param speed number Total projectile speed
 ---@param gravity number Gravity value
 ---@return Vector3|nil Aim direction
-function Math.GetProjectileAimDirection(p0, p1, forward_speed, upward_speed, gravity) end
+function Math.GetProjectileAimDirection(p0, p1, speed, gravity) end
 
 ---@param p0 Vector3 Starting position
 ---@param p1 Vector3 Target position
