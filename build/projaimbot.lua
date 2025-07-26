@@ -3142,19 +3142,59 @@ function multipoint:GetBestHitPoint()
 
 	-- Check if we can shoot from our position to the target point using projectile simulation logic
 	local function canShootToPoint(target_pos)
-		-- First do a line trace to check visibility
-		local line_trace = engine.TraceLine(self.vecHeadPos, target_pos, MASK_SHOT_HULL, shouldHit)
-		if not line_trace or line_trace.fraction < 1 then
+		if not self.vecShootPos or not target_pos then
+			printc(255, 0, 0, 255, "[MULTIPOINT] vecShootPos or target_pos is nil! vecShootPos:",
+				tostring(self.vecShootPos), "target_pos:", tostring(target_pos))
 			return false
 		end
 
-		-- Then do a hull trace to check if projectile can reach the point
-		local hull_trace = engine.TraceHull(self.vecHeadPos, target_pos, vecMins, vecMaxs, MASK_SHOT_HULL, shouldHit)
-		if not hull_trace or hull_trace.fraction < 1 then
-			return false
-		end
+		-- Calculate direction from shoot position to target
+		local direction = (target_pos - self.vecShootPos):Normalize()
+		local distance = (target_pos - self.vecShootPos):Length()
 
-		return true
+		-- For rockets (no volume), simulate straight line trajectory
+		local has_volume = vecMins.x ~= 0 or vecMins.y ~= 0 or vecMins.z ~= 0 or
+			vecMaxs.x ~= 0 or vecMaxs.y ~= 0 or vecMaxs.z ~= 0
+
+		if not has_volume then
+			-- Check if there's a clear line from shoot position to target
+			local line_trace = engine.TraceLine(self.vecShootPos, target_pos, MASK_SHOT_HULL, shouldHit)
+			return line_trace and line_trace.fraction >= 1
+		else
+			-- For projectiles with volume, simulate the actual trajectory
+			-- Use the projectile simulation logic to check if projectile can reach target
+			local projectile_speed = self.weapon_info:GetVelocity(0):Length()
+			local gravity = self.weapon_info:GetGravity(0) * 800
+
+			-- Simulate projectile trajectory step by step
+			local step_size = 50 -- Check every 50 units
+			local max_steps = math.ceil(distance / step_size)
+
+			for i = 1, max_steps do
+				local check_distance = i * step_size
+				if check_distance > distance then
+					break
+				end
+
+				-- Calculate projectile position at this step
+				local time = check_distance / projectile_speed
+				local projectile_pos = self.vecShootPos + (direction * check_distance)
+
+				-- Apply gravity if needed
+				if gravity > 0 then
+					projectile_pos.z = projectile_pos.z - (0.5 * gravity * time * time)
+				end
+
+				-- Check if projectile can reach this position
+				local hull_trace = engine.TraceHull(self.vecShootPos, projectile_pos, vecMins, vecMaxs, MASK_SHOT_HULL,
+					shouldHit)
+				if not hull_trace or hull_trace.fraction < 1 then
+					return false
+				end
+			end
+
+			return true
+		end
 	end
 
 	local head_pos = self.ent_utils.GetBones and self.ent_utils.GetBones(self.pTarget)[1] or nil
@@ -3162,39 +3202,41 @@ function multipoint:GetBestHitPoint()
 	local feet_pos = self.vecPredictedPos
 
 	local fallback_points = {
-		-- AABB corners (all 8 corners of the bounding box)
-		{ pos = Vector3(-target_width / 2, -target_depth / 2, 0),           name = "bottom_corner_1" },
-		{ pos = Vector3(target_width / 2, -target_depth / 2, 0),            name = "bottom_corner_2" },
-		{ pos = Vector3(-target_width / 2, target_depth / 2, 0),            name = "bottom_corner_3" },
-		{ pos = Vector3(target_width / 2, target_depth / 2, 0),             name = "bottom_corner_4" },
-		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height), name = "top_corner_1" },
-		{ pos = Vector3(target_width / 2, -target_depth / 2, target_height), name = "top_corner_2" },
-		{ pos = Vector3(-target_width / 2, target_depth / 2, target_height), name = "top_corner_3" },
-		{ pos = Vector3(target_width / 2, target_depth / 2, target_height), name = "top_corner_4" },
-
-		-- Mid-height corners (body level)
+		-- Mid-height corners (body level) - most likely to succeed
 		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height / 2), name = "mid_corner_1" },
-		{ pos = Vector3(target_width / 2, -target_depth / 2, target_height / 2), name = "mid_corner_2" },
-		{ pos = Vector3(-target_width / 2, target_depth / 2, target_height / 2), name = "mid_corner_3" },
-		{ pos = Vector3(target_width / 2, target_depth / 2, target_height / 2), name = "mid_corner_4" },
+		{ pos = Vector3(target_width / 2, -target_depth / 2, target_height / 2),  name = "mid_corner_2" },
+		{ pos = Vector3(-target_width / 2, target_depth / 2, target_height / 2),  name = "mid_corner_3" },
+		{ pos = Vector3(target_width / 2, target_depth / 2, target_height / 2),   name = "mid_corner_4" },
 
-		-- Mid-points on edges
-		{ pos = Vector3(0, -target_depth / 2, target_height / 2),           name = "mid_front" },
-		{ pos = Vector3(0, target_depth / 2, target_height / 2),            name = "mid_back" },
-		{ pos = Vector3(-target_width / 2, 0, target_height / 2),           name = "mid_left" },
-		{ pos = Vector3(target_width / 2, 0, target_height / 2),            name = "mid_right" },
+		-- Mid-points on edges (body level)
+		{ pos = Vector3(0, -target_depth / 2, target_height / 2),                 name = "mid_front" },
+		{ pos = Vector3(0, target_depth / 2, target_height / 2),                  name = "mid_back" },
+		{ pos = Vector3(-target_width / 2, 0, target_height / 2),                 name = "mid_left" },
+		{ pos = Vector3(target_width / 2, 0, target_height / 2),                  name = "mid_right" },
+
+		-- Bottom corners (legs level)
+		{ pos = Vector3(-target_width / 2, -target_depth / 2, 0),                 name = "bottom_corner_1" },
+		{ pos = Vector3(target_width / 2, -target_depth / 2, 0),                  name = "bottom_corner_2" },
+		{ pos = Vector3(-target_width / 2, target_depth / 2, 0),                  name = "bottom_corner_3" },
+		{ pos = Vector3(target_width / 2, target_depth / 2, 0),                   name = "bottom_corner_4" },
 
 		-- Bottom mid-points (legs level)
-		{ pos = Vector3(0, -target_depth / 2, 0),                           name = "bottom_front" },
-		{ pos = Vector3(0, target_depth / 2, 0),                            name = "bottom_back" },
-		{ pos = Vector3(-target_width / 2, 0, 0),                           name = "bottom_left" },
-		{ pos = Vector3(target_width / 2, 0, 0),                            name = "bottom_right" },
+		{ pos = Vector3(0, -target_depth / 2, 0),                                 name = "bottom_front" },
+		{ pos = Vector3(0, target_depth / 2, 0),                                  name = "bottom_back" },
+		{ pos = Vector3(-target_width / 2, 0, 0),                                 name = "bottom_left" },
+		{ pos = Vector3(target_width / 2, 0, 0),                                  name = "bottom_right" },
+
+		-- Top corners (head level) - least likely to succeed
+		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height),     name = "top_corner_1" },
+		{ pos = Vector3(target_width / 2, -target_depth / 2, target_height),      name = "top_corner_2" },
+		{ pos = Vector3(-target_width / 2, target_depth / 2, target_height),      name = "top_corner_3" },
+		{ pos = Vector3(target_width / 2, target_depth / 2, target_height),       name = "top_corner_4" },
 
 		-- Top mid-points (head level)
-		{ pos = Vector3(0, -target_depth / 2, target_height),               name = "top_front" },
-		{ pos = Vector3(0, target_depth / 2, target_height),                name = "top_back" },
-		{ pos = Vector3(-target_width / 2, 0, target_height),               name = "top_left" },
-		{ pos = Vector3(target_width / 2, 0, target_height),                name = "top_right" },
+		{ pos = Vector3(0, -target_depth / 2, target_height),                     name = "top_front" },
+		{ pos = Vector3(0, target_depth / 2, target_height),                      name = "top_back" },
+		{ pos = Vector3(-target_width / 2, 0, target_height),                     name = "top_left" },
+		{ pos = Vector3(target_width / 2, 0, target_height),                      name = "top_right" },
 	}
 
 	-- 1. Bows/headshot weapons
@@ -3231,13 +3273,21 @@ function multipoint:GetBestHitPoint()
 		printc(0, 255, 0, 255, "[MULTIPOINT] Selected center (projectile)")
 		return center_pos
 	end
+
+	-- Debug: show that we're trying fallback points
+	printc(255, 255, 0, 255, "[MULTIPOINT] Trying fallback points for projectile")
+
 	for _, point in ipairs(fallback_points) do
 		local test_pos = self.vecPredictedPos + point.pos
 		if canShootToPoint(test_pos) then
 			printc(0, 255, 0, 255, string.format("[MULTIPOINT] Selected fallback %s (projectile)", point.name))
 			return test_pos
+		else
+			printc(255, 0, 0, 255, string.format("[MULTIPOINT] Fallback %s failed", point.name))
 		end
 	end
+
+	printc(255, 0, 0, 255, "[MULTIPOINT] No valid multipoint found!")
 	return nil
 end
 
@@ -3272,6 +3322,7 @@ function multipoint:Set(
 	self.bIsHuntsman = bIsHuntsman
 	self.bAimTeamMate = bAimTeamMate
 	self.vecHeadPos = vecHeadPos
+	self.vecShootPos = vecHeadPos -- Fix: assign shoot position
 	self.weapon_info = weapon_info
 	self.math_utils = math_utils
 	self.iMaxDistance = iMaxDistance
