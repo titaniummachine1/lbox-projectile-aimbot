@@ -2969,12 +2969,12 @@ end
 
 function pred:GetChargeTimeAndSpeed()
 	local charge_time = 0.0
-	local projectile_speed = self.weapon_info:GetVelocity(0):Length()
+	local velocity_vector = self.weapon_info:GetVelocity(0)
 
 	if self.pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_COMPOUND_BOW then
 		-- check if bow is currently being charged
 		local charge_begin_time = self.pWeapon:GetChargeBeginTime()
-		projectile_speed = self.weapon_info:GetVelocity(charge_begin_time or 0):Length()
+		velocity_vector = self.weapon_info:GetVelocity(charge_begin_time or 0)
 
 		-- if charge_begin_time is 0, the bow isn't charging
 		if charge_begin_time > 0 then
@@ -2984,14 +2984,14 @@ function pred:GetChargeTimeAndSpeed()
 
 			-- apply charge multiplier to projectile speed
 			local charge_multiplier = 1.0 + (charge_time * 0.44) -- 44% speed increase at full charge
-			projectile_speed = projectile_speed * charge_multiplier
+			velocity_vector = velocity_vector * charge_multiplier
 		else
 			-- bow is not charging, use minimum speed
 			charge_time = 0.0
 		end
 	elseif self.pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_PIPEBOMBLAUNCHER then
 		local charge_begin_time = self.pWeapon:GetChargeBeginTime()
-		projectile_speed = self.weapon_info:GetVelocity(charge_begin_time or 0):Length()
+		velocity_vector = self.weapon_info:GetVelocity(charge_begin_time or 0)
 
 		if charge_begin_time > 0 then
 			charge_time = globals.CurTime() - charge_begin_time
@@ -3001,7 +3001,7 @@ function pred:GetChargeTimeAndSpeed()
 		end
 	end
 
-	return charge_time, projectile_speed
+	return charge_time, velocity_vector
 end
 
 ---@param pWeapon Entity
@@ -3026,11 +3026,16 @@ function pred:Run()
 		return nil
 	end
 
-	local charge_time, projectile_speed = self:GetChargeTimeAndSpeed()
+	local charge_time, velocity_vector = self:GetChargeTimeAndSpeed()
 	local gravity = self.weapon_info:GetGravity(charge_time) * 800 --- example: 200
 
+	-- Extract velocity components for calculations
+	local forward_speed = velocity_vector.x
+	local upward_speed = velocity_vector.z or 0
+	local total_speed = velocity_vector:Length()
+
 	local detonate_time = self.pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_PIPEBOMBLAUNCHER and 0.7 or 0
-	local travel_time_est = (vecTargetOrigin - self.vecShootPos):Length() / projectile_speed
+	local travel_time_est = (vecTargetOrigin - self.vecShootPos):Length() / total_speed
 	local total_time = travel_time_est + self.nLatency + detonate_time
 	if total_time > self.settings.max_sim_time or total_time > self.weapon_info.m_flLifetime then
 		return nil
@@ -3078,12 +3083,25 @@ function pred:Run()
 	end
 
 	if gravity > 0 then
-		local ballistic_dir =
-			self.math_utils.SolveBallisticArc(self.vecShootPos, predicted_target_pos, projectile_speed, gravity)
-		if not ballistic_dir then
-			return nil
+		-- Use the new ballistic calculation that properly handles upward velocity
+		local ballistic_dir = self.math_utils.SolveBallisticArcWithUpwardVelocity(
+			self.vecShootPos,
+			predicted_target_pos,
+			forward_speed,
+			upward_speed,
+			gravity
+		)
+
+		if ballistic_dir then
+			aim_dir = ballistic_dir
+		else
+			-- Fallback to old method if new calculation fails
+			ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, predicted_target_pos, total_speed,
+				gravity)
+			if ballistic_dir then
+				aim_dir = ballistic_dir
+			end
 		end
-		aim_dir = ballistic_dir
 	end
 
 	return {
@@ -3456,14 +3474,18 @@ function sim.Run(pLocal, pWeapon, shootPos, vecForward, nTime, weapon_info)
 	projectile:Wake()
 
 	local mins, maxs = weapon_info.m_vecMins, weapon_info.m_vecMaxs
-	local speed, gravity
-
 	local charge = GetChargeTime(pWeapon, weapon_info)
 
-	speed = weapon_info:GetVelocity(charge):Length()
-	gravity = 800 * weapon_info:GetGravity(charge)
+	-- Get the velocity vector from weapon info (includes upward velocity)
+	local velocity_vector = weapon_info:GetVelocity(charge)
+	local forward_speed = velocity_vector.x
+	local upward_speed = velocity_vector.z or 0
 
-	local velocity = vecForward * speed
+	-- Calculate the final velocity vector with proper upward component
+	local velocity = (vecForward * forward_speed) + (Vector3(0, 0, 1) * upward_speed)
+
+	-- Get gravity and apply it to the physics environment
+	local gravity = 800 * weapon_info:GetGravity(charge)
 
 	env:SetGravity(Vector3(0, 0, -gravity))
 	projectile:SetPosition(shootPos, vecForward, true)
@@ -4047,6 +4069,92 @@ function Math.RotateOffsetAlongDirection(offset, direction)
 	up = NormalizeVector(right:Cross(forward))
 
 	return forward * offset.x + right * offset.y + up * offset.z
+end
+
+-- New function to calculate ballistic trajectory with upward velocity
+---@param p0 Vector3 Starting position
+---@param p1 Vector3 Target position
+---@param forward_speed number Forward velocity component
+---@param upward_speed number Upward velocity component
+---@param gravity number Gravity value
+---@return Vector3|nil Aim direction
+function Math.SolveBallisticArcWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity)
+	local diff = p1 - p0
+	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
+	local dy = diff.z
+
+	local g = gravity
+	local v0z = upward_speed
+	local v0xy = forward_speed
+
+	-- Simple approach: calculate the angle needed if there was no upward velocity
+	-- then adjust for the fact that the projectile has inherent upward velocity
+
+	-- First, calculate what the vertical position would be with just forward velocity
+	local time_to_target = dx / v0xy
+	local natural_rise = v0z * time_to_target - 0.5 * g * time_to_target * time_to_target
+
+	-- Calculate the angle adjustment needed
+	-- If the projectile naturally rises, we need to aim lower
+	local vertical_adjustment = dy - natural_rise
+	local angle_adjustment = math.atan(vertical_adjustment / dx)
+
+	-- Create the aim direction
+	local dir_xy = NormalizeVector(Vector3(diff.x, diff.y, 0))
+	local aim = Vector3(
+		dir_xy.x * math.cos(angle_adjustment),
+		dir_xy.y * math.cos(angle_adjustment),
+		math.sin(angle_adjustment)
+	)
+
+	return NormalizeVector(aim)
+end
+
+-- New function to calculate flight time with upward velocity
+---@param p0 Vector3 Starting position
+---@param p1 Vector3 Target position
+---@param forward_speed number Forward velocity component
+---@param upward_speed number Upward velocity component
+---@param gravity number Gravity value
+---@return number|nil Flight time
+function Math.GetBallisticFlightTimeWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity)
+	local diff = p1 - p0
+	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
+	local dy = diff.z
+
+	local g = gravity
+	local v0z = upward_speed
+	local v0xy = forward_speed
+
+	-- Time from horizontal distance
+	local t_horizontal = dx / v0xy
+
+	-- Check if this time gives us the right vertical position
+	local expected_dy = v0z * t_horizontal - 0.5 * g * t_horizontal * t_horizontal
+
+	if math.abs(expected_dy - dy) < 1.0 then
+		return t_horizontal
+	end
+
+	-- If not, solve the quadratic equation for vertical motion
+	-- dy = v0z * t - 0.5 * g * t^2
+	-- 0.5 * g * t^2 - v0z * t + dy = 0
+
+	local a = 0.5 * g
+	local b = -v0z
+	local c = dy
+
+	local discriminant = b * b - 4 * a * c
+	if discriminant < 0 then
+		return nil -- No solution
+	end
+
+	local sqrt_discriminant = math.sqrt(discriminant)
+	local t1 = (-b + sqrt_discriminant) / (2 * a)
+	local t2 = (-b - sqrt_discriminant) / (2 * a)
+
+	-- Return the positive time
+	return math.max(t1, t2)
 end
 
 Math.NormalizeVector = NormalizeVector
