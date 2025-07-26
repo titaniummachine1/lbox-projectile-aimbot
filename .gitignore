@@ -6,7 +6,6 @@ bundle.js
 package.json
 package-lock.json
 title.txt
-merge.sh
 
 # Build files
 build/
