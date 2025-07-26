@@ -48,7 +48,24 @@ function Math.AngleFov(vFrom, vTo)
 end
 
 local function NormalizeVector(vec)
-	return vec / vec:Length()
+	if not vec then
+		return nil
+	end
+
+	local length = vec:Length()
+	if length < 0.001 then
+		return nil -- Vector is too small to normalize
+	end
+
+	-- Try the built-in Normalize method first
+	local normalized = vec:Normalize()
+	if normalized then
+		return normalized
+	end
+
+	-- Fallback: manual normalization
+	local inv_length = 1.0 / length
+	return Vector3(vec.x * inv_length, vec.y * inv_length, vec.z * inv_length)
 end
 
 ---@param p0 Vector3
@@ -74,6 +91,10 @@ function Math.SolveBallisticArc(p0, p1, speed, gravity)
 	angle = math.atan((speed2 - sqrt_root) / (g * dx)) -- low arc
 
 	local dir_xy = NormalizeVector(Vector3(diff.x, diff.y, 0))
+	if not dir_xy then
+		return nil -- Cannot normalize direction
+	end
+
 	local aim = Vector3(dir_xy.x * math.cos(angle), dir_xy.y * math.cos(angle), math.sin(angle))
 	return NormalizeVector(aim)
 end
@@ -125,10 +146,25 @@ end
 ---@param offset Vector3
 ---@param direction Vector3
 function Math.RotateOffsetAlongDirection(offset, direction)
+	if not offset or not direction then
+		return Vector3(0, 0, 0)
+	end
+
 	local forward = NormalizeVector(direction)
+	if not forward then
+		return Vector3(0, 0, 0)
+	end
+
 	local up = Vector3(0, 0, 1)
 	local right = NormalizeVector(forward:Cross(up))
+	if not right then
+		return Vector3(0, 0, 0)
+	end
+
 	up = NormalizeVector(right:Cross(forward))
+	if not up then
+		return Vector3(0, 0, 0)
+	end
 
 	return forward * offset.x + right * offset.y + up * offset.z
 end
