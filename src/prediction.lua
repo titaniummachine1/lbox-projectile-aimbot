@@ -129,6 +129,7 @@ function pred:Run()
 
 		multipoint:Set(
 			self.pLocal,
+			self.pWeapon,
 			self.pTarget,
 			self.bIsHuntsman,
 			self.bAimAtTeamMates,

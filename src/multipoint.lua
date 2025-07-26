@@ -1,6 +1,10 @@
+-- Constants
+local FL_DUCKING = 1
+
 ---@class Multipoint
 ---@field private pLocal Entity
 ---@field private pTarget Entity
+---@field private pWeapon Entity
 ---@field private bIsHuntsman boolean
 ---@field private bIsSplash boolean
 ---@field private vecAimDir Vector3
@@ -88,89 +92,34 @@ function multipoint:GetBestHitPoint()
 		end
 	end
 
-	-- Check if we can shoot from our position to the target point using projectile simulation logic
+	-- Check if we can shoot from our position to the target point using the same logic as main code
 	local function canShootToPoint(target_pos)
-		if not self.vecShootPos or not target_pos then
+		if not target_pos then
 			return false
 		end
 
-		-- For rockets (no volume), use simple visibility check
-		local has_volume = vecMins.x ~= 0 or vecMins.y ~= 0 or vecMins.z ~= 0 or
-			vecMaxs.x ~= 0 or vecMaxs.y ~= 0 or vecMaxs.z ~= 0
+		-- Use the same logic as main code: calculate aim direction first, then check if we can hit
+		local viewpos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 
-		if not has_volume then
-			-- For rockets: get direction from viewpos to target, apply offset in that direction, then trace line
-			local viewpos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
-
-			local diff_vector = target_pos - viewpos
-			local diff_length = diff_vector:Length()
-
-			if diff_length < 0.001 then
-				return false
-			end
-
-			local direction_to_target = SafeNormalize(diff_vector)
-
-			-- Safety check: ensure direction is valid
-			if not direction_to_target then
-				return false
-			end
-
-			-- Apply weapon offset in the direction to target
-			local weapon_offset = self.weapon_info.vecOffset
-			if not weapon_offset then
-				weapon_offset = Vector3(23.5, -8, -3)
-			end
-			local shoot_offset_pos = viewpos +
-				self.math_utils.RotateOffsetAlongDirection(weapon_offset, direction_to_target)
-
-			-- Trace from offset position to target
-			local line_trace = engine.TraceLine(shoot_offset_pos, target_pos, MASK_SHOT_HULL, shouldHit)
-
-			return line_trace and line_trace.fraction >= 1
-		else
-			-- For projectiles with volume, calculate proper ballistic arc to get aim direction
-			local projectile_speed = self.weapon_info:GetVelocity(0):Length()
-			local gravity = self.weapon_info:GetGravity(0) * 800
-			local ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, target_pos, projectile_speed,
-				gravity)
-			if not ballistic_dir then
-				return false -- No ballistic solution exists
-			end
-
-			-- Now simulate the projectile from shoot position using the ballistic direction as initial velocity
-			local distance = (target_pos - self.vecShootPos):Length()
-			local step_size = 50 -- Check every 50 units
-			local max_steps = math.ceil(distance / step_size)
-
-			for i = 1, max_steps do
-				local check_distance = i * step_size
-				if check_distance > distance then
-					break
-				end
-
-				-- Calculate projectile position using ballistic trajectory simulation
-				local time = check_distance / projectile_speed
-
-				-- Simulate projectile motion: position = start + velocity*t + 0.5*gravity*t^2
-				local initial_velocity = ballistic_dir * projectile_speed
-				local projectile_pos = self.vecShootPos + (initial_velocity * time)
-
-				-- Apply gravity to the trajectory (projectile falls as it travels)
-				if gravity > 0 then
-					projectile_pos.z = projectile_pos.z - (0.5 * gravity * time * time)
-				end
-
-				-- Check if projectile can reach this position
-				local hull_trace = engine.TraceHull(self.vecShootPos, projectile_pos, vecMins, vecMaxs, MASK_SHOT_HULL,
-					shouldHit)
-				if not hull_trace or hull_trace.fraction < 1 then
-					return false
-				end
-			end
-
-			return true
+		-- Calculate aim direction from viewpos to target
+		local aim_dir = self.math_utils.NormalizeVector(target_pos - viewpos)
+		if not aim_dir then
+			return false
 		end
+
+		-- Get weapon offset and calculate weapon fire position using the same logic as main code
+		local muzzle_offset = self.weapon_info:GetOffset(
+			(self.pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0,
+			self.pWeapon:IsViewModelFlipped()
+		)
+		local vecWeaponFirePos =
+			viewpos
+			+ self.math_utils.RotateOffsetAlongDirection(muzzle_offset, aim_dir)
+			+ self.weapon_info.m_vecAbsoluteOffset
+
+		-- Check if we can hit using TraceHull (same as main code)
+		local trace = engine.TraceHull(vecWeaponFirePos, target_pos, vecMins, vecMaxs, MASK_SHOT_HULL, shouldHit)
+		return trace and trace.fraction >= 1
 	end
 
 	local head_pos = self.ent_utils.GetBones and self.ent_utils.GetBones(self.pTarget)[1] or nil
@@ -258,6 +207,7 @@ function multipoint:GetBestHitPoint()
 end
 
 ---@param pLocal Entity
+---@param pWeapon Entity
 ---@param pTarget Entity
 ---@param bIsHuntsman boolean
 ---@param bAimTeamMate boolean
@@ -271,6 +221,7 @@ end
 ---@param settings table
 function multipoint:Set(
 	pLocal,
+	pWeapon,
 	pTarget,
 	bIsHuntsman,
 	bAimTeamMate,
@@ -284,6 +235,7 @@ function multipoint:Set(
 	settings
 )
 	self.pLocal = pLocal
+	self.pWeapon = pWeapon
 	self.pTarget = pTarget
 	self.bIsHuntsman = bIsHuntsman
 	self.bAimTeamMate = bAimTeamMate
