@@ -12,7 +12,6 @@ merge.sh
 build/
 
 # IDE files
-.luarc.json
 
 # OS files
 .DS_Store
