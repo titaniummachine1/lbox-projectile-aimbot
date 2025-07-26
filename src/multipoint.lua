@@ -62,7 +62,7 @@ local function SafeNormalize(vec)
 end
 
 ---@return Vector3?
-function multipoint:GetBestHitPoint()
+function multipoint:GetCandidatePoints()
 	local maxs = self.pTarget:GetMaxs()
 	local mins = self.pTarget:GetMins()
 	local origin = self.pTarget:GetAbsOrigin()
@@ -164,46 +164,38 @@ function multipoint:GetBestHitPoint()
 		{ pos = Vector3(target_width / 2, 0, target_height),                      name = "top_right" },
 	}
 
-	-- 1. Bows/headshot weapons
-	if self.bIsHuntsman then
-		if self.settings.hitparts.head and head_pos and canShootToPoint(head_pos) then
-			return head_pos
-		end
-		if canShootToPoint(center_pos) then
-			return center_pos
-		end
-		if self.settings.hitparts.feet and is_on_ground and canShootToPoint(feet_pos) then
-			return feet_pos
-		end
-		for _, point in ipairs(fallback_points) do
-			local test_pos = self.vecPredictedPos + point.pos
-			if canShootToPoint(test_pos) then
-				return test_pos
-			end
-		end
-		return nil
-	end
+        local points = {}
 
-	-- 2. Explosive projectiles: feet first if enabled and on ground
-	if self.bIsSplash and self.settings.hitparts.feet and is_on_ground and canShootToPoint(feet_pos) then
-		return feet_pos
-	end
-	-- Center next
-	if canShootToPoint(center_pos) then
-		return center_pos
-	end
+        local function add(pos)
+                if pos then
+                        points[#points + 1] = pos
+                end
+        end
 
-	-- Try fallback points
-	for _, point in ipairs(fallback_points) do
-		local test_pos = self.vecPredictedPos + point.pos
+        if self.bIsHuntsman then
+                if self.settings.hitparts.head and head_pos then
+                        add(head_pos)
+                end
+                add(center_pos)
+                if self.settings.hitparts.feet and is_on_ground then
+                        add(feet_pos)
+                end
+                for _, point in ipairs(fallback_points) do
+                        add(self.vecPredictedPos + point.pos)
+                end
+                return points
+        end
 
-		if canShootToPoint(test_pos) then
-			return test_pos
-		end
-	end
+        if self.bIsSplash and self.settings.hitparts.feet and is_on_ground then
+                add(feet_pos)
+        end
+        add(center_pos)
 
-	-- Fallback: return center position if all else fails
-	return center_pos
+        for _, point in ipairs(fallback_points) do
+                add(self.vecPredictedPos + point.pos)
+        end
+
+        return points
 end
 
 ---@param pLocal Entity

@@ -173,56 +173,68 @@ function pred:Run()
 		local bSplashWeapon = IsSplashDamageWeapon(self.pWeapon)
 		local viewPos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 
-		multipoint:Set(
-			self.pLocal,
-			self.pWeapon,
-			self.pTarget,
-			self.bIsHuntsman,
-			self.bAimAtTeamMates,
-			viewPos, -- Use view position, not calculated shoot position
-			predicted_target_pos,
-			self.weapon_info,
-			self.math_utils,
-			self.settings.max_distance,
-			bSplashWeapon,
-			self.ent_utils,
-			self.settings
-		)
+                multipoint:Set(
+                        self.pLocal,
+                        self.pWeapon,
+                        self.pTarget,
+                        self.bIsHuntsman,
+                        self.bAimAtTeamMates,
+                        viewPos,
+                        predicted_target_pos,
+                        self.weapon_info,
+                        self.math_utils,
+                        self.settings.max_distance,
+                        bSplashWeapon,
+                        self.ent_utils,
+                        self.settings
+                )
 
-		---@diagnostic disable-next-line: cast-local-type
-		predicted_target_pos = multipoint:GetBestHitPoint()
+                ---@diagnostic disable-next-line: cast-local-type
+                local candidate_points = multipoint:GetCandidatePoints()
+                local chosen_pt, chosen_dir, chosen_time
 
-		if not predicted_target_pos then
-			return nil
-		end
-	end
+                for _, pt in ipairs(candidate_points) do
+                        local dir = self.math_utils.GetProjectileAimDirection(
+                                self.vecShootPos,
+                                pt,
+                                forward_speed,
+                                upward_speed,
+                                gravity
+                        ) or self.math_utils.SolveBallisticArc(self.vecShootPos, pt, total_speed, gravity)
 
-	local aim_dir = self.math_utils.NormalizeVector(predicted_target_pos - self.vecShootPos)
-	if not aim_dir then
-		return nil
-	end
+                        if dir then
+                                local t = self.math_utils.GetFlightTimeAlongDir(
+                                        self.vecShootPos,
+                                        pt,
+                                        total_speed,
+                                        gravity,
+                                        dir
+                                ) or ((pt - self.vecShootPos):Length() / total_speed)
 
-	if gravity > 0 then
-		-- Use the new ballistic calculation that properly handles upward velocity
-		local ballistic_dir = self.math_utils.GetProjectileAimDirection(
-			self.vecShootPos,
-			predicted_target_pos,
-			forward_speed,
-			upward_speed,
-			gravity
-		)
+                                if t then
+                                        local tot = t + self.nLatency + detonate_time
+                                        if tot <= self.settings.max_sim_time and tot <= self.weapon_info.m_flLifetime then
+                                                chosen_pt = pt
+                                                chosen_dir = dir
+                                                chosen_time = tot
+                                                break
+                                        end
+                                end
+                        end
+                end
 
-		if ballistic_dir then
-			aim_dir = ballistic_dir
-		else
-			-- Fallback to old method if new calculation fails
-			ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, predicted_target_pos, total_speed,
-				gravity)
-			if ballistic_dir then
-				aim_dir = ballistic_dir
-			end
-		end
-	end
+                if not chosen_pt then
+                        return nil
+                end
+
+                predicted_target_pos = chosen_pt
+                total_time = chosen_time
+                aim_dir = chosen_dir
+        end
+
+        if not aim_dir then
+                aim_dir = self.math_utils.NormalizeVector(predicted_target_pos - self.vecShootPos)
+        end
 
 	return {
 		vecPos = predicted_target_pos,
