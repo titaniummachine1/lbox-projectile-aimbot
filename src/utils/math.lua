@@ -133,5 +133,37 @@ function Math.RotateOffsetAlongDirection(offset, direction)
 	return forward * offset.x + right * offset.y + up * offset.z
 end
 
+-- Calculates firing direction for projectiles with inherent upward velocity
+---@param p0 Vector3
+---@param p1 Vector3
+---@param forward_speed number
+---@param upward_speed number
+---@param gravity number
+---@return Vector3|nil
+function Math.SolveBallisticArcWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity)
+    local diff = p1 - p0
+    local dx = math.sqrt(diff.x * diff.x + diff.y * diff.y)
+    local dy = diff.z
+
+    local speed_sq = forward_speed * forward_speed + upward_speed * upward_speed
+    local g = gravity
+
+    local root = speed_sq * speed_sq - g * (g * dx * dx + 2 * dy * speed_sq)
+    if root < 0 then
+        return nil
+    end
+
+    local sqrt_root = math.sqrt(root)
+    local vel_angle = math.atan((speed_sq - sqrt_root) / (g * dx))
+
+    local base_angle = math.atan2(upward_speed, forward_speed)
+    local pitch = base_angle - vel_angle
+
+    local dir_xy = NormalizeVector(Vector3(diff.x, diff.y, 0))
+    local aim = Vector3(dir_xy.x * math.cos(pitch), dir_xy.y * math.cos(pitch), -math.sin(pitch))
+    return NormalizeVector(aim)
+end
+
+
 Math.NormalizeVector = NormalizeVector
 return Math

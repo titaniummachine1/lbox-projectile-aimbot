@@ -2,6 +2,8 @@
 
 local sim = {}
 
+local math_utils = require("src.utils.math")
+
 local env = physics.CreateEnvironment()
 
 env:SetAirDensity(2.0)
@@ -98,19 +100,22 @@ function sim.Run(pLocal, pWeapon, shootPos, vecForward, nTime, weapon_info)
 
 	projectile:Wake()
 
-	local mins, maxs = weapon_info.m_vecMins, weapon_info.m_vecMaxs
-	local speed, gravity
+    local mins, maxs = weapon_info.m_vecMins, weapon_info.m_vecMaxs
+    local speedVec, gravity
 
 	local charge = GetChargeTime(pWeapon, weapon_info)
 
-	speed = weapon_info:GetVelocity(charge):Length()
-	gravity = 800 * weapon_info:GetGravity(charge)
+    speedVec = weapon_info:GetVelocity(charge)
+    gravity = 800 * weapon_info:GetGravity(charge)
 
-	local velocity = vecForward * speed
+    local angle = math_utils.DirectionToAngles(vecForward)
+    local forward = angle:Forward()
+    local up = angle:Up()
+    local velocity = forward * speedVec.x + up * (speedVec.z or 0)
 
-	env:SetGravity(Vector3(0, 0, -gravity))
-	projectile:SetPosition(shootPos, vecForward, true)
-	projectile:SetVelocity(velocity, weapon_info.m_vecAngularVelocity)
+    env:SetGravity(Vector3(0, 0, -gravity))
+    projectile:SetPosition(shootPos, angle, true)
+    projectile:SetVelocity(velocity, weapon_info.m_vecAngularVelocity)
 
 	local tickInterval = globals.TickInterval()
 	local running = true
