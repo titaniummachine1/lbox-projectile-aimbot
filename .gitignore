@@ -6,6 +6,7 @@ bundle.js
 package.json
 package-lock.json
 title.txt
+.gitignore
 
 # Build files
 build/
