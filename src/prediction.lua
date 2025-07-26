@@ -167,101 +167,37 @@ function pred:Run()
 		return nil
 	end
 
-        local predicted_target_pos = player_positions[#player_positions] or self.pTarget:GetAbsOrigin()
+	local predicted_target_pos = player_positions[#player_positions] or self.pTarget:GetAbsOrigin()
 
-        local aim_dir
+	if self.settings.multipointing then
+		local bSplashWeapon = IsSplashDamageWeapon(self.pWeapon)
+		local viewPos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 
-        if self.settings.multipointing then
-                local bSplashWeapon = IsSplashDamageWeapon(self.pWeapon)
-                local viewPos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
+		multipoint:Set(
+			self.pLocal,
+			self.pWeapon,
+			self.pTarget,
+			self.bIsHuntsman,
+			self.bAimAtTeamMates,
+			viewPos, -- Use view position, not calculated shoot position
+			predicted_target_pos,
+			self.weapon_info,
+			self.math_utils,
+			self.settings.max_distance,
+			bSplashWeapon,
+			self.ent_utils,
+			self.settings
+		)
 
-                multipoint:Set(
-                        self.pLocal,
-                        self.pWeapon,
-                        self.pTarget,
-                        self.bIsHuntsman,
-                        self.bAimAtTeamMates,
-                        viewPos,
-                        predicted_target_pos,
-                        self.weapon_info,
-                        self.math_utils,
-                        self.settings.max_distance,
-                        bSplashWeapon,
-                        self.ent_utils,
-                        self.settings
-                )
+		---@diagnostic disable-next-line: cast-local-type
+		predicted_target_pos = multipoint:GetBestHitPoint()
 
-                local candidate_points = multipoint:GetCandidatePoints()
-                for _, point in ipairs(candidate_points) do
-                        if not multipoint:CanShootToPoint(point) then
-                                goto continue
-                        end
+		if not predicted_target_pos then
+			return nil
+		end
+	end
 
-                        local dir = self.math_utils.NormalizeVector(point - self.vecShootPos)
-                        local travel_time
-
-                        if gravity > 0 then
-                                local bdir = self.math_utils.GetProjectileAimDirection(
-                                        self.vecShootPos,
-                                        point,
-                                        forward_speed,
-                                        upward_speed,
-                                        gravity
-                                )
-                                if bdir then
-                                        dir = bdir
-                                        travel_time = self.math_utils.GetFlightTimeAlongDir(
-                                                self.vecShootPos,
-                                                point,
-                                                total_speed,
-                                                gravity,
-                                                bdir
-                                        )
-                                else
-                                        bdir = self.math_utils.SolveBallisticArc(self.vecShootPos, point, total_speed, gravity)
-                                        if bdir then
-                                                dir = bdir
-                                                travel_time = self.math_utils.GetFlightTimeAlongDir(
-                                                        self.vecShootPos,
-                                                        point,
-                                                        total_speed,
-                                                        gravity,
-                                                        bdir
-                                                )
-                                        end
-                                end
-                        else
-                                travel_time = (point - self.vecShootPos):Length() / total_speed
-                        end
-
-                        if not travel_time then
-                                goto continue
-                        end
-
-                        local cand_total = travel_time + self.nLatency + detonate_time
-                        if cand_total > self.settings.max_sim_time or cand_total > self.weapon_info.m_flLifetime then
-                                goto continue
-                        end
-
-                        total_time = cand_total
-                        predicted_target_pos = point
-                        aim_dir = dir
-                        player_positions = self.player_sim.Run(flstepSize, self.pTarget, total_time)
-                        if not player_positions then
-                                return nil
-                        end
-                        break
-
-                        ::continue::
-                end
-
-                if not aim_dir then
-                        return nil
-                end
-        else
-                aim_dir = self.math_utils.NormalizeVector(predicted_target_pos - self.vecShootPos)
-        end
-
+	local aim_dir = self.math_utils.NormalizeVector(predicted_target_pos - self.vecShootPos)
 	if not aim_dir then
 		return nil
 	end
