@@ -114,7 +114,48 @@ function pred:Run()
 	local total_speed = velocity_vector:Length()
 
 	local detonate_time = self.pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_PIPEBOMBLAUNCHER and 0.7 or 0
-	local travel_time_est = (vecTargetOrigin - self.vecShootPos):Length() / total_speed
+
+	local travel_time_est
+	if gravity > 0 then
+		-- For ballistic weapons, calculate travel time based on ballistic trajectory
+		local ballistic_dir = self.math_utils.GetProjectileAimDirection(
+			self.vecShootPos,
+			vecTargetOrigin,
+			forward_speed,
+			upward_speed,
+			gravity
+		)
+
+		if ballistic_dir then
+			travel_time_est = self.math_utils.GetFlightTimeAlongDir(
+				self.vecShootPos,
+				vecTargetOrigin,
+				total_speed,
+				gravity,
+				ballistic_dir
+			)
+		else
+			-- Fallback to old ballistic calculation
+			ballistic_dir = self.math_utils.SolveBallisticArc(self.vecShootPos, vecTargetOrigin, total_speed, gravity)
+			if ballistic_dir then
+				travel_time_est = self.math_utils.GetFlightTimeAlongDir(
+					self.vecShootPos,
+					vecTargetOrigin,
+					total_speed,
+					gravity,
+					ballistic_dir
+				)
+			end
+		end
+	end
+
+	-- If no ballistic solution or no gravity, use linear calculation
+	if not travel_time_est then
+		travel_time_est = (vecTargetOrigin - self.vecShootPos):Length() / total_speed
+	end
+
+	if not travel_time_est then return nil end -- no solution found
+
 	local total_time = travel_time_est + self.nLatency + detonate_time
 	if total_time > self.settings.max_sim_time or total_time > self.weapon_info.m_flLifetime then
 		return nil
@@ -163,7 +204,7 @@ function pred:Run()
 
 	if gravity > 0 then
 		-- Use the new ballistic calculation that properly handles upward velocity
-		local ballistic_dir = self.math_utils.SolveBallisticArcWithUpwardVelocity(
+		local ballistic_dir = self.math_utils.GetProjectileAimDirection(
 			self.vecShootPos,
 			predicted_target_pos,
 			forward_speed,

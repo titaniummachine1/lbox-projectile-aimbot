@@ -83,7 +83,7 @@ end
 ---@param speed number
 ---@return number
 function Math.EstimateTravelTime(shootPos, targetPos, speed)
-	local distance = (targetPos - shootPos):Length2D()
+	local distance = (targetPos - shootPos):Length()
 	return distance / speed
 end
 
@@ -92,28 +92,6 @@ end
 ---@param max number
 function Math.clamp(val, min, max)
 	return math.max(min, math.min(val, max))
-end
-
-function Math.GetBallisticFlightTime(p0, p1, speed, gravity)
-	local diff = p1 - p0
-	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
-	local dy = diff.z
-	local speed2 = speed * speed
-	local g = gravity
-
-	local discriminant = speed2 * speed2 - g * (g * dx * dx + 2 * dy * speed2)
-	if discriminant < 0 then
-		return nil
-	end
-
-	local sqrt_discriminant = math.sqrt(discriminant)
-	local angle = math.atan((speed2 - sqrt_discriminant) / (g * dx))
-
-	-- Flight time calculation
-	local vz = speed * math.sin(angle)
-	local flight_time = (vz + math.sqrt(vz * vz + 2 * g * dy)) / g
-
-	return flight_time
 end
 
 function Math.DirectionToAngles(direction)
@@ -133,14 +111,14 @@ function Math.RotateOffsetAlongDirection(offset, direction)
 	return forward * offset.x + right * offset.y + up * offset.z
 end
 
--- New function to calculate ballistic trajectory with upward velocity
+-- Calculate aim direction for projectile with both forward and upward velocity
 ---@param p0 Vector3 Starting position
 ---@param p1 Vector3 Target position
 ---@param forward_speed number Forward velocity component
 ---@param upward_speed number Upward velocity component
 ---@param gravity number Gravity value
 ---@return Vector3|nil Aim direction
-function Math.SolveBallisticArcWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity)
+function Math.GetProjectileAimDirection(p0, p1, forward_speed, upward_speed, gravity)
 	local diff = p1 - p0
 	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
 	local dy = diff.z
@@ -172,14 +150,14 @@ function Math.SolveBallisticArcWithUpwardVelocity(p0, p1, forward_speed, upward_
 	return NormalizeVector(aim)
 end
 
--- New function to calculate flight time with upward velocity
+-- Calculate flight time for projectile with both forward and upward velocity
 ---@param p0 Vector3 Starting position
 ---@param p1 Vector3 Target position
 ---@param forward_speed number Forward velocity component
 ---@param upward_speed number Upward velocity component
 ---@param gravity number Gravity value
 ---@return number|nil Flight time
-function Math.GetBallisticFlightTimeWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity)
+function Math.GetProjectileFlightTime(p0, p1, forward_speed, upward_speed, gravity)
 	local diff = p1 - p0
 	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
 	local dy = diff.z
@@ -217,6 +195,59 @@ function Math.GetBallisticFlightTimeWithUpwardVelocity(p0, p1, forward_speed, up
 
 	-- Return the positive time
 	return math.max(t1, t2)
+end
+
+function Math.GetBallisticFlightTime(p0, p1, speed, gravity)
+	local diff = p1 - p0
+	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
+	local dy = diff.z
+	local speed2 = speed * speed
+	local g = gravity
+
+	local discriminant = speed2 * speed2 - g * (g * dx * dx + 2 * dy * speed2)
+	if discriminant < 0 then
+		return nil
+	end
+
+	local sqrt_discriminant = math.sqrt(discriminant)
+	local angle = math.atan((speed2 - sqrt_discriminant) / (g * dx))
+
+	-- Flight time calculation
+	local vz = speed * math.sin(angle)
+	local flight_time = (vz + math.sqrt(vz * vz + 2 * g * dy)) / g
+
+	return flight_time
+end
+
+-- Balistic flight-time for already KNOWN direction
+---@param p0 Vector3 start
+---@param p1 Vector3 target
+---@param speed number muzzle velocity
+---@param gravity number g (e.g. 800)
+---@param dir Vector3 normalized flight vector (result from SolveBallisticArc)
+---@return number|nil
+function Math.GetFlightTimeAlongDir(p0, p1, speed, gravity, dir)
+	-- velocity components:
+	local vx = speed * dir.x
+	local vy = speed * dir.y
+	local vz = speed * dir.z
+
+	local dx = math.sqrt((p1.x - p0.x) ^ 2 + (p1.y - p0.y) ^ 2)
+	-- time = horizontal distance / horizontal velocity
+	local vxy = math.sqrt(vx * vx + vy * vy)
+	if vxy < 1e-6 then return nil end
+
+	local t = dx / vxy
+
+	-- check if after this time the z-component hits the target height
+	local expected_dz = vz * t - 0.5 * gravity * t * t
+	local dz = p1.z - p0.z
+	if math.abs(expected_dz - dz) > 1.0 then
+		-- if it doesn't hit - you can solve the exact quadratic (option)
+		-- or return nil, then prediction will consider no solution
+		return nil
+	end
+	return t
 end
 
 Math.NormalizeVector = NormalizeVector

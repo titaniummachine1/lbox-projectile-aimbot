@@ -57,7 +57,7 @@ function Math.RotateOffsetAlongDirection(offset, direction) end
 ---@param upward_speed number Upward velocity component
 ---@param gravity number Gravity value
 ---@return Vector3|nil Aim direction
-function Math.SolveBallisticArcWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity) end
+function Math.GetProjectileAimDirection(p0, p1, forward_speed, upward_speed, gravity) end
 
 ---@param p0 Vector3 Starting position
 ---@param p1 Vector3 Target position
@@ -65,6 +65,14 @@ function Math.SolveBallisticArcWithUpwardVelocity(p0, p1, forward_speed, upward_
 ---@param upward_speed number Upward velocity component
 ---@param gravity number Gravity value
 ---@return number|nil Flight time
-function Math.GetBallisticFlightTimeWithUpwardVelocity(p0, p1, forward_speed, upward_speed, gravity) end
+function Math.GetProjectileFlightTime(p0, p1, forward_speed, upward_speed, gravity) end
+
+---@param p0 Vector3 start
+---@param p1 Vector3 target
+---@param speed number muzzle velocity
+---@param gravity number g (e.g. 800)
+---@param dir Vector3 normalized flight vector (result from SolveBallisticArc)
+---@return number|nil
+function Math.GetFlightTimeAlongDir(p0, p1, speed, gravity, dir) end
 
 return Math
