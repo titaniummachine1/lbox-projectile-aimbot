@@ -64,6 +64,9 @@ printc(186, 97, 255, 255, "The projectile aimbot is loading...")
 
 local version = "6"
 
+-- Constants
+local FL_DUCKING = 1
+
 local settings = {
 	enabled = true,
 	autoshoot = true,
@@ -479,13 +482,6 @@ local function CreateMove_Draw(uCmd)
 	local weaponInfo = GetProjectileInformation(pWeapon:GetPropInt("m_iItemDefinitionIndex"))
 	local vecHeadPos = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 
-	local vecWeaponFirePos = weaponInfo:GetFirePosition(
-		pLocal,
-		pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]"),
-		engine.GetViewAngles(),
-		pWeapon:IsViewModelFlipped()
-	) + weaponInfo.m_vecAbsoluteOffset
-
 	local bIsHuntsman = pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_COMPOUND_BOW
 
 	local pred_result, pTarget = ProcessPrediction(
@@ -503,6 +499,17 @@ local function CreateMove_Draw(uCmd)
 	if not pred_result or not pTarget then
 		return
 	end
+
+	-- Calculate weapon fire position based on the computed aim direction
+	local viewpos = vecHeadPos
+	local muzzle_offset = weaponInfo:GetOffset(
+		(pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0,
+		pWeapon:IsViewModelFlipped()
+	)
+	local vecWeaponFirePos =
+		viewpos
+		+ math_utils.RotateOffsetAlongDirection(muzzle_offset, pred_result.vecAimDir)
+		+ weaponInfo.m_vecAbsoluteOffset
 
 	local function shouldHit(ent)
 		if ent:GetIndex() == pLocal:GetIndex() then
@@ -581,13 +588,6 @@ local function CreateMove(uCmd)
 	local weaponInfo = GetProjectileInformation(pWeapon:GetPropInt("m_iItemDefinitionIndex"))
 	local vecHeadPos = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 
-	local vecWeaponFirePos = weaponInfo:GetFirePosition(
-		pLocal,
-		pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]"),
-		engine.GetViewAngles(),
-		pWeapon:IsViewModelFlipped()
-	) + weaponInfo.m_vecAbsoluteOffset
-
 	local bIsHuntsman = pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_COMPOUND_BOW
 
 	local pred_result, pTarget = ProcessPrediction(
@@ -605,6 +605,17 @@ local function CreateMove(uCmd)
 	if not pred_result or not pTarget then
 		return
 	end
+
+	-- Calculate weapon fire position based on the computed aim direction
+	local viewpos = vecHeadPos
+	local muzzle_offset = weaponInfo:GetOffset(
+		(pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0,
+		pWeapon:IsViewModelFlipped()
+	)
+	local vecWeaponFirePos =
+		viewpos
+		+ math_utils.RotateOffsetAlongDirection(muzzle_offset, pred_result.vecAimDir)
+		+ weaponInfo.m_vecAbsoluteOffset
 
 	local function shouldHit(ent)
 		if ent:GetIndex() == pLocal:GetIndex() then
@@ -3035,12 +3046,14 @@ function pred:Run()
 
 	if self.settings.multipointing then
 		local bSplashWeapon = IsSplashDamageWeapon(self.pWeapon)
+		local viewPos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
+
 		multipoint:Set(
 			self.pLocal,
 			self.pTarget,
 			self.bIsHuntsman,
 			self.bAimAtTeamMates,
-			self.vecShootPos,
+			viewPos, -- Use view position, not calculated shoot position
 			predicted_target_pos,
 			self.weapon_info,
 			self.math_utils,
@@ -3178,8 +3191,6 @@ function multipoint:GetBestHitPoint()
 	-- Check if we can shoot from our position to the target point using projectile simulation logic
 	local function canShootToPoint(target_pos)
 		if not self.vecShootPos or not target_pos then
-			printc(255, 0, 0, 255, "[MULTIPOINT] vecShootPos or target_pos is nil! vecShootPos:",
-				tostring(self.vecShootPos), "target_pos:", tostring(target_pos))
 			return false
 		end
 
@@ -3191,33 +3202,17 @@ function multipoint:GetBestHitPoint()
 			-- For rockets: get direction from viewpos to target, apply offset in that direction, then trace line
 			local viewpos = self.pLocal:GetAbsOrigin() + self.pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 
-			-- Debug: show the values
-			printc(255, 255, 0, 255,
-				string.format("[MULTIPOINT] viewpos: %s, target_pos: %s", tostring(viewpos), tostring(target_pos)))
-
 			local diff_vector = target_pos - viewpos
 			local diff_length = diff_vector:Length()
 
-			-- Debug: show the diff vector and its length
-			printc(255, 255, 0, 255,
-				string.format("[MULTIPOINT] diff_vector: %s, diff_length: %s", tostring(diff_vector),
-					tostring(diff_length)))
-
 			if diff_length < 0.001 then
-				printc(255, 0, 0, 255, "[MULTIPOINT] Target too close to viewpos, diff_length: " .. tostring(diff_length))
 				return false
 			end
 
 			local direction_to_target = SafeNormalize(diff_vector)
 
-			-- Debug: show the normalized direction and its length
-			printc(255, 255, 0, 255,
-				string.format("[MULTIPOINT] direction_to_target: %s, length: %s", tostring(direction_to_target),
-					tostring(direction_to_target and direction_to_target:Length() or 'nil')))
-
 			-- Safety check: ensure direction is valid
 			if not direction_to_target then
-				printc(255, 0, 0, 255, "[MULTIPOINT] Failed to calculate direction to target - vector may be zero length")
 				return false
 			end
 
@@ -3231,18 +3226,6 @@ function multipoint:GetBestHitPoint()
 
 			-- Trace from offset position to target
 			local line_trace = engine.TraceLine(shoot_offset_pos, target_pos, MASK_SHOT_HULL, shouldHit)
-
-			-- Debug trace results
-			if line_trace then
-				printc(255, 255, 0, 255, string.format("[MULTIPOINT] Trace fraction: %s", tostring(line_trace.fraction)))
-				if line_trace.fraction < 1 then
-					printc(255, 0, 0, 255,
-						string.format("[MULTIPOINT] Trace hit entity: %s",
-							tostring(line_trace.entity and line_trace.entity:GetIndex() or 'nil')))
-				end
-			else
-				printc(255, 0, 0, 255, "[MULTIPOINT] Trace returned nil!")
-			end
 
 			return line_trace and line_trace.fraction >= 1
 		else
@@ -3296,10 +3279,10 @@ function multipoint:GetBestHitPoint()
 
 	local fallback_points = {
 		-- Bottom corners (feet/ground level, prioritized if feet are enabled)
-		{ pos = Vector3(-target_width / 2, -target_depth / 2, mins.z - origin.z), name = "bottom_corner_1" },
-		{ pos = Vector3(target_width / 2, -target_depth / 2, mins.z - origin.z),  name = "bottom_corner_2" },
-		{ pos = Vector3(-target_width / 2, target_depth / 2, mins.z - origin.z),  name = "bottom_corner_3" },
-		{ pos = Vector3(target_width / 2, target_depth / 2, mins.z - origin.z),   name = "bottom_corner_4" },
+		{ pos = Vector3(-target_width / 2, -target_depth / 2, 0),                 name = "bottom_corner_1" },
+		{ pos = Vector3(target_width / 2, -target_depth / 2, 0),                  name = "bottom_corner_2" },
+		{ pos = Vector3(-target_width / 2, target_depth / 2, 0),                  name = "bottom_corner_3" },
+		{ pos = Vector3(target_width / 2, target_depth / 2, 0),                   name = "bottom_corner_4" },
 
 		-- Mid-height corners (body level)
 		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height / 2), name = "mid_corner_1" },
@@ -3314,10 +3297,10 @@ function multipoint:GetBestHitPoint()
 		{ pos = Vector3(target_width / 2, 0, target_height / 2),                  name = "mid_right" },
 
 		-- Bottom mid-points (legs level)
-		{ pos = Vector3(0, -target_depth / 2, mins.z - origin.z),                 name = "bottom_front" },
-		{ pos = Vector3(0, target_depth / 2, mins.z - origin.z),                  name = "bottom_back" },
-		{ pos = Vector3(-target_width / 2, 0, mins.z - origin.z),                 name = "bottom_left" },
-		{ pos = Vector3(target_width / 2, 0, mins.z - origin.z),                  name = "bottom_right" },
+		{ pos = Vector3(0, -target_depth / 2, 0),                                 name = "bottom_front" },
+		{ pos = Vector3(0, target_depth / 2, 0),                                  name = "bottom_back" },
+		{ pos = Vector3(-target_width / 2, 0, 0),                                 name = "bottom_left" },
+		{ pos = Vector3(target_width / 2, 0, 0),                                  name = "bottom_right" },
 
 		-- Top corners (head level)
 		{ pos = Vector3(-target_width / 2, -target_depth / 2, target_height),     name = "top_corner_1" },
@@ -3335,21 +3318,17 @@ function multipoint:GetBestHitPoint()
 	-- 1. Bows/headshot weapons
 	if self.bIsHuntsman then
 		if self.settings.hitparts.head and head_pos and canShootToPoint(head_pos) then
-			printc(0, 255, 0, 255, "[MULTIPOINT] Selected head (bow)")
 			return head_pos
 		end
 		if canShootToPoint(center_pos) then
-			printc(0, 255, 0, 255, "[MULTIPOINT] Selected center (bow)")
 			return center_pos
 		end
 		if self.settings.hitparts.feet and is_on_ground and canShootToPoint(feet_pos) then
-			printc(0, 255, 0, 255, "[MULTIPOINT] Selected feet (bow)")
 			return feet_pos
 		end
 		for _, point in ipairs(fallback_points) do
 			local test_pos = self.vecPredictedPos + point.pos
 			if canShootToPoint(test_pos) then
-				printc(0, 255, 0, 255, string.format("[MULTIPOINT] Selected fallback %s (bow)", point.name))
 				return test_pos
 			end
 		end
@@ -3358,35 +3337,23 @@ function multipoint:GetBestHitPoint()
 
 	-- 2. Explosive projectiles: feet first if enabled and on ground
 	if self.bIsSplash and self.settings.hitparts.feet and is_on_ground and canShootToPoint(feet_pos) then
-		printc(0, 255, 0, 255, "[MULTIPOINT] Selected feet (explosive)")
 		return feet_pos
 	end
 	-- Center next
 	if canShootToPoint(center_pos) then
-		printc(0, 255, 0, 255, "[MULTIPOINT] Selected center (projectile)")
 		return center_pos
 	end
 
-	-- Debug: show that we're trying fallback points
-	printc(255, 255, 0, 255, "[MULTIPOINT] Trying fallback points for projectile")
-
+	-- Try fallback points
 	for _, point in ipairs(fallback_points) do
 		local test_pos = self.vecPredictedPos + point.pos
-		printc(255, 255, 0, 255,
-			string.format("[MULTIPOINT] Testing point %s at position: %s", point.name, tostring(test_pos)))
 
 		if canShootToPoint(test_pos) then
-			printc(0, 255, 0, 255, string.format("[MULTIPOINT] Selected fallback %s (projectile)", point.name))
 			return test_pos
-		else
-			printc(255, 0, 0, 255, string.format("[MULTIPOINT] Fallback %s failed", point.name))
 		end
 	end
 
-	printc(255, 0, 0, 255, "[MULTIPOINT] No valid multipoint found!")
-
 	-- Fallback: return center position if all else fails
-	printc(255, 255, 0, 255, "[MULTIPOINT] Using fallback center position")
 	return center_pos
 end
 

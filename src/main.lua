@@ -21,6 +21,9 @@ printc(186, 97, 255, 255, "The projectile aimbot is loading...")
 
 local version = "6"
 
+-- Constants
+local FL_DUCKING = 1
+
 local settings = {
 	enabled = true,
 	autoshoot = true,
@@ -436,13 +439,6 @@ local function CreateMove_Draw(uCmd)
 	local weaponInfo = GetProjectileInformation(pWeapon:GetPropInt("m_iItemDefinitionIndex"))
 	local vecHeadPos = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 
-	local vecWeaponFirePos = weaponInfo:GetFirePosition(
-		pLocal,
-		pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]"),
-		engine.GetViewAngles(),
-		pWeapon:IsViewModelFlipped()
-	) + weaponInfo.m_vecAbsoluteOffset
-
 	local bIsHuntsman = pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_COMPOUND_BOW
 
 	local pred_result, pTarget = ProcessPrediction(
@@ -460,6 +456,17 @@ local function CreateMove_Draw(uCmd)
 	if not pred_result or not pTarget then
 		return
 	end
+
+	-- Calculate weapon fire position based on the computed aim direction
+	local viewpos = vecHeadPos
+	local muzzle_offset = weaponInfo:GetOffset(
+		(pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0,
+		pWeapon:IsViewModelFlipped()
+	)
+	local vecWeaponFirePos =
+		viewpos
+		+ math_utils.RotateOffsetAlongDirection(muzzle_offset, pred_result.vecAimDir)
+		+ weaponInfo.m_vecAbsoluteOffset
 
 	local function shouldHit(ent)
 		if ent:GetIndex() == pLocal:GetIndex() then
@@ -538,13 +545,6 @@ local function CreateMove(uCmd)
 	local weaponInfo = GetProjectileInformation(pWeapon:GetPropInt("m_iItemDefinitionIndex"))
 	local vecHeadPos = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 
-	local vecWeaponFirePos = weaponInfo:GetFirePosition(
-		pLocal,
-		pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]"),
-		engine.GetViewAngles(),
-		pWeapon:IsViewModelFlipped()
-	) + weaponInfo.m_vecAbsoluteOffset
-
 	local bIsHuntsman = pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_COMPOUND_BOW
 
 	local pred_result, pTarget = ProcessPrediction(
@@ -562,6 +562,17 @@ local function CreateMove(uCmd)
 	if not pred_result or not pTarget then
 		return
 	end
+
+	-- Calculate weapon fire position based on the computed aim direction
+	local viewpos = vecHeadPos
+	local muzzle_offset = weaponInfo:GetOffset(
+		(pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0,
+		pWeapon:IsViewModelFlipped()
+	)
+	local vecWeaponFirePos =
+		viewpos
+		+ math_utils.RotateOffsetAlongDirection(muzzle_offset, pred_result.vecAimDir)
+		+ weaponInfo.m_vecAbsoluteOffset
 
 	local function shouldHit(ent)
 		if ent:GetIndex() == pLocal:GetIndex() then
