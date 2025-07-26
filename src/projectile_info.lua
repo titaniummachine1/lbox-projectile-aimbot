@@ -1,7 +1,7 @@
 --[[
     This is a port of the GetProjectileInformation function
     from GoodEvening's Visualize Arc Trajectories
-    
+
     His Github: https://github.com/GoodEveningFellOff
     Source: https://github.com/GoodEveningFellOff/Lmaobox-Scripts/blob/main/Visualize%20Arc%20Trajectories/dev.lua
 --]]
@@ -63,10 +63,10 @@ local function DefineProjectileDefinition(tbl)
 		m_sModelName = tbl.sModelName or "",
 
 		GetOffset = not tbl.GetOffset
-				and function(self, bDucking, bIsFlipped)
-					return bIsFlipped and Vector3(self.m_vecOffset.x, -self.m_vecOffset.y, self.m_vecOffset.z)
-						or self.m_vecOffset
-				end
+			and function(self, bDucking, bIsFlipped)
+				return bIsFlipped and Vector3(self.m_vecOffset.x, -self.m_vecOffset.y, self.m_vecOffset.z)
+					or self.m_vecOffset
+			end
 			or tbl.GetOffset, -- self, bDucking, bIsFlipped
 
 		GetAngleOffset = (not tbl.GetAngleOffset) and function(self, flChargeBeginTime)
@@ -77,10 +77,10 @@ local function DefineProjectileDefinition(tbl)
 			local resultTrace = TRACE_HULL(
 				vecLocalView,
 				vecLocalView
-					+ VEC_ROT(
-						self:GetOffset((pLocalPlayer:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0, bIsFlipped),
-						vecViewAngles
-					),
+				+ VEC_ROT(
+					self:GetOffset((pLocalPlayer:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0, bIsFlipped),
+					vecViewAngles
+				),
 				-Vector3(8, 8, 8),
 				Vector3(8, 8, 8),
 				100679691
@@ -380,11 +380,11 @@ AppendItemDefinitions(
 	15142, -- Warhawk
 	15158 -- Butcher Bird
 )
-aProjectileInfo[14] = DefineSimulProjectileDefinition({
+aProjectileInfo[14] = DefinePseudoProjectileDefinition({
 	vecOffset = Vector3(16, 8, -6),
 	vecVelocity = Vector3(1200, 0, 200),
 	vecAngularVelocity = Vector3(600, 0, 0),
-	flGravity = 0.25,
+	flGravity = 0.5, -- Zwiększona z 0.25 na 0.5 dla lepszej balistyki
 	vecMaxs = Vector3(2, 2, 2),
 	flElasticity = 0.45,
 	flLifetime = 2.175,

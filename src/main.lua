@@ -99,9 +99,7 @@ local prediction = require("src.prediction")
 assert(prediction, "[PROJ AIMBOT] Prediction module failed to load")
 printc(150, 255, 150, 255, "[PROJ AIMBOT] Mrediction module loaded")
 
-local GetProjectileInformation = require("src.projectile_info")
-assert(GetProjectileInformation, "[PROJ AIMBOT] GetProjectileInformation module failed to load")
-printc(150, 255, 150, 255, "[PROJ AIMBOT] GetProjectileInformation module loaded")
+-- GetProjectileInformation is now handled by wep_utils.GetWeaponInfo()
 
 local menu = require("src.gui")
 menu.init(settings, version)
@@ -436,7 +434,10 @@ local function CreateMove_Draw(uCmd)
 
 	bAimAtTeamMates = settings.allow_aim_at_teammates and bAimAtTeamMates or false
 
-	local weaponInfo = GetProjectileInformation(pWeapon:GetPropInt("m_iItemDefinitionIndex"))
+	local weaponInfo = wep_utils.GetWeaponInfo(pWeapon)
+	if not weaponInfo then
+		return
+	end
 	local vecHeadPos = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 
 	local bIsHuntsman = pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_COMPOUND_BOW
@@ -542,7 +543,10 @@ local function CreateMove(uCmd)
 
 	bAimAtTeamMates = settings.allow_aim_at_teammates and bAimAtTeamMates or false
 
-	local weaponInfo = GetProjectileInformation(pWeapon:GetPropInt("m_iItemDefinitionIndex"))
+	local weaponInfo = wep_utils.GetWeaponInfo(pWeapon)
+	if not weaponInfo then
+		return
+	end
 	local vecHeadPos = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 
 	local bIsHuntsman = pWeapon:GetWeaponID() == E_WeaponBaseID.TF_WEAPON_COMPOUND_BOW
