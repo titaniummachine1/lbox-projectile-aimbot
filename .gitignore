@@ -1,0 +1,22 @@
+# Development environment files
+.vscode/
+Bundle.bat
+BundleAndDeploy.bat
+bundle.js
+package.json
+package-lock.json
+title.txt
+merge.sh
+
+# Build files
+build/
+
+# IDE files
+.luarc.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log 
