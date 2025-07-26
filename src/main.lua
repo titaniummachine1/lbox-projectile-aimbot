@@ -39,6 +39,7 @@ local settings = {
 
 	hitparts = {
 		head = true,
+		feet = true, -- Used for bows (fallback) and explosives (primary if on ground)
 		left_arm = true,
 		right_arm = true,
 		left_shoulder = true,
@@ -627,7 +628,7 @@ local function CreateMove(uCmd)
 	elseif bIsSandvich then
 		uCmd.buttons = uCmd.buttons | IN_ATTACK2
 		bAttack = FireWeapon(true) -- special case for sandvich
-	else -- generic weapons
+	else                     -- generic weapons
 		if wep_utils.CanShoot() then
 			if settings.autoshoot then
 				uCmd.buttons = uCmd.buttons | IN_ATTACK
