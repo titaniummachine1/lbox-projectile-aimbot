@@ -218,7 +218,7 @@ function pred:Run()
 				aim_dir = ballistic_dir
 				printc(150, 255, 150, 255,
 					string.format(
-					"[PROJ AIMBOT] Fallback ballistic calculation succeeded - gravity: %.2f, total_speed: %.1f",
+						"[PROJ AIMBOT] Fallback ballistic calculation succeeded - gravity: %.2f, total_speed: %.1f",
 						gravity / 800, total_speed))
 			else
 				printc(255, 100, 100, 255,

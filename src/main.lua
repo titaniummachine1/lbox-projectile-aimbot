@@ -558,7 +558,7 @@ local function CreateMove_Draw(uCmd)
 							else
 								printc(255, 100, 100, 255,
 									string.format(
-									"[PROJ AIMBOT] Multipoint position %d trace failed (fallback, fraction: %.2f)", i,
+										"[PROJ AIMBOT] Multipoint position %d trace failed (fallback, fraction: %.2f)", i,
 										trace and trace.fraction or 0))
 							end
 						else
