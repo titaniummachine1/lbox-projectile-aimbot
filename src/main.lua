@@ -683,7 +683,7 @@ local function Draw()
 	end
 
 	-- Draw multipoint target indicator
-	DrawMultipointTarget()
+	--DrawMultipointTarget()
 end
 
 local function FrameStage(stage)
