@@ -34,8 +34,8 @@ local function AppendItemDefinitions(iType, ...)
 end
 
 ---@return WeaponInfo
-function GetProjectileInformation(i)
-	return aProjectileInfo[aItemDefinitions[i or 0]]
+function GetProjectileInformation(itemDefinitionIndex)
+	return aProjectileInfo[aItemDefinitions[itemDefinitionIndex or 0]]
 end
 
 ---@return WeaponInfo?
@@ -64,10 +64,10 @@ local function DefineProjectileDefinition(tbl)
 		m_bHasGravity = tbl.bGravity == nil and true or tbl.bGravity,
 
 		GetOffset = not tbl.GetOffset
-			and function(self, bDucking, bIsFlipped)
-				return bIsFlipped and Vector3(self.m_vecOffset.x, -self.m_vecOffset.y, self.m_vecOffset.z)
-					or self.m_vecOffset
-			end
+				and function(self, bDucking, bIsFlipped)
+					return bIsFlipped and Vector3(self.m_vecOffset.x, -self.m_vecOffset.y, self.m_vecOffset.z)
+						or self.m_vecOffset
+				end
 			or tbl.GetOffset, -- self, bDucking, bIsFlipped
 
 		GetAngleOffset = (not tbl.GetAngleOffset) and function(self, flChargeBeginTime)
@@ -78,10 +78,10 @@ local function DefineProjectileDefinition(tbl)
 			local resultTrace = TRACE_HULL(
 				vecLocalView,
 				vecLocalView
-				+ VEC_ROT(
-					self:GetOffset((pLocalPlayer:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0, bIsFlipped),
-					vecViewAngles
-				),
+					+ VEC_ROT(
+						self:GetOffset((pLocalPlayer:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0, bIsFlipped),
+						vecViewAngles
+					),
 				-Vector3(8, 8, 8),
 				Vector3(8, 8, 8),
 				MASK_SHOT_HULL
@@ -284,7 +284,7 @@ AppendItemDefinitions(
 	1178 -- Dragon's Fury
 )
 aProjectileInfo[8] = DefineBasicProjectileDefinition({
-	vecVelocity = Vector3(600, 0, 0),
+	vecVelocity = Vector3(1600, 0, 0), --Vector3(600, 0, 0),
 	vecMaxs = Vector3(1, 1, 1),
 	bGravity = false,
 

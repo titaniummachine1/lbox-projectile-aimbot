@@ -20,20 +20,20 @@ local math_floor            = math.floor
 local math_pi               = math.pi
 
 -- constants
-local MIN_SPEED             = 25 -- HU/s
-local MAX_ANGULAR_VEL       = 360 -- deg/s
-local WALKABLE_ANGLE        = 45 -- degrees
+local MIN_SPEED             = 25   -- HU/s
+local MAX_ANGULAR_VEL       = 360  -- deg/s
+local WALKABLE_ANGLE        = 45   -- degrees
 local MIN_VELOCITY_Z        = 0.1
 local AIR_ACCELERATE        = 10.0 -- Default air acceleration value
 local GROUND_ACCELERATE     = 10.0 -- Default ground acceleration value
-local SURFACE_FRICTION      = 1.0 -- Default surface friction
+local SURFACE_FRICTION      = 1.0  -- Default surface friction
 
 local MAX_CLIP_PLANES       = 5
 local DIST_EPSILON          = 0.03125 -- Small epsilon for step calculations
 
-local MAX_SAMPLES           = 16 -- tuned window size
-local SMOOTH_ALPHA_G        = 0.392 -- tuned ground α
-local SMOOTH_ALPHA_A        = 0.127 -- tuned air α
+local MAX_SAMPLES           = 16      -- tuned window size
+local SMOOTH_ALPHA_G        = 0.392   -- tuned ground α
+local SMOOTH_ALPHA_A        = 0.127   -- tuned air α
 
 local COORD_FRACTIONAL_BITS = 5
 local COORD_DENOMINATOR     = (1 << (COORD_FRACTIONAL_BITS))
@@ -763,7 +763,8 @@ function sim.Run(pInfo, pTarget, initial_pos, time)
 			else
 				-- apply air acceleration when not on ground and falling
 				if velocity.z < 0 then
-					AirAccelerateInPlace(velocity, wishdir, wishspeed, AIR_ACCELERATE, tick_interval, surface_friction, pTarget)
+					AirAccelerateInPlace(velocity, wishdir, wishspeed, AIR_ACCELERATE, tick_interval, surface_friction,
+						pTarget)
 				end
 			end
 		end
