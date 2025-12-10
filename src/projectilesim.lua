@@ -211,16 +211,26 @@ local function Run(target, targetPredictedPos, startPos, angle, info, localTeam,
     return projpath, hit, full, timetable
 end
 
-local function OnUnload()
-	for _, obj in pairs (projectiles) do
-		env:DestroyObject(obj)
+-- Callbacks -----
+local function cleanupPhysicsEnvironment()
+	-- Sleep all projectiles before cleanup
+	for _, projectile in pairs(projectiles) do
+		if projectile and projectile.Sleep then
+			projectile:Sleep()
+		end
 	end
-
-	physics.DestroyEnvironment(env)
-
-    print("Physics environment destroyed!")
+	
+	-- Clear projectile cache
+	for k in pairs(projectiles) do
+		projectiles[k] = nil
+	end
+	
+	-- Reset simulation clock
+	if env and env.ResetSimulationClock then
+		env:ResetSimulationClock()
+	end
 end
 
+callbacks.Register("Unload", "PROJ_AIMBOT_PHYSICS_CLEANUP", cleanupPhysicsEnvironment)
 
-callbacks.Register("Unload", OnUnload)
 return Run

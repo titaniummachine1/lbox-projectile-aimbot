@@ -1,15 +1,15 @@
+-- Imports
+local G = require("globals")
+local Config = require("config")
+local Menu = require("menu")
+local Visuals = require("visuals")
 local multipoint = require("multipoint")
---- made by navet
-
-local MAX_DISTANCE = 3000
-local MIN_ACCURACY = 2
-local MAX_ACCURACY = 12
-local MIN_CONFIDENCE = 40 --- 40%
-
---local SimulatePlayer = require("playersim")
 local GetProjectileInfo = require("projectile_info")
 local SimulatePlayer = require("playersim")
 local SimulateProj = require("projectilesim")
+
+-- Local constants / utilities -----
+local DEFAULT_MAX_DISTANCE = 3000
 
 local utils = {}
 utils.math = require("utils.math")
@@ -24,7 +24,8 @@ utils.weapon = require("utils.weapon_utils")
 ---@field charges boolean
 ---@field silent boolean
 ---@field secondaryfire boolean
-----@field accuracy number?
+---@field confidence number?
+---@field multipointPos Vector3?
 local state = {
 	target = nil,
 	angle = nil,
@@ -34,6 +35,8 @@ local state = {
 	charges = false,
 	silent = true,
 	secondaryfire = false,
+	confidence = nil,
+	multipointPos = nil,
 }
 
 local noSilentTbl = {
@@ -57,8 +60,10 @@ local doSecondaryFiretbl = {
 ---@param className string
 ---@param enemyTeam integer
 ---@param outTable table
-local function ProcessClass(localPos, className, enemyTeam, outTable)
+---@param maxDistance number
+local function ProcessClass(localPos, className, enemyTeam, outTable, maxDistance)
 	local isPlayer = false
+	local distanceLimit = maxDistance or DEFAULT_MAX_DISTANCE
 
 	for _, entity in pairs(entities.FindByClass(className)) do
 		isPlayer = entity:IsPlayer()
@@ -67,7 +72,7 @@ local function ProcessClass(localPos, className, enemyTeam, outTable)
 			and not entity:IsDormant()
 			and entity:GetTeamNumber() == enemyTeam
 			and not entity:InCond(E_TFCOND.TFCond_Cloaked)
-			and (localPos - entity:GetAbsOrigin()):Length() <= MAX_DISTANCE
+			and (localPos - entity:GetAbsOrigin()):Length() <= distanceLimit
 		then
 			--print(string.format("Is alive: %s, Health: %d", entity:IsAlive(), entity:GetHealth()))
 			outTable[#outTable + 1] = entity
@@ -125,12 +130,13 @@ end
 ---@param speed number Projectile speed
 ---@param gravity number Gravity modifier
 ---@param time number Prediction time
+---@param maxDistance number
 ---@return number score Hitchance score from 0-100%
-local function CalculateHitchance(entity, projpath, hit, distance, speed, gravity, time)
+local function CalculateHitchance(entity, projpath, hit, distance, speed, gravity, time, maxDistance)
 	local score = 100.0
 
-	local maxDistance = MAX_DISTANCE
-	local distanceFactor = math.min(distance / maxDistance, 1.0)
+	local distanceCap = maxDistance or DEFAULT_MAX_DISTANCE
+	local distanceFactor = math.min(distance / distanceCap, 1.0)
 	score = score - (distanceFactor * 40)
 
 	--- prediction time penalty (longer predictions = less accurate)
@@ -219,62 +225,66 @@ local function CalculateHitchance(entity, projpath, hit, distance, speed, gravit
 	return math.max(0, math.min(100, score))
 end
 
---- vector.Normalize doesn't work
---- so we do it ourselves
---- Normalizes In Place and returns length
+---Normalizes a vector in place
 ---@param vec Vector3
+---@return number length
 local function Normalize(vec)
 	local len = vec:Length()
 	if len < 0.0001 then
 		return 0
 	end
-
+	
 	vec.x = vec.x / len
 	vec.y = vec.y / len
 	vec.z = vec.z / len
-
+	
 	return len
 end
 
-local font = draw.CreateFont("Arial", 36, 1000)
+-- Local constants / utilities -----
 local origProjValue = gui.GetValue("projectile aimbot")
 
-local function GetAimMethod()
-	local method = gui.GetValue("aim method (projectile)")
-	if method == "none" then
-		return gui.GetValue("aim method")
-	end
-	return method
+local function getAimMethod()
+	assert(G.Menu, "main: G.Menu is nil")
+	assert(G.Menu.Aimbot, "main: G.Menu.Aimbot is nil")
+
+	return G.Menu.Aimbot.AimMethod or "silent +"
 end
 
-local function OnDraw()
+-- Private helpers -----
+local function onDraw()
+	-- Zero Trust: Assert external state
+	assert(G.Menu, "main: G.Menu is nil")
+	assert(G.Menu.Aimbot, "main: G.Menu.Aimbot is nil")
+
 	--- Reset our state table
 	state.angle = nil
 	state.path = nil
 	state.target = nil
 	state.charge = 0
 	state.charges = false
+	state.confidence = nil
+	state.multipointPos = nil
 
-	if gui.IsMenuOpen() and not engine.IsTakingScreenshot() then
-		draw.SetFont(font)
-		draw.Color(255, 150, 150, 255)
-		local text = "Navet's Proj Aimbot Loaded"
-		local w, h = draw.GetScreenSize()
-		local tw, th = draw.GetTextSize(text)
-		draw.TextShadow((w * 0.5 - tw * 0.5) // 1, (h * 0.1) // 1, text)
-		tw = draw.GetTextSize(text)
-		text = "Go to AIMBOT tab to configure it"
-		draw.TextShadow((w * 0.5 - tw * 0.5) // 1, (h * 0.15) // 1, text)
+	local cfg = G.Menu.Aimbot
+
+	-- Guard clause: Check if aimbot is enabled
+	if not cfg.Enabled then
+		if origProjValue ~= nil and gui.GetValue("projectile aimbot") ~= origProjValue then
+			gui.SetValue("projectile aimbot", origProjValue)
+		end
+		return
 	end
 
+	-- Disable built-in projectile aimbot
 	if gui.GetValue("projectile aimbot") ~= "none" then
 		origProjValue = gui.GetValue("projectile aimbot")
 		gui.SetValue("projectile aimbot", 0)
 	end
 
+	-- Guard clauses
 	local netchannel = clientstate.GetNetChannel()
-
-	if netchannel == nil then
+	if not netchannel then
 		return
 	end
 
@@ -295,37 +305,61 @@ local function OnDraw()
 		state.storedpath.projtimetable = cleanedprojtime
 	end
 
-	--- TODO: Use a polygon instead!
-	local storedpath = state.storedpath.path
-	if storedpath then
-		DrawPath(storedpath)
+	-- Draw advanced visualizations
+	Visuals.draw({
+		path = state.storedpath.path,
+		projpath = state.storedpath.projpath,
+		multipointPos = state.multipointPos,
+		target = state.target,
+	})
+
+	-- Draw confidence score
+	local vis = G.Menu.Visuals
+	if vis.ShowConfidence and state.confidence then
+		local screenW, screenH = draw.GetScreenSize()
+		local text = string.format("Confidence: %.1f%%", state.confidence)
+		
+		-- Color based on confidence
+		local r, g, b = 255, 255, 255
+		if state.confidence >= 70 then
+			r, g, b = 100, 255, 100  -- Green
+		elseif state.confidence >= 50 then
+			r, g, b = 255, 255, 100  -- Yellow
+		else
+			r, g, b = 255, 100, 100  -- Red
+		end
+		
+		draw.Color(r, g, b, 255)
+		draw.SetFont(fonts.Create("Tahoma", 16, 700))
+		local textW, textH = draw.GetTextSize(text)
+		draw.Text(screenW / 2 - textW / 2, screenH / 2 + 30, text)
 	end
 
-	local storedprojpath = state.storedpath.projpath
-	if storedprojpath then
-		DrawPath(storedprojpath)
-	end
-
-	if gui.GetValue("aim key") ~= 0 and input.IsButtonDown(gui.GetValue("aim key")) == false then
+	-- Guard clause: Check aim key
+	if cfg.AimKey ~= 0 and not input.IsButtonDown(cfg.AimKey) then
 		return
 	end
 
-	if utils.weapon.CanShoot() == false then
+	-- Guard clause: Check if we can shoot
+	if not utils.weapon.CanShoot() then
 		return
 	end
 
+	-- Guard clause: Get local player
 	local plocal = entities.GetLocalPlayer()
-	if plocal == nil then
+	if not plocal then
 		return
 	end
 
+	-- Guard clause: Get weapon
 	local weapon = plocal:GetPropEntity("m_hActiveWeapon")
-	if weapon == nil then
+	if not weapon then
 		return
 	end
 
+	-- Guard clause: Get projectile info
 	local info = GetProjectileInfo(weapon:GetPropInt("m_iItemDefinitionIndex"))
-	if info == nil then
+	if not info then
 		return
 	end
 
@@ -334,17 +368,18 @@ local function OnDraw()
 
 	---@type Entity[]
 	local entitylist = {}
-	ProcessClass(localPos, "CTFPlayer", enemyTeam, entitylist)
+	ProcessClass(localPos, "CTFPlayer", enemyTeam, entitylist, cfg.MaxDistance)
 
-	if gui.GetValue("aim sentry") == 1 then
-		ProcessClass(localPos, "CObjectSentrygun", enemyTeam, entitylist)
+	if cfg.AimSentry then
+		ProcessClass(localPos, "CObjectSentrygun", enemyTeam, entitylist, cfg.MaxDistance)
 	end
 
-	if gui.GetValue("aim other buildings") then
-		ProcessClass(localPos, "CObjectDispenser", enemyTeam, entitylist)
-		ProcessClass(localPos, "CObjectTeleporter", enemyTeam, entitylist)
+	if cfg.AimOtherBuildings then
+		ProcessClass(localPos, "CObjectDispenser", enemyTeam, entitylist, cfg.MaxDistance)
+		ProcessClass(localPos, "CObjectTeleporter", enemyTeam, entitylist, cfg.MaxDistance)
 	end
 
+	-- Guard clause: Check if we have targets
 	if #entitylist == 0 then
 		return
 	end
@@ -365,9 +400,9 @@ local function OnDraw()
 		local dirToEntity = (entityCenter - eyePos)
 		Normalize(dirToEntity)
 		local forward = viewangle:Forward()
-		local angle = math.acos(forward:Dot(dirToEntity)) * RAD2DEG --- i love dot products
+		local angle = math.acos(forward:Dot(dirToEntity)) * RAD2DEG
 
-		if angle <= gui.GetValue("aim fov") then
+		if angle <= cfg.AimFOV then
 			table.insert(sortedEntities, {
 				entity = entity,
 				fov = angle,
@@ -380,6 +415,7 @@ local function OnDraw()
 		return a.fov < b.fov
 	end)
 
+	-- Guard clause: Check if we have targets in FOV
 	if #sortedEntities == 0 then
 		return
 	end
@@ -388,16 +424,16 @@ local function OnDraw()
 		local entity = entData.entity
 		local distance = (localPos - entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5):Length()
 		local time = (distance / speed) + netchannel:GetLatency(E_Flows.FLOW_INCOMING)
-		local lazyness = MIN_ACCURACY + (MAX_ACCURACY - MIN_ACCURACY) * (math.min(distance / MAX_DISTANCE, 1.0) ^ 1.5)
+		local lazyness = cfg.MinAccuracy
+			+ (cfg.MaxAccuracy - cfg.MinAccuracy) * (math.min(distance / cfg.MaxDistance, 1.0) ^ 1.5)
 
 		local path, lastPos, timetable = SimulatePlayer(entity, time, lazyness)
 		local drop = gravity * time * time
 
-		--lastPos.z = lastPos.z + drop this works really well for demo, fuck
-
 		local _, multipointPos = multipoint.Run(entity, weapon, info, eyePos, lastPos, drop)
 		if multipointPos then
 			lastPos = multipointPos
+			state.multipointPos = multipointPos
 		end
 
 		local angle = utils.math.SolveBallisticArc(eyePos, lastPos, speed, gravity)
@@ -410,10 +446,10 @@ local function OnDraw()
 				local projpath, hit, fullSim, projtimetable =
 					SimulateProj(entity, lastPos, firePos, translatedAngle, info, plocal:GetTeamNumber(), time, charge)
 
-				--if hit then
 				if fullSim then
-					local confidence = CalculateHitchance(entity, projpath, fullSim, distance, speed, gravity, time)
-					if confidence >= MIN_CONFIDENCE then
+					local confidence =
+						CalculateHitchance(entity, projpath, fullSim, distance, speed, gravity, time, cfg.MaxDistance)
+					if confidence >= cfg.MinConfidence then
 						local secondaryFire = doSecondaryFiretbl[weaponID]
 						local noSilent = noSilentTbl[weaponID]
 
@@ -436,19 +472,27 @@ local function OnDraw()
 		end
 	end
 
-	--- no valid target found :sob:
+	--- no valid target found
 end
 
 ---@param cmd UserCmd
-local function OnCreateMove(cmd)
-	if utils.weapon.CanShoot() == false then
+local function onCreateMove(cmd)
+	-- Zero Trust: Assert config exists
+	assert(G.Menu, "main: G.Menu is nil")
+	assert(G.Menu.Aimbot, "main: G.Menu.Aimbot is nil")
+
+	local cfg = G.Menu.Aimbot
+
+	-- Guard clauses
+	if not cfg.Enabled then
 		return
 	end
-
-	if gui.GetValue("aim key") ~= 0 and input.IsButtonDown(gui.GetValue("aim key")) == false then
+	if not utils.weapon.CanShoot() then
 		return
 	end
-
+	if cfg.AimKey ~= 0 and not input.IsButtonDown(cfg.AimKey) then
+		return
+	end
 	if not state.angle then
 		return
 	end
@@ -472,7 +516,7 @@ local function OnCreateMove(cmd)
 		end
 	end
 
-	local method = GetAimMethod()
+	local method = getAimMethod()
 
 	if state.silent and method == "silent +" then
 		cmd.sendpacket = false
@@ -485,32 +529,21 @@ local function OnCreateMove(cmd)
 	cmd.viewangles = Vector3(state.angle:Unpack())
 end
 
-local function getKey()
-	local value = gui.GetValue("aim key")
-	local key = "error"
+local function getKeyName()
+	local value = G.Menu.Aimbot.AimKey
 	for name, v in pairs(E_ButtonCode) do
 		if v == value then
-			key = name
+			return name
 		end
 	end
-	return key
+	return "NONE"
 end
 
-local function Unload()
-	gui.SetValue("projectile aimbot", origProjValue)
-end
+-- Self-init (optional) ---
+printc(150, 255, 150, 255, "[Projectile Aimbot] Loaded successfully")
+printc(100, 200, 255, 255, "[Projectile Aimbot] FOV: " .. G.Menu.Aimbot.AimFOV, "Aim Key: " .. getKeyName())
 
-printc(150, 255, 150, 255, "Proj Aimbot - Loaded successfully")
-printc(
-	255,
-	255,
-	0,
-	255,
-	"There is no menu anymore. Use the AIMBOT tab in Lmaobox to configure",
-	"FOV: " .. gui.GetValue("aim fov"),
-	"Aim Key: " .. getKey()
-)
-
-callbacks.Register("Draw", OnDraw)
-callbacks.Register("CreateMove", OnCreateMove)
-callbacks.Register("Unload", Unload)
+-- Callbacks -----
+callbacks.Register("Draw", "PROJ_AIMBOT_DRAW", onDraw)
+callbacks.Register("CreateMove", "PROJ_AIMBOT_CM", onCreateMove)
+-- No unload callback - environment handles cleanup automatically

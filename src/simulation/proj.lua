@@ -46,18 +46,24 @@ end
 ---@param vecTargetMaxs Vector3
 ---@param vecTargetMins Vector3
 local function IsIntersectingBB(currentPos, vecTargetPredictedPos, weaponInfo, vecTargetMaxs, vecTargetMins)
-    local vecProjMins = weaponInfo.m_vecMins + currentPos
-    local vecProjMaxs = weaponInfo.m_vecMaxs + currentPos
+	local vecProjMins = weaponInfo.m_vecMins + currentPos
+	local vecProjMaxs = weaponInfo.m_vecMaxs + currentPos
 
-    local targetMins = vecTargetMins + vecTargetPredictedPos
-    local targetMaxs = vecTargetMaxs + vecTargetPredictedPos
+	local targetMins = vecTargetMins + vecTargetPredictedPos
+	local targetMaxs = vecTargetMaxs + vecTargetPredictedPos
 
-    -- check overlap on X, Y, and Z
-    if vecProjMaxs.x < targetMins.x or vecProjMins.x > targetMaxs.x then return false end
-    if vecProjMaxs.y < targetMins.y or vecProjMins.y > targetMaxs.y then return false end
-    if vecProjMaxs.z < targetMins.z or vecProjMins.z > targetMaxs.z then return false end
+	-- check overlap on X, Y, and Z
+	if vecProjMaxs.x < targetMins.x or vecProjMins.x > targetMaxs.x then
+		return false
+	end
+	if vecProjMaxs.y < targetMins.y or vecProjMins.y > targetMaxs.y then
+		return false
+	end
+	if vecProjMaxs.z < targetMins.z or vecProjMins.z > targetMaxs.z then
+		return false
+	end
 
-    return true -- all axis overlap
+	return true -- all axis overlap
 end
 
 ---@param pTarget Entity The target
@@ -97,9 +103,9 @@ function sim.Run(pTarget, pLocal, pWeapon, shootPos, vecForward, vecPredictedPos
 	-- Decide trace mode: use line trace only for rocket-type projectiles
 	local proj_type = pWeapon:GetWeaponProjectileType() or 0
 	local use_line_trace = (
-		proj_type == E_ProjectileType.TF_PROJECTILE_ROCKET or
-		proj_type == E_ProjectileType.TF_PROJECTILE_FLAME_ROCKET or
-		proj_type == E_ProjectileType.TF_PROJECTILE_SENTRY_ROCKET
+		proj_type == E_ProjectileType.TF_PROJECTILE_ROCKET
+		or proj_type == E_ProjectileType.TF_PROJECTILE_FLAME_ROCKET
+		or proj_type == E_ProjectileType.TF_PROJECTILE_SENTRY_ROCKET
 	)
 	local trace_mask = weapon_info.m_iTraceMask or MASK_SHOT_HULL
 	local filter = function(ent)
