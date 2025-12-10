@@ -1,4 +1,4 @@
-local multipoint = require "multipoint"
+local multipoint = require("multipoint")
 --- made by navet
 
 local MAX_DISTANCE = 3000
@@ -29,11 +29,11 @@ local state = {
 	target = nil,
 	angle = nil,
 	path = nil,
-	storedpath = {path = nil, projpath = nil, projtimetable = nil, timetable = nil},
+	storedpath = { path = nil, projpath = nil, projtimetable = nil, timetable = nil },
 	charge = 0,
 	charges = false,
 	silent = true,
-	secondaryfire = false
+	secondaryfire = false,
 }
 
 local noSilentTbl = {
@@ -60,16 +60,17 @@ local doSecondaryFiretbl = {
 local function ProcessClass(localPos, className, enemyTeam, outTable)
 	local isPlayer = false
 
-	for _, entity in pairs (entities.FindByClass(className)) do
+	for _, entity in pairs(entities.FindByClass(className)) do
 		isPlayer = entity:IsPlayer()
-		if (isPlayer == true and entity:IsAlive()
-		or (isPlayer == false and entity:GetHealth() > 0))
-		and not entity:IsDormant()
-		and entity:GetTeamNumber() == enemyTeam
-		and not entity:InCond(E_TFCOND.TFCond_Cloaked)
-		and (localPos - entity:GetAbsOrigin()):Length() <= MAX_DISTANCE then
+		if
+			(isPlayer == true and entity:IsAlive() or (isPlayer == false and entity:GetHealth() > 0))
+			and not entity:IsDormant()
+			and entity:GetTeamNumber() == enemyTeam
+			and not entity:InCond(E_TFCOND.TFCond_Cloaked)
+			and (localPos - entity:GetAbsOrigin()):Length() <= MAX_DISTANCE
+		then
 			--print(string.format("Is alive: %s, Health: %d", entity:IsAlive(), entity:GetHealth()))
-			outTable[#outTable+1] = entity
+			outTable[#outTable + 1] = entity
 		end
 	end
 end
@@ -104,8 +105,8 @@ local function CleanTimeTable(pathtbl, timetbl)
 
 	for i = 1, #timetbl do
 		if timetbl[i] >= curtime then
-			newpath[#newpath+1] = pathtbl[i]
-			newtime[#newtime+1] = timetbl[i]
+			newpath[#newpath + 1] = pathtbl[i]
+			newtime[#newtime + 1] = timetbl[i]
 		end
 	end
 
@@ -126,96 +127,96 @@ end
 ---@param time number Prediction time
 ---@return number score Hitchance score from 0-100%
 local function CalculateHitchance(entity, projpath, hit, distance, speed, gravity, time)
-    local score = 100.0
+	local score = 100.0
 
-    local maxDistance = MAX_DISTANCE
-    local distanceFactor = math.min(distance / maxDistance, 1.0)
-    score = score - (distanceFactor * 40)
+	local maxDistance = MAX_DISTANCE
+	local distanceFactor = math.min(distance / maxDistance, 1.0)
+	score = score - (distanceFactor * 40)
 
-    --- prediction time penalty (longer predictions = less accurate)
-    if time > 2.0 then
-        score = score - ((time - 2.0) * 15)
-    elseif time > 1.0 then
-        score = score - ((time - 1.0) * 10)
-    end
+	--- prediction time penalty (longer predictions = less accurate)
+	if time > 2.0 then
+		score = score - ((time - 2.0) * 15)
+	elseif time > 1.0 then
+		score = score - ((time - 1.0) * 10)
+	end
 
-    --- projectile simulation penalties
-    if projpath then
-        --- if hit something, penalize the shit out of it
-        if not hit then
-            score = score - 40
-        end
+	--- projectile simulation penalties
+	if projpath then
+		--- if hit something, penalize the shit out of it
+		if not hit then
+			score = score - 40
+		end
 
-        --- penalty for very long projectile paths (more chance for error)
-        if #projpath > 50 then
-            score = score - 10
-        elseif #projpath > 100 then
-            score = score - 20
-        end
-    else
-        --- i dont remember if i ever return nil for projpath
+		--- penalty for very long projectile paths (more chance for error)
+		if #projpath > 50 then
+			score = score - 10
+		elseif #projpath > 100 then
+			score = score - 20
+		end
+	else
+		--- i dont remember if i ever return nil for projpath
 		--- but fuck it we ball
-        score = score - 100
-    end
+		score = score - 100
+	end
 
-    --- gravity penalty (high arc = less accurate (kill me))
-    if gravity > 0 then
+	--- gravity penalty (high arc = less accurate (kill me))
+	if gravity > 0 then
 		--- using 400 or 800 gravity is such a pain
 		--- i dont remember anymore why i chose 400 here
 		--- but its working fine as far as i know
 		--- unless im using 800 graviy
 		--- then this is probably giving a shit ton of score
 		--- but im so confused and sleep deprived that i dont care
-        local gravityFactor = math.min(gravity/400, 1.0)
-        score = score - (gravityFactor * 15)
-    end
+		local gravityFactor = math.min(gravity / 400, 1.0)
+		score = score - (gravityFactor * 15)
+	end
 
-    --- targed speed penalty
+	--- targed speed penalty
 	--- more speed = less confiident we are
-    local velocity = entity:EstimateAbsVelocity() or Vector3()
-    if velocity then
-        local speed2d = velocity:Length2D()
-        if speed2d > 300 then
-            score = score - 15
-        elseif speed2d > 200 then
-            score = score - 10
-        elseif speed2d > 100 then
-            score = score - 5
-        end
-    end
+	local velocity = entity:EstimateAbsVelocity() or Vector3()
+	if velocity then
+		local speed2d = velocity:Length2D()
+		if speed2d > 300 then
+			score = score - 15
+		elseif speed2d > 200 then
+			score = score - 10
+		elseif speed2d > 100 then
+			score = score - 5
+		end
+	end
 
-    --- target class bonus/penalty
-    if entity:IsPlayer() then
-        local class = entity:GetPropInt("m_iClass")
-        --- scouts are harder to hit
-        if class == E_Character.TF2_Scout then -- Scout
-            score = score - 10
-        end
+	--- target class bonus/penalty
+	if entity:IsPlayer() then
+		local class = entity:GetPropInt("m_iClass")
+		--- scouts are harder to hit
+		if class == E_Character.TF2_Scout then -- Scout
+			score = score - 10
+		end
 
-        --- classes easier to hit
-        if class == E_Character.TF2_Heavy or class == E_Character.TF2_Sniper then -- Heavy or Sniper
-            score = score + 5
-        end
+		--- classes easier to hit
+		if class == E_Character.TF2_Heavy or class == E_Character.TF2_Sniper then -- Heavy or Sniper
+			score = score + 5
+		end
 
-        --- penalize air targets
+		--- penalize air targets
 		--- i wrote this shit at 3 am, wtf is this?
-        if entity:InCond(E_TFCOND.TFCond_BlastJumping) then
-            score = score - 15
-        end
-    else
-        --- buildings dont have feet (at least the ones i know)
-        score = score + 15
-    end
+		if entity:InCond(E_TFCOND.TFCond_BlastJumping) then
+			score = score - 15
+		end
+	else
+		--- buildings dont have feet (at least the ones i know)
+		score = score + 15
+	end
 
-    --- projectile speed penalty (slow projectiles are harder to hit)
-    if speed < 1000 then
-        score = score - 10
-    elseif speed < 1500 then
-        score = score - 5
-    end
+	--- projectile speed penalty (slow projectiles are harder to hit)
+	if speed < 1000 then
+		score = score - 10
+	elseif speed < 1500 then
+		score = score - 5
+	end
 
-    --- clamp this
-    return math.max(0, math.min(100, score))
+	--- clamp this
+	return math.max(0, math.min(100, score))
 end
 
 --- vector.Normalize doesn't work
@@ -224,7 +225,7 @@ end
 ---@param vec Vector3
 local function Normalize(vec)
 	local len = vec:Length()
-	if (len < 0.0001) then
+	if len < 0.0001 then
 		return 0
 	end
 
@@ -260,10 +261,10 @@ local function OnDraw()
 		local text = "Navet's Proj Aimbot Loaded"
 		local w, h = draw.GetScreenSize()
 		local tw, th = draw.GetTextSize(text)
-		draw.TextShadow((w*0.5 - tw*0.5)//1, (h*0.1)//1, text)
+		draw.TextShadow((w * 0.5 - tw * 0.5) // 1, (h * 0.1) // 1, text)
 		tw = draw.GetTextSize(text)
 		text = "Go to AIMBOT tab to configure it"
-		draw.TextShadow((w*0.5 - tw*0.5)//1, (h*0.15)//1, text)
+		draw.TextShadow((w * 0.5 - tw * 0.5) // 1, (h * 0.15) // 1, text)
 	end
 
 	if gui.GetValue("projectile aimbot") ~= "none" then
@@ -288,7 +289,8 @@ local function OnDraw()
 	end
 
 	if state.storedpath.projpath and state.storedpath.projtimetable then
-		local cleanedprojpath, cleanedprojtime = CleanTimeTable(state.storedpath.projpath, state.storedpath.projtimetable)
+		local cleanedprojpath, cleanedprojtime =
+			CleanTimeTable(state.storedpath.projpath, state.storedpath.projtimetable)
 		state.storedpath.projpath = cleanedprojpath
 		state.storedpath.projtimetable = cleanedprojtime
 	end
@@ -357,7 +359,7 @@ local function OnDraw()
 	local weaponID = weapon:GetWeaponID()
 
 	local sortedEntities = {}
-	local RAD2DEG = 180/math.pi
+	local RAD2DEG = 180 / math.pi
 	for _, entity in ipairs(entitylist) do
 		local entityCenter = entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5
 		local dirToEntity = (entityCenter - eyePos)
@@ -368,7 +370,7 @@ local function OnDraw()
 		if angle <= gui.GetValue("aim fov") then
 			table.insert(sortedEntities, {
 				entity = entity,
-				fov = angle
+				fov = angle,
 			})
 		end
 	end
@@ -385,8 +387,8 @@ local function OnDraw()
 	for _, entData in ipairs(sortedEntities) do
 		local entity = entData.entity
 		local distance = (localPos - entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5):Length()
-		local time = (distance/speed) + netchannel:GetLatency(E_Flows.FLOW_INCOMING)
-		local lazyness = MIN_ACCURACY + (MAX_ACCURACY - MIN_ACCURACY) * (math.min(distance/MAX_DISTANCE, 1.0)^1.5)
+		local time = (distance / speed) + netchannel:GetLatency(E_Flows.FLOW_INCOMING)
+		local lazyness = MIN_ACCURACY + (MAX_ACCURACY - MIN_ACCURACY) * (math.min(distance / MAX_DISTANCE, 1.0) ^ 1.5)
 
 		local path, lastPos, timetable = SimulatePlayer(entity, time, lazyness)
 		local drop = gravity * time * time
@@ -405,7 +407,8 @@ local function OnDraw()
 			local translatedAngle = utils.math.SolveBallisticArc(firePos, lastPos, speed, gravity)
 
 			if translatedAngle then
-				local projpath, hit, fullSim, projtimetable = SimulateProj(entity, lastPos, firePos, translatedAngle, info, plocal:GetTeamNumber(), time, charge)
+				local projpath, hit, fullSim, projtimetable =
+					SimulateProj(entity, lastPos, firePos, translatedAngle, info, plocal:GetTeamNumber(), time, charge)
 
 				--if hit then
 				if fullSim then
@@ -499,7 +502,10 @@ end
 
 printc(150, 255, 150, 255, "Proj Aimbot - Loaded successfully")
 printc(
-	255, 255, 0, 255,
+	255,
+	255,
+	0,
+	255,
 	"There is no menu anymore. Use the AIMBOT tab in Lmaobox to configure",
 	"FOV: " .. gui.GetValue("aim fov"),
 	"Aim Key: " .. getKey()
