@@ -37,57 +37,79 @@ local function drawMenu()
 
 	local cfg = G.Menu.Aimbot
 	local vis = G.Menu.Visuals
+	local ui = G.Menu.UI
 
-	-- Main Settings
-	TimMenu.BeginSector("Aimbot")
-	cfg.Enabled = TimMenu.Checkbox("Enable", cfg.Enabled)
+	-- Tab Control
+	local tabs = {"Aimbot", "Visuals"}
+	ui.SelectedTab = TimMenu.TabControl("MainTabs", tabs, ui.SelectedTab)
 	TimMenu.NextLine()
 
-	cfg.AimKey = TimMenu.Keybind("Aim Key", cfg.AimKey)
-	TimMenu.Tooltip("Hold this key to aim, or set to NONE for always-on")
-	TimMenu.NextLine()
+	-- Aimbot Tab
+	if ui.SelectedTab == 1 then
+		TimMenu.BeginSector("Main Settings")
+		cfg.Enabled = TimMenu.Checkbox("Enable", cfg.Enabled)
+		TimMenu.NextLine()
 
-	cfg.AimFOV = TimMenu.Slider("Aim FOV", cfg.AimFOV, 1, 180, 1)
-	TimMenu.Tooltip("Field of view in degrees for target selection")
-	TimMenu.NextLine()
+		-- Activation Mode Dropdown
+		local activationModes = { "Always", "On Hold", "Toggle", "On Click" }
+		local dropdownValue = TimMenu.Dropdown("Activation Mode", cfg.ActivationMode + 1, activationModes)
+		cfg.ActivationMode = dropdownValue - 1 -- Convert back to 0-based
+		TimMenu.Tooltip("Always=Always active, Hold=While key held, Toggle=Press to toggle, Click=Single press")
+		TimMenu.NextLine()
 
-	local aimMethodIndex = getAimMethodIndex(cfg.AimMethod)
-	aimMethodIndex = TimMenu.Dropdown("Aim Method", aimMethodIndex, AIM_METHOD_OPTIONS)
-	cfg.AimMethod = AIM_METHOD_OPTIONS[aimMethodIndex]
-	TimMenu.Tooltip("silent+ = no packet, silent = packet sent, normal = view change")
-	TimMenu.NextLine()
+		-- Only show keybind if not in Always mode (mode 0)
+		if cfg.ActivationMode ~= 0 then
+			cfg.AimKey = TimMenu.Keybind("Activation Key", cfg.AimKey)
+			TimMenu.Tooltip("Key for activation mode")
+			TimMenu.NextLine()
+		end
 
-	cfg.AimSentry = TimMenu.Checkbox("Aim Sentry", cfg.AimSentry)
-	TimMenu.NextLine()
+		-- On Attack checkbox (works with any mode)
+		cfg.OnAttack = TimMenu.Checkbox("On Attack", cfg.OnAttack)
+		TimMenu.Tooltip("Also activate when attacking (combines with activation mode)")
+		TimMenu.NextLine()
 
-	cfg.AimOtherBuildings = TimMenu.Checkbox("Aim Other Buildings", cfg.AimOtherBuildings)
-	TimMenu.Tooltip("Target dispensers and teleporters")
-	TimMenu.EndSector()
-	TimMenu.NextLine()
+		cfg.AimFOV = TimMenu.Slider("Aim FOV", cfg.AimFOV, 1, 180, 1)
+		TimMenu.Tooltip("Field of view in degrees for target selection")
+		TimMenu.NextLine()
 
-	-- Prediction Settings
-	TimMenu.BeginSector("Prediction")
-	cfg.MaxDistance = TimMenu.Slider("Max Distance", cfg.MaxDistance, 500, 6000, 50)
-	TimMenu.NextLine()
+		local aimMethodIndex = getAimMethodIndex(cfg.AimMethod)
+		aimMethodIndex = TimMenu.Dropdown("Aim Method", aimMethodIndex, AIM_METHOD_OPTIONS)
+		cfg.AimMethod = AIM_METHOD_OPTIONS[aimMethodIndex]
+		TimMenu.Tooltip("silent+ = no packet, silent = packet sent, normal = view change")
+		TimMenu.NextLine()
 
-	cfg.MinAccuracy = TimMenu.Slider("Min Lazyness", cfg.MinAccuracy, 1, 12, 1)
-	TimMenu.Tooltip("Ticks to skip at close range (lower = more accurate, slower)")
-	TimMenu.NextLine()
+		cfg.AimSentry = TimMenu.Checkbox("Aim Sentry", cfg.AimSentry)
+		TimMenu.NextLine()
 
-	local maxAccuracyMinimum = math.max(cfg.MinAccuracy, 2)
-	cfg.MaxAccuracy = TimMenu.Slider("Max Lazyness", cfg.MaxAccuracy, maxAccuracyMinimum, 12, 1)
-	cfg.MaxAccuracy = math.max(cfg.MaxAccuracy, cfg.MinAccuracy)
-	cfg.MaxAccuracy = math.min(cfg.MaxAccuracy, 12)
-	TimMenu.Tooltip("Ticks to skip at max range (higher = less accurate, faster)")
-	TimMenu.NextLine()
+		cfg.AimOtherBuildings = TimMenu.Checkbox("Aim Other Buildings", cfg.AimOtherBuildings)
+		TimMenu.Tooltip("Target dispensers and teleporters")
+		TimMenu.EndSector()
+		TimMenu.NextLine()
 
-	cfg.MinConfidence = TimMenu.Slider("Min Confidence %", cfg.MinConfidence, 0, 100, 1)
-	TimMenu.Tooltip("Minimum hit chance required to shoot")
-	TimMenu.EndSector()
-	TimMenu.NextLine()
+		-- Prediction Settings
+		TimMenu.BeginSector("Prediction")
+		cfg.MaxDistance = TimMenu.Slider("Max Distance", cfg.MaxDistance, 500, 6000, 50)
+		TimMenu.NextLine()
 
-	-- Create Visuals Tab
-	if TimMenu.Tab("Visuals") then
+		cfg.MinAccuracy = TimMenu.Slider("Min Lazyness", cfg.MinAccuracy, 1, 12, 1)
+		TimMenu.Tooltip("Ticks to skip at close range (lower = more accurate, slower)")
+		TimMenu.NextLine()
+
+		local maxAccuracyMinimum = math.max(cfg.MinAccuracy, 2)
+		cfg.MaxAccuracy = TimMenu.Slider("Max Lazyness", cfg.MaxAccuracy, maxAccuracyMinimum, 12, 1)
+		cfg.MaxAccuracy = math.max(cfg.MaxAccuracy, cfg.MinAccuracy)
+		cfg.MaxAccuracy = math.min(cfg.MaxAccuracy, 12)
+		TimMenu.Tooltip("Ticks to skip at max range (higher = less accurate, faster)")
+		TimMenu.NextLine()
+
+		cfg.MinConfidence = TimMenu.Slider("Min Confidence %", cfg.MinConfidence, 0, 100, 1)
+		TimMenu.Tooltip("Minimum hit chance required to shoot")
+		TimMenu.EndSector()
+	end
+
+	-- Visuals Tab
+	if ui.SelectedTab == 2 then
 		TimMenu.BeginSector("Display Options")
 		vis.Enabled = TimMenu.Checkbox("Enable Visuals", vis.Enabled)
 		TimMenu.NextLine()

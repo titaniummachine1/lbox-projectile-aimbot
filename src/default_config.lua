@@ -1,9 +1,16 @@
 -- Default configuration for Projectile Aimbot
 local DefaultConfig = {
+	-- UI State
+	UI = {
+		SelectedTab = 1, -- Current tab index
+	},
+
 	-- Aimbot settings
 	Aimbot = {
 		Enabled = true,
 		AimKey = 0, -- KEY_NONE
+		ActivationMode = 0, -- 0=Always, 1=On Hold, 2=Toggle, 3=On Click
+		OnAttack = false, -- Activate when attacking (works with any mode)
 		AimFOV = 15,
 		AimMethod = "silent +", -- "silent +", "silent", "normal"
 		MaxDistance = 3000,

@@ -39,6 +39,74 @@ local state = {
 	multipointPos = nil,
 }
 
+-- Activation mode state tracking
+local previousKeyState = false
+local toggleActive = false
+local clickProcessed = false
+
+-- Input button flags
+local IN_ATTACK = 1
+local IN_ATTACK2 = 2048
+
+-- Function to check if activation keybind should activate aimbot logic
+-- cmd parameter is optional - only available in CreateMove callback
+local function ShouldActivateAimbot(cmd)
+	assert(G.Menu, "ShouldActivateAimbot: G.Menu is nil")
+	assert(G.Menu.Aimbot, "ShouldActivateAimbot: G.Menu.Aimbot is nil")
+	
+	local cfg = G.Menu.Aimbot
+	
+	-- Check if attacking from cmd buttons (only in CreateMove where cmd exists)
+	if cmd and cfg.OnAttack then
+		local buttons = cmd:GetButtons()
+		-- Check for IN_ATTACK (primary) or IN_ATTACK2 (secondary like bow charge)
+		local isAttacking = (buttons & IN_ATTACK) ~= 0 or (buttons & IN_ATTACK2) ~= 0
+		
+		-- If attacking, activate immediately regardless of keybind
+		if isAttacking then
+			return true
+		end
+	end
+	
+	-- Mode 0: Always - always active, no keybind needed
+	if cfg.ActivationMode == 0 then
+		return true
+	end
+
+	-- For other modes, check keybind
+	if cfg.AimKey == 0 then
+		return true -- Fallback if no keybind set
+	end
+
+	local currentKeyState = input.IsButtonDown(cfg.AimKey)
+	local shouldActivate = false
+
+	-- Mode 1: On Hold - only active while holding the key
+	if cfg.ActivationMode == 1 then
+		shouldActivate = currentKeyState
+
+	-- Mode 2: Toggle - toggle on/off with key press
+	elseif cfg.ActivationMode == 2 then
+		if currentKeyState and not previousKeyState then
+			toggleActive = not toggleActive
+		end
+		shouldActivate = toggleActive
+
+	-- Mode 3: On Click - activate once per key press
+	elseif cfg.ActivationMode == 3 then
+		if currentKeyState and not previousKeyState then
+			clickProcessed = false
+		end
+		if not currentKeyState and previousKeyState then
+			clickProcessed = true -- Reset for next click
+		end
+		shouldActivate = currentKeyState and not clickProcessed
+	end
+
+	previousKeyState = currentKeyState
+	return shouldActivate
+end
+
 local noSilentTbl = {
 	[E_WeaponBaseID.TF_WEAPON_CLEAVER] = true,
 	[E_WeaponBaseID.TF_WEAPON_BAT_WOOD] = true,
@@ -257,15 +325,6 @@ local function onDraw()
 	assert(G.Menu, "main: G.Menu is nil")
 	assert(G.Menu.Aimbot, "main: G.Menu.Aimbot is nil")
 
-	--- Reset our state table
-	state.angle = nil
-	state.path = nil
-	state.target = nil
-	state.charge = 0
-	state.charges = false
-	state.confidence = nil
-	state.multipointPos = nil
-
 	local cfg = G.Menu.Aimbot
 
 	-- Guard clause: Check if aimbot is enabled
@@ -282,16 +341,7 @@ local function onDraw()
 		gui.SetValue("projectile aimbot", 0)
 	end
 
-	-- Guard clauses
-	local netchannel = clientstate.GetNetChannel()
-	if not netchannel then
-		return
-	end
-
-	if clientstate.GetClientSignonState() <= E_SignonState.SIGNONSTATE_SPAWN then
-		return
-	end
-
+	-- Clean up old path data (remove expired timetables)
 	if state.storedpath.path and state.storedpath.timetable then
 		local cleanedpath, cleanedtime = CleanTimeTable(state.storedpath.path, state.storedpath.timetable)
 		state.storedpath.path = cleanedpath
@@ -305,7 +355,7 @@ local function onDraw()
 		state.storedpath.projtimetable = cleanedprojtime
 	end
 
-	-- Draw advanced visualizations
+	-- Draw advanced visualizations from state
 	Visuals.draw({
 		path = state.storedpath.path,
 		projpath = state.storedpath.projpath,
@@ -313,7 +363,7 @@ local function onDraw()
 		target = state.target,
 	})
 
-	-- Draw confidence score
+	-- Draw confidence score from state
 	local vis = G.Menu.Visuals
 	if vis.ShowConfidence and state.confidence then
 		local screenW, screenH = draw.GetScreenSize()
@@ -334,14 +384,46 @@ local function onDraw()
 		local textW, textH = draw.GetTextSize(text)
 		draw.Text(screenW / 2 - textW / 2, screenH / 2 + 30, text)
 	end
+end
 
-	-- Guard clause: Check aim key
-	if cfg.AimKey ~= 0 and not input.IsButtonDown(cfg.AimKey) then
+---@param cmd UserCmd
+local function onCreateMove(cmd)
+	-- Zero Trust: Assert config exists
+	assert(G.Menu, "main: G.Menu is nil")
+	assert(G.Menu.Aimbot, "main: G.Menu.Aimbot is nil")
+
+	--- Reset our state table every tick
+	state.angle = nil
+	state.path = nil
+	state.target = nil
+	state.charge = 0
+	state.charges = false
+	state.confidence = nil
+	state.multipointPos = nil
+
+	local cfg = G.Menu.Aimbot
+
+	-- Guard clauses
+	if not cfg.Enabled then
+		return
+	end
+	
+	-- Guard clauses
+	local netchannel = clientstate.GetNetChannel()
+	if not netchannel then
 		return
 	end
 
-	-- Guard clause: Check if we can shoot
+	if clientstate.GetClientSignonState() <= E_SignonState.SIGNONSTATE_SPAWN then
+		return
+	end
+	
 	if not utils.weapon.CanShoot() then
+		return
+	end
+	
+	-- Pass cmd to check attack button state from command
+	if not ShouldActivateAimbot(cmd) then
 		return
 	end
 
@@ -465,34 +547,16 @@ local function onDraw()
 						state.secondaryfire = secondaryFire
 						state.silent = not noSilent
 						state.confidence = confidence
-						return
+						
+						-- Found valid target, apply aim
+						break
 					end
 				end
 			end
 		end
 	end
 
-	--- no valid target found
-end
-
----@param cmd UserCmd
-local function onCreateMove(cmd)
-	-- Zero Trust: Assert config exists
-	assert(G.Menu, "main: G.Menu is nil")
-	assert(G.Menu.Aimbot, "main: G.Menu.Aimbot is nil")
-
-	local cfg = G.Menu.Aimbot
-
-	-- Guard clauses
-	if not cfg.Enabled then
-		return
-	end
-	if not utils.weapon.CanShoot() then
-		return
-	end
-	if cfg.AimKey ~= 0 and not input.IsButtonDown(cfg.AimKey) then
-		return
-	end
+	-- If no angle calculated, nothing to do
 	if not state.angle then
 		return
 	end
