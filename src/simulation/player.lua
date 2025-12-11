@@ -19,6 +19,8 @@ local math_max              = math.max
 local math_floor            = math.floor
 local math_pi               = math.pi
 
+local G                     = require("globals")
+local TargetSelector        = require("core.target_selector")
 local WishdirTracker        = require("simulation.wishdir_tracker")
 
 -- constants
@@ -445,16 +447,19 @@ end
 function sim.RunBackground(pLocal, entitylist)
 	local enemy_team = pLocal:GetTeamNumber() == 2 and 3 or 2
 
-	local enemies = {}
-	for i, playerInfo in pairs(entitylist) do
-		local player = entities.GetByIndex(i)
-		if player and playerInfo.m_iTeam == enemy_team and player:IsAlive() and not player:IsDormant() then
-			AddPositionSample(player)
-			table.insert(enemies, player)
-		end
+	local maxTargets = 4
+	local maxDistance = 3000
+	if G and G.Menu and G.Menu.Aimbot then
+		maxTargets = math_max(1, G.Menu.Aimbot.TrackedTargets or 4)
+		maxDistance = G.Menu.Aimbot.MaxDistance or maxDistance
 	end
 
-	WishdirTracker.updateTop(pLocal, enemies, 4)
+	local top = TargetSelector.selectTop(pLocal, maxTargets, maxDistance)
+	for _, player in ipairs(top) do
+		AddPositionSample(player)
+	end
+
+	WishdirTracker.updateTop(pLocal, top, maxTargets)
 end
 
 ---@param origin Vector3

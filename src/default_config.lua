@@ -19,6 +19,7 @@ local DefaultConfig = {
 		MinConfidence = 40,
 		AimSentry = true,
 		AimOtherBuildings = false,
+		TrackedTargets = 4, -- how many enemies to keep movement history for
 	},
 
 	-- Visual settings

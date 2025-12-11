@@ -122,38 +122,23 @@ function WishdirTracker.getWorldWishdir(entity)
 	return relativeToWorld(s.relWishdir, s.lastYaw)
 end
 
----Limit tracking to nearest N entities to local player.
+---Update tracker for a provided, pre-sorted list of entities (nearest/top).
 ---@param pLocal Entity
----@param entities Entity[]
+---@param sortedEntities Entity[]
 ---@param maxTargets integer
-function WishdirTracker.updateTop(pLocal, entities, maxTargets)
-	if not pLocal or not entities then return end
+function WishdirTracker.updateTop(pLocal, sortedEntities, maxTargets)
+	if not pLocal or not sortedEntities then return end
 	maxTargets = maxTargets or MAX_TRACKED
-	local lp = pLocal:GetAbsOrigin()
-	if not lp then return end
-
-	-- sort by distance
-	local candidates = {}
-	for _, ent in ipairs(entities) do
-		if ent and ent:IsAlive() and not ent:IsDormant() and ent ~= pLocal then
-			local pos = ent:GetAbsOrigin()
-			if pos then
-				local dx, dy = pos.x - lp.x, pos.y - lp.y
-				local dist2 = dx * dx + dy * dy
-				table.insert(candidates, { ent = ent, dist2 = dist2 })
-			end
-		end
-	end
-	table.sort(candidates, function(a, b) return a.dist2 < b.dist2 end)
 
 	local keep = {}
-	for i = 1, math.min(maxTargets, #candidates) do
-		local ent = candidates[i].ent
-		keep[ent:GetIndex()] = true
-		WishdirTracker.update(ent)
+	for i = 1, math.min(maxTargets, #sortedEntities) do
+		local ent = sortedEntities[i]
+		if ent and ent:IsAlive() and not ent:IsDormant() and ent ~= pLocal then
+			keep[ent:GetIndex()] = true
+			WishdirTracker.update(ent)
+		end
 	end
 
-	-- prune non-kept
 	for idx, entry in pairs(state) do
 		if not keep[idx] or shouldPrune(entry) then
 			state[idx] = nil

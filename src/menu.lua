@@ -105,6 +105,10 @@ local function drawMenu()
 
 		cfg.MinConfidence = TimMenu.Slider("Min Confidence %", cfg.MinConfidence, 0, 100, 1)
 		TimMenu.Tooltip("Minimum hit chance required to shoot")
+		TimMenu.NextLine()
+
+		cfg.TrackedTargets = TimMenu.Slider("Tracked Enemies", cfg.TrackedTargets, 1, 8, 1)
+		TimMenu.Tooltip("How many nearest enemies to keep wishdir/strafe history for")
 		TimMenu.EndSector()
 	end
 
