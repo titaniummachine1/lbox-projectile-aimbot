@@ -40,9 +40,6 @@ local strafeRates = {} -- Per-tick yaw delta (smoothed)
 local stableWishDir = {}
 local lastOrigin = {}
 
--- External per-tick overrides: tickInputs[tick] = { viewangles = EulerAngles, wishdir = Vector3 (relative to view) }
-local tickInputs = nil
-
 local DEG2RAD = math.pi / 180
 
 -- Physics helpers
@@ -341,84 +338,6 @@ local function UpdateTracking(entity)
 	lastVelocityYaw[idx] = velYaw
 end
 
--- Public setter for per-tick inputs
-function SetPredictionInputs(inputs)
-	-- inputs: array indexed from 1..N { viewangles = EulerAngles?, wishdir = Vector3? (relative to view) }
-	tickInputs = inputs
-end
-
--- Baseline prediction (no strafe prediction, holds current yaw)
-local function PredictPathBaseline(player, ticks)
-	assert(player, "PredictPathBaseline: nil player")
-
-	local path = {}
-	local velocity = player:GetPropVector("localdata", "m_vecVelocity[0]") or player:EstimateAbsVelocity()
-	local origin = player:GetAbsOrigin() + Vector3(0, 0, 1)
-
-	if not velocity or velocity:Length() <= 0.01 then
-		path[0] = origin
-		return path
-	end
-
-	local maxspeed = player:GetPropFloat("m_flMaxspeed") or 450
-	local tickinterval = globals.TickInterval()
-	local mins, maxs = player:GetMins(), player:GetMaxs()
-	local index = player:GetIndex()
-
-	-- Use current yaw, NO strafe prediction
-	local currentYaw = player:GetPropFloat("tfnonlocaldata", "m_angEyeAngles[1]") or 0
-	local relativeWishDir = stableWishDir[index] or Vector3(1, 0, 0)
-
-	path[0] = Vector3(origin.x, origin.y, origin.z)
-	local currentVel = Vector3(velocity.x, velocity.y, velocity.z)
-
-	for tick = 1, ticks do
-		-- NO YAW ROTATION - baseline holds current yaw
-		local wishdir = RelativeToWorldWishDir(relativeWishDir, currentYaw)
-
-		-- Physics simulation (same as main prediction)
-		local is_on_ground = CheckIsOnGround(origin, mins, maxs, index)
-		Friction(currentVel, is_on_ground, tickinterval)
-
-		if currentVel:Length2D() > 0.1 then
-			local wishspeed = math.min(currentVel:Length2D(), maxspeed)
-			if is_on_ground then
-				Accelerate(currentVel, wishdir, wishspeed, accelerate, tickinterval)
-			else
-				if currentVel.z < 0 then
-					AirAccelerate(currentVel, wishdir, wishspeed, airAccelerate, tickinterval)
-				end
-			end
-		end
-
-		if is_on_ground then
-			local speed = currentVel:Length()
-			if speed > maxspeed then
-				currentVel.x = currentVel.x * maxspeed / speed
-				currentVel.y = currentVel.y * maxspeed / speed
-				currentVel.z = currentVel.z * maxspeed / speed
-			end
-		end
-
-		if not is_on_ground then
-			currentVel.z = currentVel.z - gravity * tickinterval
-		elseif currentVel.z < 0 then
-			currentVel.z = 0
-		end
-
-		local newPos = origin + currentVel * tickinterval
-		local clippedVel = TracePlayerMove(origin, newPos, mins, maxs, index)
-		if clippedVel then
-			currentVel = clippedVel
-		end
-
-		origin = origin + currentVel * tickinterval
-		path[tick] = Vector3(origin.x, origin.y, origin.z)
-	end
-
-	return path
-end
-
 -- Prediction (with strafe prediction)
 local function PredictPath(player, ticks)
 	assert(player, "PredictPath: nil player")
@@ -449,7 +368,14 @@ local function PredictPath(player, ticks)
 	-- strafeRate represents degrees per tick of yaw change
 	-- Debug: Print strafe rate when significant
 	if math.abs(strafeRate) > 0.5 then
-		print(string.format("[STRAFE PRED] Rate: %.2f deg/tick, WishDir: (%.2f, %.2f)", strafeRate, relativeWishDir.x, relativeWishDir.y))
+		print(
+			string.format(
+				"[STRAFE PRED] Rate: %.2f deg/tick, WishDir: (%.2f, %.2f)",
+				strafeRate,
+				relativeWishDir.x,
+				relativeWishDir.y
+			)
+		)
 	end
 
 	path[0] = Vector3(origin.x, origin.y, origin.z)
@@ -457,36 +383,12 @@ local function PredictPath(player, ticks)
 
 	for tick = 1, ticks do
 		-- STRAFE PREDICTION: Rotate yaw by strafe rate to predict future movement
-		-- This shows what happens if player continues current strafing pattern
 		currentYaw = currentYaw + strafeRate
 
-		-- Check for per-tick override
-		local override = tickInputs and tickInputs[tick]
-		local wishdir
+		-- Resolve wishdir (yaw rotates wishdir; no overrides)
+		local wishdir = RelativeToWorldWishDir(relativeWishDir, currentYaw)
 
-		if override then
-			-- If override provided, use it
-			if override.viewangles and override.viewangles.y then
-				currentYaw = override.viewangles.y
-				if override.wishdir then
-					-- Convert relative wishdir to world space
-					wishdir = RelativeToWorldWishDir(override.wishdir, currentYaw)
-				else
-					-- Default forward
-					wishdir = Vector3(math.cos(currentYaw * DEG2RAD), math.sin(currentYaw * DEG2RAD), 0)
-				end
-			elseif override.wishdir then
-				-- Convert relative wishdir to world space using current yaw
-				wishdir = RelativeToWorldWishDir(override.wishdir, currentYaw)
-			end
-		end
-
-		if not wishdir then
-			-- Convert relative wishdir to world space using current yaw
-			wishdir = RelativeToWorldWishDir(relativeWishDir, currentYaw)
-		end
-
-		-- Physics simulation: coast FIRST (friction + gravity + collision), THEN accelerate
+		-- Physics simulation: friction/gravity -> acceleration -> move with collision -> ground snap
 		local is_on_ground = CheckIsOnGround(origin, mins, maxs, index)
 
 		-- Apply friction
@@ -497,19 +399,21 @@ local function PredictPath(player, ticks)
 			currentVel.z = currentVel.z - gravity * tickinterval
 		end
 
-		-- Coast movement with collision (NO acceleration yet)
-		origin = TryPlayerMove(origin, currentVel, mins, maxs, index, tickinterval)
-
+		-- Accelerate using wishdir (yaw-driven). Do this before collision move.
+		local wishspeed = math.min(currentVel:Length2D(), maxspeed)
 		if is_on_ground then
-			StayOnGround(origin, mins, maxs, stepSize, index)
-		end
-
-		-- NOW apply acceleration in wishdir AFTER collision resolution
-		if is_on_ground then
-			Accelerate(currentVel, wishdir, maxspeed, accelerate, tickinterval)
+			Accelerate(currentVel, wishdir, wishspeed, accelerate, tickinterval)
 			currentVel.z = 0
 		else
-			AirAccelerate(currentVel, wishdir, maxspeed, airAccelerate, tickinterval, 0, player)
+			AirAccelerate(currentVel, wishdir, wishspeed, airAccelerate, tickinterval, 1, player)
+		end
+
+		-- Move with collision
+		origin = TryPlayerMove(origin, currentVel, mins, maxs, index, tickinterval)
+
+		-- Ground snap last
+		if is_on_ground then
+			StayOnGround(origin, mins, maxs, stepSize, index)
 		end
 
 		path[tick] = Vector3(origin.x, origin.y, origin.z)
@@ -529,11 +433,18 @@ local function DrawPath(path)
 		local screen1 = client.WorldToScreen(pos1)
 		local screen2 = client.WorldToScreen(pos2)
 		if screen1 and screen2 then
+			-- Ensure integer screen coords for draw.Line
+			local x1 = math.floor(screen1[1])
+			local y1 = math.floor(screen1[2])
+			local x2 = math.floor(screen2[1])
+			local y2 = math.floor(screen2[2])
 			local t = i / PREDICT_TICKS
 			local r = math.floor(255 * t)
 			local g = math.floor(255 * (1 - t * 0.5))
 			draw.Color(r, g, 0, 200)
-			draw.Line(screen1[1], screen1[2], screen2[1], screen2[2])
+			if x1 == x1 and y1 == y1 and x2 == x2 and y2 == y2 then
+				draw.Line(x1, y1, x2, y2)
+			end
 		end
 	end
 end
@@ -546,23 +457,17 @@ local function DrawDots(path)
 		end
 		local screen = client.WorldToScreen(pos)
 		if screen then
+			local sx = math.floor(screen[1])
+			local sy = math.floor(screen[2])
 			local t = i / PREDICT_TICKS
 			local r = math.floor(255 * t)
 			local g = math.floor(255 * (1 - t * 0.5))
 			draw.Color(r, g, 0, 255)
-			draw.FilledRect(
-				screen[1] - DOT_SIZE / 2,
-				screen[2] - DOT_SIZE / 2,
-				screen[1] + DOT_SIZE / 2,
-				screen[2] + DOT_SIZE / 2
-			)
-			draw.Color(0, 0, 0, 255)
-			draw.OutlinedRect(
-				screen[1] - DOT_SIZE / 2,
-				screen[2] - DOT_SIZE / 2,
-				screen[1] + DOT_SIZE / 2,
-				screen[2] + DOT_SIZE / 2
-			)
+			if sx == sx and sy == sy then
+				draw.FilledRect(sx - DOT_SIZE / 2, sy - DOT_SIZE / 2, sx + DOT_SIZE / 2, sy + DOT_SIZE / 2)
+				draw.Color(0, 0, 0, 255)
+				draw.OutlinedRect(sx - DOT_SIZE / 2, sy - DOT_SIZE / 2, sx + DOT_SIZE / 2, sy + DOT_SIZE / 2)
+			end
 		end
 	end
 end
@@ -637,40 +542,6 @@ local function OnDraw()
 	-- Draw strafe prediction path (with yaw changes)
 	DrawPath(path)
 	DrawDots(path)
-
-	-- STRAFE PREDICTION VISUALIZATION: Draw baseline path without strafe prediction
-	local strafeRate = strafeRates[me:GetIndex()] or 0
-	if math.abs(strafeRate) > 0.1 then -- Only show if there's significant strafe
-		local baselinePath = PredictPathBaseline(me, PREDICT_TICKS)
-		if baselinePath then
-			-- Draw baseline as gray dotted line
-			draw.Color(128, 128, 128, 150)
-			for i = 0, PREDICT_TICKS - 1 do
-				local pos1 = baselinePath[i]
-				local pos2 = baselinePath[i + 1]
-				if pos1 and pos2 then
-					local screen1 = client.WorldToScreen(pos1)
-					local screen2 = client.WorldToScreen(pos2)
-					if screen1 and screen2 then
-						-- Dotted line effect
-						local dx = screen2[1] - screen1[1]
-						local dy = screen2[2] - screen1[2]
-						local dist = math.sqrt(dx*dx + dy*dy)
-						local segments = math.max(1, math.floor(dist / 10))
-						for j = 0, segments-1 do
-							local t1 = j / segments
-							local t2 = (j + 0.5) / segments
-							local x1 = screen1[1] + dx * t1
-							local y1 = screen1[2] + dy * t1
-							local x2 = screen1[1] + dx * t2
-							local y2 = screen1[2] + dy * t2
-							draw.Line(x1, y1, x2, y2)
-						end
-					end
-				end
-			end
-		end
-	end
 end
 
 -- API: external scripts can call SetPredictionInputs to provide per-tick overrides
