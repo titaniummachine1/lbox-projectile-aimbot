@@ -7,6 +7,10 @@ local multipoint = require("multipoint")
 local GetProjectileInfo = require("projectile_info")
 local SimulatePlayer = require("playersim")
 local SimulateProj = require("projectilesim")
+local Latency = require("core.latency")
+local WeaponOffsets = require("constants.weapon_offsets")
+local StrafePredictor = require("core.strafe_predictor")
+local TickProfiler = require("tick_profiler")
 
 -- Local constants / utilities -----
 local DEFAULT_MAX_DISTANCE = 3000
@@ -42,7 +46,6 @@ local state = {
 -- Activation mode state tracking
 local previousKeyState = false
 local toggleActive = false
-local clickProcessed = false
 
 -- Input button flags
 local IN_ATTACK = 1
@@ -53,21 +56,21 @@ local IN_ATTACK2 = 2048
 local function ShouldActivateAimbot(cmd)
 	assert(G.Menu, "ShouldActivateAimbot: G.Menu is nil")
 	assert(G.Menu.Aimbot, "ShouldActivateAimbot: G.Menu.Aimbot is nil")
-	
+
 	local cfg = G.Menu.Aimbot
-	
+
 	-- Check if attacking from cmd buttons (only in CreateMove where cmd exists)
 	if cmd and cfg.OnAttack then
 		local buttons = cmd:GetButtons()
 		-- Check for IN_ATTACK (primary) or IN_ATTACK2 (secondary like bow charge)
 		local isAttacking = (buttons & IN_ATTACK) ~= 0 or (buttons & IN_ATTACK2) ~= 0
-		
+
 		-- If attacking, activate immediately regardless of keybind
 		if isAttacking then
 			return true
 		end
 	end
-	
+
 	-- Mode 0: Always - always active, no keybind needed
 	if cfg.ActivationMode == 0 then
 		return true
@@ -91,16 +94,6 @@ local function ShouldActivateAimbot(cmd)
 			toggleActive = not toggleActive
 		end
 		shouldActivate = toggleActive
-
-	-- Mode 3: On Click - activate once per key press
-	elseif cfg.ActivationMode == 3 then
-		if currentKeyState and not previousKeyState then
-			clickProcessed = false
-		end
-		if not currentKeyState and previousKeyState then
-			clickProcessed = true -- Reset for next click
-		end
-		shouldActivate = currentKeyState and not clickProcessed
 	end
 
 	previousKeyState = currentKeyState
@@ -301,11 +294,11 @@ local function Normalize(vec)
 	if len < 0.0001 then
 		return 0
 	end
-	
+
 	vec.x = vec.x / len
 	vec.y = vec.y / len
 	vec.z = vec.z / len
-	
+
 	return len
 end
 
@@ -321,17 +314,24 @@ end
 
 -- Private helpers -----
 local function onDraw()
+	TickProfiler.BeginSection("Draw:Total")
+
 	-- Zero Trust: Assert external state
 	assert(G.Menu, "main: G.Menu is nil")
 	assert(G.Menu.Aimbot, "main: G.Menu.Aimbot is nil")
 
 	local cfg = G.Menu.Aimbot
+	local vis = G.Menu.Visuals
+
+	-- Update profiler state
+	TickProfiler.SetEnabled(vis.ShowProfiler)
 
 	-- Guard clause: Check if aimbot is enabled
 	if not cfg.Enabled then
 		if origProjValue ~= nil and gui.GetValue("projectile aimbot") ~= origProjValue then
 			gui.SetValue("projectile aimbot", origProjValue)
 		end
+		TickProfiler.EndSection("Draw:Total")
 		return
 	end
 
@@ -341,6 +341,7 @@ local function onDraw()
 		gui.SetValue("projectile aimbot", 0)
 	end
 
+	TickProfiler.BeginSection("Draw:PathCleanup")
 	-- Clean up old path data (remove expired timetables)
 	if state.storedpath.path and state.storedpath.timetable then
 		local cleanedpath, cleanedtime = CleanTimeTable(state.storedpath.path, state.storedpath.timetable)
@@ -354,7 +355,9 @@ local function onDraw()
 		state.storedpath.projpath = cleanedprojpath
 		state.storedpath.projtimetable = cleanedprojtime
 	end
+	TickProfiler.EndSection("Draw:PathCleanup")
 
+	TickProfiler.BeginSection("Draw:Visuals")
 	-- Draw advanced visualizations from state
 	Visuals.draw({
 		path = state.storedpath.path,
@@ -362,32 +365,38 @@ local function onDraw()
 		multipointPos = state.multipointPos,
 		target = state.target,
 	})
+	TickProfiler.EndSection("Draw:Visuals")
 
+	TickProfiler.BeginSection("Draw:Confidence")
 	-- Draw confidence score from state
-	local vis = G.Menu.Visuals
 	if vis.ShowConfidence and state.confidence then
 		local screenW, screenH = draw.GetScreenSize()
 		local text = string.format("Confidence: %.1f%%", state.confidence)
-		
+
 		-- Color based on confidence
 		local r, g, b = 255, 255, 255
 		if state.confidence >= 70 then
-			r, g, b = 100, 255, 100  -- Green
+			r, g, b = 100, 255, 100 -- Green
 		elseif state.confidence >= 50 then
-			r, g, b = 255, 255, 100  -- Yellow
+			r, g, b = 255, 255, 100 -- Yellow
 		else
-			r, g, b = 255, 100, 100  -- Red
+			r, g, b = 255, 100, 100 -- Red
 		end
-		
+
 		draw.Color(r, g, b, 255)
 		draw.SetFont(fonts.Create("Tahoma", 16, 700))
 		local textW, textH = draw.GetTextSize(text)
 		draw.Text(screenW / 2 - textW / 2, screenH / 2 + 30, text)
 	end
+	TickProfiler.EndSection("Draw:Confidence")
+
+	TickProfiler.EndSection("Draw:Total")
 end
 
 ---@param cmd UserCmd
 local function onCreateMove(cmd)
+	TickProfiler.BeginSection("CM:Total")
+
 	-- Zero Trust: Assert config exists
 	assert(G.Menu, "main: G.Menu is nil")
 	assert(G.Menu.Aimbot, "main: G.Menu.Aimbot is nil")
@@ -405,49 +414,58 @@ local function onCreateMove(cmd)
 
 	-- Guard clauses
 	if not cfg.Enabled then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
-	
+
 	-- Guard clauses
 	local netchannel = clientstate.GetNetChannel()
 	if not netchannel then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
 
 	if clientstate.GetClientSignonState() <= E_SignonState.SIGNONSTATE_SPAWN then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
-	
+
 	if not utils.weapon.CanShoot() then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
-	
+
 	-- Pass cmd to check attack button state from command
 	if not ShouldActivateAimbot(cmd) then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
 
 	-- Guard clause: Get local player
 	local plocal = entities.GetLocalPlayer()
 	if not plocal then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
 
 	-- Guard clause: Get weapon
 	local weapon = plocal:GetPropEntity("m_hActiveWeapon")
 	if not weapon then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
 
 	-- Guard clause: Get projectile info
 	local info = GetProjectileInfo(weapon:GetPropInt("m_iItemDefinitionIndex"))
 	if not info then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
 
 	local enemyTeam = plocal:GetTeamNumber() == 2 and 3 or 2
 	local localPos = plocal:GetAbsOrigin()
 
+	TickProfiler.BeginSection("CM:EntityScan")
 	---@type Entity[]
 	local entitylist = {}
 	ProcessClass(localPos, "CTFPlayer", enemyTeam, entitylist, cfg.MaxDistance)
@@ -460,9 +478,11 @@ local function onCreateMove(cmd)
 		ProcessClass(localPos, "CObjectDispenser", enemyTeam, entitylist, cfg.MaxDistance)
 		ProcessClass(localPos, "CObjectTeleporter", enemyTeam, entitylist, cfg.MaxDistance)
 	end
+	TickProfiler.EndSection("CM:EntityScan")
 
 	-- Guard clause: Check if we have targets
 	if #entitylist == 0 then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
 
@@ -475,6 +495,7 @@ local function onCreateMove(cmd)
 	local gravity = sv_gravity * 0.5 * info:GetGravity(charge)
 	local weaponID = weapon:GetWeaponID()
 
+	TickProfiler.BeginSection("CM:FOVSort")
 	local sortedEntities = {}
 	local RAD2DEG = 180 / math.pi
 	for _, entity in ipairs(entitylist) do
@@ -496,37 +517,80 @@ local function onCreateMove(cmd)
 	table.sort(sortedEntities, function(a, b)
 		return a.fov < b.fov
 	end)
+	TickProfiler.EndSection("CM:FOVSort")
 
 	-- Guard clause: Check if we have targets in FOV
 	if #sortedEntities == 0 then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
 
+	TickProfiler.BeginSection("CM:StrafeRecord")
+	-- Fedoraware Optional: Record velocity history for strafe prediction
+	-- Periodic cleanup to prevent memory leaks
+	StrafePredictor.periodicCleanup()
+
+	-- Update velocity history for all potential targets
+	for _, entData in ipairs(sortedEntities) do
+		local entity = entData.entity
+		if entity:IsPlayer() then
+			local velocity = entity:EstimateAbsVelocity()
+			if velocity then
+				StrafePredictor.recordVelocity(entity:GetIndex(), velocity, 10)
+			end
+		end
+	end
+	TickProfiler.EndSection("CM:StrafeRecord")
+
+	TickProfiler.BeginSection("CM:PredictionLoop")
 	for _, entData in ipairs(sortedEntities) do
 		local entity = entData.entity
 		local distance = (localPos - entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5):Length()
-		local time = (distance / speed) + netchannel:GetLatency(E_Flows.FLOW_INCOMING)
+		-- Fedoraware Critical #1: Full latency compensation (outgoing + incoming + lerp)
+		local time = Latency.getAdjustedPredictionTime(distance, speed)
 		local lazyness = cfg.MinAccuracy
 			+ (cfg.MaxAccuracy - cfg.MinAccuracy) * (math.min(distance / cfg.MaxDistance, 1.0) ^ 1.5)
 
+		TickProfiler.BeginSection("CM:SimPlayer")
 		local path, lastPos, timetable = SimulatePlayer(entity, time, lazyness)
+		TickProfiler.EndSection("CM:SimPlayer")
+
 		local drop = gravity * time * time
 
+		-- TODO: Deep integration - Apply strafe prediction to each simulation tick
+		-- Currently only recording history; deeper integration requires modifying PlayerTick.simulateTick
+		-- to accept and use StrafePredictor.predictStrafeDirection per tick
+
+		TickProfiler.BeginSection("CM:Multipoint")
 		local _, multipointPos = multipoint.Run(entity, weapon, info, eyePos, lastPos, drop)
+		TickProfiler.EndSection("CM:Multipoint")
 		if multipointPos then
 			lastPos = multipointPos
 			state.multipointPos = multipointPos
 		end
 
+		TickProfiler.BeginSection("CM:Ballistics")
 		local angle = utils.math.SolveBallisticArc(eyePos, lastPos, speed, gravity)
+		TickProfiler.EndSection("CM:Ballistics")
+
 		if angle then
 			--- check visibility
 			local firePos = info:GetFirePosition(plocal, eyePos, angle, weapon:IsViewModelFlipped())
+
+			-- Fedoraware Critical #2: Weapon-specific fire position offsets
+			local weaponDefIndex = weapon:GetPropInt("m_iItemDefinitionIndex")
+			local weaponOffset = WeaponOffsets.getFirePosition(plocal, eyePos, angle, weaponDefIndex)
+			if weaponOffset then
+				firePos = weaponOffset
+			end
+
 			local translatedAngle = utils.math.SolveBallisticArc(firePos, lastPos, speed, gravity)
 
 			if translatedAngle then
+				TickProfiler.BeginSection("CM:SimProj")
 				local projpath, hit, fullSim, projtimetable =
 					SimulateProj(entity, lastPos, firePos, translatedAngle, info, plocal:GetTeamNumber(), time, charge)
+				TickProfiler.EndSection("CM:SimProj")
 
 				if fullSim then
 					local confidence =
@@ -547,7 +611,7 @@ local function onCreateMove(cmd)
 						state.secondaryfire = secondaryFire
 						state.silent = not noSilent
 						state.confidence = confidence
-						
+
 						-- Found valid target, apply aim
 						break
 					end
@@ -555,9 +619,11 @@ local function onCreateMove(cmd)
 			end
 		end
 	end
+	TickProfiler.EndSection("CM:PredictionLoop")
 
 	-- If no angle calculated, nothing to do
 	if not state.angle then
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
 
@@ -591,6 +657,8 @@ local function onCreateMove(cmd)
 	end
 
 	cmd.viewangles = Vector3(state.angle:Unpack())
+
+	TickProfiler.EndSection("CM:Total")
 end
 
 local function getKeyName()

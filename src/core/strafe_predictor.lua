@@ -7,6 +7,10 @@ local StrafePredictor = {}
 -- Velocity history storage (global per-player)
 local velocityHistory = {}
 
+-- Cleanup tracking
+local lastCleanupTick = 0
+local CLEANUP_INTERVAL = 300 -- Clean every 300 ticks (~5 seconds)
+
 ---Records velocity sample for a player
 ---@param entityIndex integer
 ---@param velocity Vector3
@@ -40,6 +44,36 @@ end
 ---Clears all velocity history
 function StrafePredictor.clearAllHistory()
 	velocityHistory = {}
+end
+
+---Periodically cleans up stale history entries (players no longer in game)
+---Call this once per tick to prevent memory leaks
+function StrafePredictor.periodicCleanup()
+	local currentTick = globals.TickCount()
+	
+	-- Only cleanup every CLEANUP_INTERVAL ticks
+	if currentTick - lastCleanupTick < CLEANUP_INTERVAL then
+		return
+	end
+	
+	lastCleanupTick = currentTick
+	
+	-- Get list of all valid player indices
+	local validIndices = {}
+	for _, player in pairs(entities.FindByClass("CTFPlayer")) do
+		if player then
+			validIndices[player:GetIndex()] = true
+		end
+	end
+	
+	-- Remove history for invalid indices
+	local removed = 0
+	for entityIndex, _ in pairs(velocityHistory) do
+		if not validIndices[entityIndex] then
+			velocityHistory[entityIndex] = nil
+			removed = removed + 1
+		end
+	end
 end
 
 ---Calculates average yaw change from velocity history

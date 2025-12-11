@@ -9,8 +9,8 @@ local DefaultConfig = {
 	Aimbot = {
 		Enabled = true,
 		AimKey = 0, -- KEY_NONE
-		ActivationMode = 0, -- 0=Always, 1=On Hold, 2=Toggle, 3=On Click
-		OnAttack = false, -- Activate when attacking (works with any mode)
+		ActivationMode = 0, -- 0=Always, 1=On Hold, 2=Toggle
+		OnAttack = false, -- Activate when cmd has attack input (combines with mode)
 		AimFOV = 15,
 		AimMethod = "silent +", -- "silent +", "silent", "normal"
 		MaxDistance = 3000,
@@ -25,6 +25,7 @@ local DefaultConfig = {
 	Visuals = {
 		Enabled = true,
 		ShowConfidence = true,
+		ShowProfiler = false, -- Performance profiler overlay
 		DrawPlayerPath = true,
 		DrawProjectilePath = true,
 		DrawBoundingBox = true,

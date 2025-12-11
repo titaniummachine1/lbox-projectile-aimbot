@@ -51,10 +51,10 @@ local function drawMenu()
 		TimMenu.NextLine()
 
 		-- Activation Mode Dropdown
-		local activationModes = { "Always", "On Hold", "Toggle", "On Click" }
+		local activationModes = { "Always", "On Hold", "Toggle" }
 		local dropdownValue = TimMenu.Dropdown("Activation Mode", cfg.ActivationMode + 1, activationModes)
 		cfg.ActivationMode = dropdownValue - 1 -- Convert back to 0-based
-		TimMenu.Tooltip("Always=Always active, Hold=While key held, Toggle=Press to toggle, Click=Single press")
+		TimMenu.Tooltip("Always=Always active, Hold=While key held, Toggle=Press to toggle")
 		TimMenu.NextLine()
 
 		-- Only show keybind if not in Always mode (mode 0)
@@ -112,6 +112,10 @@ local function drawMenu()
 	if ui.SelectedTab == 2 then
 		TimMenu.BeginSector("Display Options")
 		vis.Enabled = TimMenu.Checkbox("Enable Visuals", vis.Enabled)
+		TimMenu.NextLine()
+		
+		vis.ShowProfiler = TimMenu.Checkbox("Performance Profiler", vis.ShowProfiler)
+		TimMenu.Tooltip("Shows performance and memory usage overlay (helps find memory leaks)")
 		TimMenu.NextLine()
 
 		vis.ShowConfidence = TimMenu.Checkbox("Show Confidence Score", vis.ShowConfidence)
