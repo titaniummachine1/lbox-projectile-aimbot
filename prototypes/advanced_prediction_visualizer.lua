@@ -1,8 +1,9 @@
 --[[
 	Advanced Prediction Path Visualizer (prototype)
-	- Faithful Source-style movement physics
-	- Optional per-tick override of viewangle and wishdir (relative to view)
-	- Simplified: no future wishdir prediction/Markov; holds last observed wishdir
+	- Tick-by-tick Source-style-ish movement simulation (collision + ground snap)
+	- Yaw seed: real eye/view yaw (local player view)
+	- Yaw delta per tick: derived from velocity heading changes (EMA), frozen during simulation
+	- Wishdir: held constant relative-to-yaw (cmd when available; else motion-derived)
 ]]
 
 -- Config
@@ -16,79 +17,503 @@ local IN_BACK = (1 << 4)
 local IN_MOVELEFT = (1 << 9)
 local IN_MOVERIGHT = (1 << 10)
 
--- Server cvars (client.GetConVar returns ok, value)
-local _, sv_gravity = client.GetConVar("sv_gravity")
-local _, sv_stepsize = client.GetConVar("sv_stepsize")
-local _, sv_friction = client.GetConVar("sv_friction")
-local _, sv_stopspeed = client.GetConVar("sv_stopspeed")
-local _, sv_accelerate = client.GetConVar("sv_accelerate")
-local _, sv_airaccelerate = client.GetConVar("sv_airaccelerate")
-
-local gravity = sv_gravity or 800
-local stepSize = sv_stepsize or 18
-local friction = sv_friction or 4
-local stopSpeed = sv_stopspeed or 100
-local accelerate = sv_accelerate or 10
-local airAccelerate = sv_airaccelerate or 10
-
--- Strafe tracking (velocity-based like A_Swing_Prediction)
-local lastEyeYaw = {} -- Track eye yaw for simulation start
-local lastVelocityYaw = {} -- Track velocity yaw for delta calculation
-local strafeRates = {} -- Per-tick yaw delta (smoothed)
-
--- Stable wish direction (yaw-relative) resolved from movement
-local stableWishDir = {}
-local lastOrigin = {}
-
 local DEG2RAD = math.pi / 180
+local RAD2DEG = 180 / math.pi
 
--- Physics helpers
-local function Accelerate(velocity, wishdir, wishspeed, accel, frametime)
+-- Server cvars (client.GetConVar returns ok, value)
+local function getConVarNumber(name, fallback)
+	assert(name, "getConVarNumber: name is nil")
+
+	local ok, value = client.GetConVar(name)
+	if ok and type(value) == "number" then
+		return value
+	end
+
+	return fallback
+end
+
+local gravity = getConVarNumber("sv_gravity", 800)
+local stepSize = getConVarNumber("sv_stepsize", 18)
+local friction = getConVarNumber("sv_friction", 4)
+local stopSpeed = getConVarNumber("sv_stopspeed", 100)
+local accelerate = getConVarNumber("sv_accelerate", 10)
+local airAccelerate = getConVarNumber("sv_airaccelerate", 10)
+
+-- Local constants / utilities -----
+
+local function normalizeAngle(angle)
+	assert(type(angle) == "number", "normalizeAngle: angle must be a number")
+	return ((angle + 180) % 360) - 180
+end
+
+local function length2D(vec)
+	assert(vec, "length2D: vec is nil")
+	return math.sqrt(vec.x * vec.x + vec.y * vec.y)
+end
+
+local function normalize2DInPlace(vec)
+	assert(vec, "normalize2DInPlace: vec is nil")
+
+	local len = length2D(vec)
+	if len <= 0.0001 then
+		vec.x, vec.y, vec.z = 0, 0, 0
+		return 0
+	end
+
+	vec.x = vec.x / len
+	vec.y = vec.y / len
+	vec.z = 0
+	return len
+end
+
+local function dot3(vecA, vecB)
+	assert(vecA, "dot3: vecA is nil")
+	assert(vecB, "dot3: vecB is nil")
+	return (vecA.x * vecB.x) + (vecA.y * vecB.y) + (vecA.z * vecB.z)
+end
+
+local function normalize3DInPlace(vec)
+	assert(vec, "normalize3DInPlace: vec is nil")
+
+	local len = math.sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z)
+	if len <= 0.0001 then
+		vec.x, vec.y, vec.z = 0, 0, 0
+		return 0
+	end
+
+	vec.x = vec.x / len
+	vec.y = vec.y / len
+	vec.z = vec.z / len
+	return len
+end
+
+local function copyVector3(dest, src)
+	assert(dest, "copyVector3: dest is nil")
+	assert(src, "copyVector3: src is nil")
+	dest.x = src.x
+	dest.y = src.y
+	dest.z = src.z
+end
+
+local function tryGetYaw(anyAngles)
+	if anyAngles == nil then
+		return nil
+	end
+
+	local t = type(anyAngles)
+	if t == "number" then
+		return anyAngles
+	end
+	if t == "table" then
+		return anyAngles.yaw or anyAngles.y or anyAngles[2]
+	end
+
+	-- userdata/cdata: safest to pcall for field access
+	local ok, val = pcall(function()
+		return anyAngles.yaw
+	end)
+	if ok and type(val) == "number" then
+		return val
+	end
+
+	ok, val = pcall(function()
+		return anyAngles.y
+	end)
+	if ok and type(val) == "number" then
+		return val
+	end
+
+	ok, val = pcall(function()
+		return anyAngles[2]
+	end)
+	if ok and type(val) == "number" then
+		return val
+	end
+
+	return nil
+end
+
+local function getYawBasis(yaw)
+	assert(type(yaw) == "number", "getYawBasis: yaw must be a number")
+
+	-- Use engine-provided basis vectors to avoid left/right sign mistakes.
+	local angles = EulerAngles(0, yaw, 0)
+	local forward, right = vector.AngleVectors(angles)
+	assert(forward and right, "getYawBasis: vector.AngleVectors returned nil")
+
+	forward.z = 0
+	right.z = 0
+	normalize2DInPlace(forward)
+	normalize2DInPlace(right)
+
+	return forward, right
+end
+
+-- Convert world-space wish direction to yaw-relative (forward/right basis)
+local function worldToRelativeWishDir(worldWishDir, yaw)
+	assert(worldWishDir, "worldToRelativeWishDir: worldWishDir is nil")
+	assert(type(yaw) == "number", "worldToRelativeWishDir: yaw must be a number")
+
+	local forward, right = getYawBasis(yaw)
+	local relX = dot3(worldWishDir, forward)
+	local relY = dot3(worldWishDir, right)
+	return Vector3(relX, relY, 0)
+end
+
+-- Convert yaw-relative wish direction (forward/right basis) to world-space
+local function relativeToWorldWishDir(relWishDir, yaw)
+	assert(relWishDir, "relativeToWorldWishDir: relWishDir is nil")
+	assert(type(yaw) == "number", "relativeToWorldWishDir: yaw must be a number")
+
+	local forward, right = getYawBasis(yaw)
+	local worldX = forward.x * relWishDir.x + right.x * relWishDir.y
+	local worldY = forward.y * relWishDir.x + right.y * relWishDir.y
+	return Vector3(worldX, worldY, 0)
+end
+
+-- Private helpers -----
+
+local StrafeTracker = {}
+StrafeTracker.__index = StrafeTracker
+
+function StrafeTracker.new()
+	local self = setmetatable({}, StrafeTracker)
+	self.lastEyeYaw = {} -- idx -> yaw degrees
+	self.lastVelocityYaw = {} -- idx -> yaw degrees
+	self.yawDeltaPerTick = {} -- idx -> deg/tick (EMA)
+	return self
+end
+
+local function getEntityEyeYaw(entity)
+	assert(entity, "getEntityEyeYaw: entity is nil")
+
+	-- Some builds expose direct eye yaw property
+	local eyeYaw = entity:GetPropFloat("m_angEyeAngles[1]")
+	if type(eyeYaw) == "number" then
+		return eyeYaw
+	end
+
+	-- Some builds expose m_angEyeAngles as vector
+	if entity.GetPropVector and type(entity.GetPropVector) == "function" then
+		local eyeVec = entity:GetPropVector("tfnonlocaldata", "m_angEyeAngles")
+		if eyeVec and type(eyeVec.y) == "number" then
+			return eyeVec.y
+		end
+	end
+
+	return nil
+end
+
+local function getCmdViewYaw(cmd)
+	assert(cmd, "getCmdViewYaw: cmd is nil")
+
+	if not (cmd.GetViewAngles and type(cmd.GetViewAngles) == "function") then
+		return nil
+	end
+
+	-- Many environments return (pitch, yaw, roll). Take yaw explicitly.
+	local _, yaw = cmd:GetViewAngles()
+	if type(yaw) == "number" then
+		return yaw
+	end
+
+	-- Fallback: some return a single EulerAngles/table object.
+	local angles = cmd:GetViewAngles()
+	return tryGetYaw(angles)
+end
+
+local function getLocalViewYaw(cmd)
+	if cmd then
+		local cmdYaw = getCmdViewYaw(cmd)
+		if type(cmdYaw) == "number" then
+			return cmdYaw
+		end
+	end
+
+	local viewAngles = engine.GetViewAngles()
+	return tryGetYaw(viewAngles)
+end
+
+local function pickRelativeWishDirFromCmd(fwd, side, stable, prev)
+	assert(type(fwd) == "number", "pickRelativeWishDirFromCmd: fwd must be a number")
+	assert(type(side) == "number", "pickRelativeWishDirFromCmd: side must be a number")
+
+	local rel1 = Vector3(fwd, side, 0)
+	if normalize2DInPlace(rel1) <= 0 then
+		return nil
+	end
+
+	-- If we have any reference direction, pick the best sign combination.
+	local ref = stable or prev
+	if not ref then
+		return rel1
+	end
+
+	local best = rel1
+	local bestDot = dot3(rel1, ref)
+
+	local rel2 = Vector3(fwd, -side, 0)
+	if normalize2DInPlace(rel2) > 0 then
+		local d = dot3(rel2, ref)
+		if d > bestDot then
+			best, bestDot = rel2, d
+		end
+	end
+
+	local rel3 = Vector3(-fwd, side, 0)
+	if normalize2DInPlace(rel3) > 0 then
+		local d = dot3(rel3, ref)
+		if d > bestDot then
+			best, bestDot = rel3, d
+		end
+	end
+
+	local rel4 = Vector3(-fwd, -side, 0)
+	if normalize2DInPlace(rel4) > 0 then
+		local d = dot3(rel4, ref)
+		if d > bestDot then
+			best, bestDot = rel4, d
+		end
+	end
+
+	return best
+end
+
+function StrafeTracker.updateEyeYaw(self, entity, cmd)
+	assert(self, "StrafeTracker.updateEyeYaw: self is nil")
+	assert(entity, "StrafeTracker.updateEyeYaw: entity is nil")
+
+	local idx = entity:GetIndex()
+	assert(idx, "StrafeTracker.updateEyeYaw: idx is nil")
+
+	local yaw = nil
+	if entity == entities.GetLocalPlayer() then
+		yaw = getLocalViewYaw(cmd)
+	else
+		yaw = getEntityEyeYaw(entity)
+	end
+
+	if type(yaw) == "number" then
+		self.lastEyeYaw[idx] = yaw
+	end
+end
+
+function StrafeTracker.updateFromVelocity(self, entity)
+	assert(self, "StrafeTracker.updateFromVelocity: self is nil")
+	assert(entity, "StrafeTracker.updateFromVelocity: entity is nil")
+
+	local idx = entity:GetIndex()
+	assert(idx, "StrafeTracker.updateFromVelocity: idx is nil")
+
+	local vel = entity:EstimateAbsVelocity()
+	if not vel then
+		return
+	end
+
+	-- Skip yaw deltas when barely moving (avoid noise)
+	local speed2DSqr = vel.x * vel.x + vel.y * vel.y
+	local minSpeed = 10
+	if speed2DSqr < (minSpeed * minSpeed) then
+		self.lastVelocityYaw[idx] = math.atan(vel.y, vel.x) * RAD2DEG
+		return
+	end
+
+	local velYaw = math.atan(vel.y, vel.x) * RAD2DEG
+	local lastYaw = self.lastVelocityYaw[idx]
+
+	if type(lastYaw) == "number" then
+		local angleDelta = normalizeAngle(velYaw - lastYaw)
+		local prev = self.yawDeltaPerTick[idx] or 0
+		self.yawDeltaPerTick[idx] = prev * 0.8 + angleDelta * 0.2
+	end
+
+	self.lastVelocityYaw[idx] = velYaw
+end
+
+function StrafeTracker.getYawSeed(self, idx)
+	assert(self, "StrafeTracker.getYawSeed: self is nil")
+	assert(idx, "StrafeTracker.getYawSeed: idx is nil")
+	return self.lastEyeYaw[idx] or 0
+end
+
+function StrafeTracker.getYawDeltaPerTick(self, idx)
+	assert(self, "StrafeTracker.getYawDeltaPerTick: self is nil")
+	assert(idx, "StrafeTracker.getYawDeltaPerTick: idx is nil")
+	return self.yawDeltaPerTick[idx] or 0
+end
+
+local WishDirTracker = {}
+WishDirTracker.__index = WishDirTracker
+
+function WishDirTracker.new()
+	local self = setmetatable({}, WishDirTracker)
+	self.cmdWishDir = {} -- idx -> Vector3 (relative-to-yaw, unit)
+	self.stableWishDir = {} -- idx -> Vector3 (relative-to-yaw, unit)
+	self.lastOrigin = {} -- idx -> Vector3 (world)
+	return self
+end
+
+function WishDirTracker.updateFromCmd(self, entity, cmd)
+	assert(self, "WishDirTracker.updateFromCmd: self is nil")
+	assert(entity, "WishDirTracker.updateFromCmd: entity is nil")
+
+	local idx = entity:GetIndex()
+	assert(idx, "WishDirTracker.updateFromCmd: idx is nil")
+
+	if not cmd then
+		return
+	end
+
+	local fwd = cmd:GetForwardMove()
+	local side = cmd:GetSideMove()
+
+	-- Ignore minimal movements
+	if math.abs(fwd) < 5 and math.abs(side) < 5 then
+		self.cmdWishDir[idx] = nil
+		return
+	end
+
+	local rel = pickRelativeWishDirFromCmd(fwd, side, self.stableWishDir[idx], self.cmdWishDir[idx])
+	if not rel then
+		self.cmdWishDir[idx] = nil
+		return
+	end
+
+	self.cmdWishDir[idx] = rel
+end
+
+function WishDirTracker.updateFromMotion(self, entity, yaw)
+	assert(self, "WishDirTracker.updateFromMotion: self is nil")
+	assert(entity, "WishDirTracker.updateFromMotion: entity is nil")
+	assert(type(yaw) == "number", "WishDirTracker.updateFromMotion: yaw must be a number")
+
+	local idx = entity:GetIndex()
+	assert(idx, "WishDirTracker.updateFromMotion: idx is nil")
+
+	local currentPos = entity:GetAbsOrigin()
+	if not currentPos then
+		return
+	end
+
+	local lastPos = self.lastOrigin[idx]
+	if lastPos then
+		local delta = currentPos - lastPos
+		delta.z = 0
+
+		local dist = length2D(delta)
+		if dist > 0.1 then
+			delta.x = delta.x / dist
+			delta.y = delta.y / dist
+			delta.z = 0
+
+			local relWish = worldToRelativeWishDir(delta, yaw)
+			normalize2DInPlace(relWish)
+			self.stableWishDir[idx] = relWish
+		end
+	end
+
+	self.lastOrigin[idx] = Vector3(currentPos.x, currentPos.y, currentPos.z)
+end
+
+function WishDirTracker.getRelativeWishDir(self, idx)
+	assert(self, "WishDirTracker.getRelativeWishDir: self is nil")
+	assert(idx, "WishDirTracker.getRelativeWishDir: idx is nil")
+
+	local cmdDir = self.cmdWishDir[idx]
+	if cmdDir then
+		return cmdDir
+	end
+
+	return self.stableWishDir[idx]
+end
+
+-- Physics helpers (in-place) -----
+
+local function accelerateInPlace(velocity, wishdir, wishspeed, accel, frametime)
+	assert(velocity, "accelerateInPlace: velocity is nil")
+	assert(wishdir, "accelerateInPlace: wishdir is nil")
+	assert(type(wishspeed) == "number", "accelerateInPlace: wishspeed must be a number")
+	assert(type(accel) == "number", "accelerateInPlace: accel must be a number")
+	assert(type(frametime) == "number", "accelerateInPlace: frametime must be a number")
+
 	local currentspeed = velocity:Dot(wishdir)
 	local addspeed = wishspeed - currentspeed
 	if addspeed <= 0 then
 		return
 	end
+
 	local accelspeed = accel * frametime * wishspeed
 	if accelspeed > addspeed then
 		accelspeed = addspeed
 	end
-	velocity = velocity + wishdir * accelspeed
+
+	velocity.x = velocity.x + wishdir.x * accelspeed
+	velocity.y = velocity.y + wishdir.y * accelspeed
+	velocity.z = velocity.z + wishdir.z * accelspeed
 end
 
-local function GetAirSpeedCap(target)
+local function getAirSpeedCap(target)
+	assert(target, "getAirSpeedCap: target is nil")
+
 	if target:InCond(76) then -- TFCond_Charging
-		local _, tf_max_charge_speed = client.GetConVar("tf_max_charge_speed")
-		return tf_max_charge_speed or 750
+		return getConVarNumber("tf_max_charge_speed", 750)
 	end
-	return 30.0 * (target:AttributeHookFloat("mod_air_control") or 1.0)
+
+	-- Base cap ~30 HU/s scaled by air control attribute
+	local airControl = target:AttributeHookFloat("mod_air_control") or 1.0
+	return 30.0 * airControl
 end
 
-local function AirAccelerate(v, wishdir, wishspeed, accel, dt, surf, target)
-	wishspeed = math.min(wishspeed, GetAirSpeedCap(target))
+local function airAccelerateInPlace(v, wishdir, wishspeed, accel, dt, surf, target)
+	assert(v, "airAccelerateInPlace: v is nil")
+	assert(wishdir, "airAccelerateInPlace: wishdir is nil")
+	assert(type(wishspeed) == "number", "airAccelerateInPlace: wishspeed must be a number")
+	assert(type(accel) == "number", "airAccelerateInPlace: accel must be a number")
+	assert(type(dt) == "number", "airAccelerateInPlace: dt must be a number")
+	assert(type(surf) == "number", "airAccelerateInPlace: surf must be a number")
+	assert(target, "airAccelerateInPlace: target is nil")
+
+	wishspeed = math.min(wishspeed, getAirSpeedCap(target))
+
 	local currentspeed = v:Dot(wishdir)
 	local addspeed = wishspeed - currentspeed
 	if addspeed <= 0 then
 		return
 	end
+
 	local accelspeed = math.min(accel * wishspeed * dt * surf, addspeed)
-	v = v + wishdir * accelspeed
+	v.x = v.x + wishdir.x * accelspeed
+	v.y = v.y + wishdir.y * accelspeed
+	v.z = v.z + wishdir.z * accelspeed
 end
 
-local function CheckIsOnGround(origin, mins, maxs, index)
+local function checkIsOnGround(origin, mins, maxs, index)
+	assert(origin, "checkIsOnGround: origin is nil")
+	assert(mins, "checkIsOnGround: mins is nil")
+	assert(maxs, "checkIsOnGround: maxs is nil")
+	assert(index, "checkIsOnGround: index is nil")
+
 	local down = Vector3(origin.x, origin.y, origin.z - 18)
 	local trace = engine.TraceHull(origin, down, mins, maxs, MASK_PLAYERSOLID, function(ent)
 		return ent:GetIndex() ~= index
 	end)
+
 	return trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7
 end
 
-local function StayOnGround(origin, mins, maxs, step_size, index)
+local function stayOnGround(origin, mins, maxs, step_size, index)
+	assert(origin, "stayOnGround: origin is nil")
+	assert(mins, "stayOnGround: mins is nil")
+	assert(maxs, "stayOnGround: maxs is nil")
+	assert(type(step_size) == "number", "stayOnGround: step_size must be a number")
+	assert(index, "stayOnGround: index is nil")
+
 	local vstart = Vector3(origin.x, origin.y, origin.z + 2)
 	local vend = Vector3(origin.x, origin.y, origin.z - step_size)
 	local trace = engine.TraceHull(vstart, vend, mins, maxs, MASK_PLAYERSOLID, function(ent)
 		return ent:GetIndex() ~= index
 	end)
+
 	if trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7 then
 		local delta = math.abs(origin.z - trace.endpos.z)
 		if delta > 0.5 then
@@ -98,29 +523,47 @@ local function StayOnGround(origin, mins, maxs, step_size, index)
 			return true
 		end
 	end
+
 	return false
 end
 
-local function Friction(velocity, is_on_ground, frametime)
-	local speed = velocity:LengthSqr()
-	if speed < 0.01 then
+local function applyFrictionInPlace(velocity, isOnGround, frametime)
+	assert(velocity, "applyFrictionInPlace: velocity is nil")
+	assert(type(isOnGround) == "boolean", "applyFrictionInPlace: isOnGround must be a boolean")
+	assert(type(frametime) == "number", "applyFrictionInPlace: frametime must be a number")
+
+	local speed = length2D(velocity)
+	if speed < 0.1 then
 		return
 	end
+
 	local drop = 0
-	if is_on_ground then
+	if isOnGround then
 		local control = speed < stopSpeed and stopSpeed or speed
 		drop = drop + control * friction * frametime
 	end
-	local newspeed = speed - drop
-	if newspeed ~= speed then
-		newspeed = newspeed / speed
-		velocity = velocity * newspeed
+
+	local newSpeed = speed - drop
+	if newSpeed < 0 then
+		newSpeed = 0
+	end
+
+	if newSpeed ~= speed then
+		local scale = newSpeed / speed
+		velocity.x = velocity.x * scale
+		velocity.y = velocity.y * scale
 	end
 end
 
-local function ClipVelocity(velocity, normal, overbounce)
-	local backoff = velocity:Dot(normal) * overbounce
-	velocity = velocity - normal * backoff
+local function clipVelocityInPlace(velocity, normal, overbounce)
+	assert(velocity, "clipVelocityInPlace: velocity is nil")
+	assert(normal, "clipVelocityInPlace: normal is nil")
+	assert(type(overbounce) == "number", "clipVelocityInPlace: overbounce must be a number")
+
+	local backoff = dot3(velocity, normal) * overbounce
+	velocity.x = velocity.x - normal.x * backoff
+	velocity.y = velocity.y - normal.y * backoff
+	velocity.z = velocity.z - normal.z * backoff
 
 	if math.abs(velocity.x) < 0.01 then
 		velocity.x = 0
@@ -133,290 +576,211 @@ local function ClipVelocity(velocity, normal, overbounce)
 	end
 end
 
-local function TryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
-	local MAX_CLIP_PLANES = 5
-	local time_left = tickinterval
-	local planes = {}
-	local numplanes = 0
+local function tryPlayerMoveInPlace(origin, velocity, mins, maxs, index, tickinterval)
+	assert(origin, "tryPlayerMoveInPlace: origin is nil")
+	assert(velocity, "tryPlayerMoveInPlace: velocity is nil")
+	assert(mins, "tryPlayerMoveInPlace: mins is nil")
+	assert(maxs, "tryPlayerMoveInPlace: maxs is nil")
+	assert(index, "tryPlayerMoveInPlace: index is nil")
+	assert(type(tickinterval) == "number", "tryPlayerMoveInPlace: tickinterval must be a number")
 
-	for bumpcount = 0, 3 do
-		if time_left <= 0 then
+	local MAX_CLIP_PLANES = 5
+	local timeLeft = tickinterval
+	local planes = {}
+	local numPlanes = 0
+
+	for _ = 1, 4 do
+		if timeLeft <= 0 then
 			break
 		end
 
-		local end_pos = Vector3(
-			origin.x + velocity.x * time_left,
-			origin.y + velocity.y * time_left,
-			origin.z + velocity.z * time_left
+		local endPos = Vector3(
+			origin.x + velocity.x * timeLeft,
+			origin.y + velocity.y * timeLeft,
+			origin.z + velocity.z * timeLeft
 		)
 
-		local trace = engine.TraceHull(origin, end_pos, mins, maxs, MASK_PLAYERSOLID, function(ent)
+		local trace = engine.TraceHull(origin, endPos, mins, maxs, MASK_PLAYERSOLID, function(ent)
 			return ent:GetIndex() ~= index
 		end)
 
 		if trace.fraction > 0 then
-			origin = trace.endpos
-			numplanes = 0
+			copyVector3(origin, trace.endpos)
+			numPlanes = 0
 		end
 
 		if trace.fraction == 1 then
 			break
 		end
 
-		time_left = time_left - time_left * trace.fraction
+		timeLeft = timeLeft - timeLeft * trace.fraction
 
-		if trace.plane and numplanes < MAX_CLIP_PLANES then
-			planes[numplanes] = trace.plane
-			numplanes = numplanes + 1
+		if trace.plane and numPlanes < MAX_CLIP_PLANES then
+			numPlanes = numPlanes + 1
+			planes[numPlanes] = trace.plane
 		end
 
-		if trace.plane then
-			if trace.plane.z > 0.7 and velocity.z < 0 then
-				velocity.z = 0
-			end
-
-			local i = 0
-			while i < numplanes do
-				ClipVelocity(velocity, planes[i], 1.0)
-
-				local j = 0
-				while j < numplanes do
-					if j ~= i then
-						local dot = velocity:Dot(planes[j])
-						if dot < 0 then
-							break
-						end
-					end
-					j = j + 1
-				end
-
-				if j == numplanes then
-					break
-				end
-
-				i = i + 1
-			end
-
-			if i == numplanes then
-				if numplanes >= 2 then
-					local dir = Vector3(
-						planes[0].y * planes[1].z - planes[0].z * planes[1].y,
-						planes[0].z * planes[1].x - planes[0].x * planes[1].z,
-						planes[0].x * planes[1].y - planes[0].y * planes[1].x
-					)
-					local d = dir:Dot(velocity)
-					velocity.x = dir.x * d
-					velocity.y = dir.y * d
-					velocity.z = dir.z * d
-				end
-
-				local dot = velocity:Dot(planes[0])
-				if dot < 0 then
-					velocity.x = 0
-					velocity.y = 0
-					velocity.z = 0
-					break
-				end
-			end
-		else
+		if not trace.plane then
 			break
 		end
-	end
 
-	return origin
-end
+		if trace.plane.z > 0.7 and velocity.z < 0 then
+			velocity.z = 0
+		end
 
--- Convert world-space wish direction to yaw-relative
-local function WorldToRelativeWishDir(worldWishDir, yaw)
-	assert(worldWishDir, "WorldToRelativeWishDir: nil worldWishDir")
-	local yawRad = yaw * DEG2RAD
-	local cosYaw = math.cos(yawRad)
-	local sinYaw = math.sin(yawRad)
-	-- Rotate by -yaw to get relative direction
-	local relX = worldWishDir.x * cosYaw + worldWishDir.y * sinYaw
-	local relY = -worldWishDir.x * sinYaw + worldWishDir.y * cosYaw
-	return Vector3(relX, relY, 0)
-end
+		local i = 1
+		while i <= numPlanes do
+			clipVelocityInPlace(velocity, planes[i], 1.0)
 
--- Convert yaw-relative wish direction to world-space
-local function RelativeToWorldWishDir(relWishDir, yaw)
-	assert(relWishDir, "RelativeToWorldWishDir: nil relWishDir")
-	local yawRad = yaw * DEG2RAD
-	local cosYaw = math.cos(yawRad)
-	local sinYaw = math.sin(yawRad)
-	-- Rotate by +yaw to get world direction
-	local worldX = relWishDir.x * cosYaw - relWishDir.y * sinYaw
-	local worldY = relWishDir.x * sinYaw + relWishDir.y * cosYaw
-	return Vector3(worldX, worldY, 0)
-end
+			local j = 1
+			while j <= numPlanes do
+				if j ~= i then
+					if dot3(velocity, planes[j]) < 0 then
+						break
+					end
+				end
+				j = j + 1
+			end
 
--- Get eye yaw (prefer eye angles, fallback to velocity yaw)
-local function GetEyeYaw(entity, velocity)
-	if not entity then
-		error("GetEyeYaw: entity is nil")
-	end
+			if j > numPlanes then
+				break
+			end
 
-	-- Direct eye yaw property
-	local eyeYaw = entity:GetPropFloat("m_angEyeAngles[1]")
-	if eyeYaw then
-		return eyeYaw
-	end
+			i = i + 1
+		end
 
-	-- Some builds expose m_angEyeAngles as vector
-	local hasGetPropVector = entity.GetPropVector and type(entity.GetPropVector) == "function"
-	local eyeVec = hasGetPropVector and entity:GetPropVector("tfnonlocaldata", "m_angEyeAngles")
-	if eyeVec and eyeVec.y then
-		return eyeVec.y
-	end
+		if i > numPlanes then
+			if numPlanes >= 2 then
+				local dir = Vector3(
+					planes[1].y * planes[2].z - planes[1].z * planes[2].y,
+					planes[1].z * planes[2].x - planes[1].x * planes[2].z,
+					planes[1].x * planes[2].y - planes[1].y * planes[2].x
+				)
 
-	error(
-		"GetEyeYaw: unable to find valid eye yaw for entity index "
-			.. tostring(entity:GetIndex() and entity:GetIndex() or "unknown")
-	)
-end
+				if normalize3DInPlace(dir) <= 0 then
+					velocity.x, velocity.y, velocity.z = 0, 0, 0
+					break
+				end
 
--- Tracking: velocity-based strafe detection (A_Swing_Prediction pattern)
-local function UpdateTracking(entity)
-	if not entity then
-		return
-	end
+				local d = dot3(dir, velocity)
+				velocity.x, velocity.y, velocity.z = dir.x * d, dir.y * d, dir.z * d
+			end
 
-	local vel = entity:EstimateAbsVelocity()
-	if not vel then
-		return
-	end
-
-	local idx = entity:GetIndex()
-	local velAngles = vel:Angles()
-	local velYaw = velAngles and velAngles.y
-
-	-- Track eye yaw for simulation start point
-	local currentYaw = GetEyeYaw(entity, vel) or velYaw
-	if not currentYaw then
-		if entity == entities.GetLocalPlayer() then
-			local viewAngles = engine.GetViewAngles()
-			if viewAngles and viewAngles.y then
-				currentYaw = viewAngles.y
+			if dot3(velocity, planes[1]) < 0 then
+				velocity.x, velocity.y, velocity.z = 0, 0, 0
+				break
 			end
 		end
 	end
-	if currentYaw then
-		lastEyeYaw[idx] = currentYaw
-	end
-
-	-- Skip strafe calc if barely moving
-	if vel:Length() < 10 then
-		lastVelocityYaw[idx] = velYaw
-		return
-	end
-
-	-- Resolve wishdir from position delta
-	local currentPos = entity:GetAbsOrigin()
-	if lastOrigin[idx] then
-		local delta = currentPos - lastOrigin[idx]
-		delta.z = 0
-		local len2d = delta:Length()
-		if len2d > 0.1 and currentYaw then
-			local worldWishDir = delta / len2d
-			local relWishDir = WorldToRelativeWishDir(worldWishDir, currentYaw)
-			stableWishDir[idx] = relWishDir
-		end
-	end
-	lastOrigin[idx] = currentPos
-
-	-- Calculate per-tick yaw delta from velocity (A_Swing_Prediction style)
-	if velYaw and lastVelocityYaw[idx] then
-		local angleDelta = velYaw - lastVelocityYaw[idx]
-
-		-- Normalize to -180..180 using modulo (no while loop)
-		angleDelta = ((angleDelta + 180) % 360) - 180
-
-		-- Exponential smoothing: 0.8 old + 0.2 new (same as A_Swing_Prediction)
-		strafeRates[idx] = (strafeRates[idx] or 0) * 0.8 + angleDelta * 0.2
-	end
-
-	lastVelocityYaw[idx] = velYaw
 end
 
--- Prediction (with strafe prediction)
-local function PredictPath(player, ticks)
-	assert(player, "PredictPath: nil player")
+local PlayerMoveSim = {}
+PlayerMoveSim.__index = PlayerMoveSim
+
+function PlayerMoveSim.newFromPlayer(player, yawSeed, yawDeltaPerTick, relativeWishDir)
+	assert(player, "PlayerMoveSim.newFromPlayer: player is nil")
+	assert(type(yawSeed) == "number", "PlayerMoveSim.newFromPlayer: yawSeed must be a number")
+	assert(type(yawDeltaPerTick) == "number", "PlayerMoveSim.newFromPlayer: yawDeltaPerTick must be a number")
+
+	local self = setmetatable({}, PlayerMoveSim)
+
+	local tickinterval = globals.TickInterval()
+	assert(tickinterval and tickinterval > 0, "PlayerMoveSim.newFromPlayer: invalid tickinterval")
+
+	local origin = player:GetAbsOrigin()
+	assert(origin, "PlayerMoveSim.newFromPlayer: player:GetAbsOrigin() returned nil")
+
+	local velocity = player:GetPropVector("localdata", "m_vecVelocity[0]")
+		or player:EstimateAbsVelocity()
+		or Vector3(0, 0, 0)
+
+	self.origin = Vector3(origin.x, origin.y, origin.z + 1)
+	self.velocity = Vector3(velocity.x, velocity.y, velocity.z)
+	self.mins = player:GetMins()
+	self.maxs = player:GetMaxs()
+	self.index = player:GetIndex()
+
+	self.maxspeed = player:GetPropFloat("m_flMaxspeed") or 450
+	self.tickinterval = tickinterval
+
+	self.yaw = yawSeed
+	self.yawDeltaPerTick = yawDeltaPerTick
+
+	if relativeWishDir then
+		self.relativeWishDir = Vector3(relativeWishDir.x, relativeWishDir.y, 0)
+		normalize2DInPlace(self.relativeWishDir)
+	else
+		self.relativeWishDir = nil
+	end
+
+	return self
+end
+
+function PlayerMoveSim.stepTick(self, playerEntity)
+	assert(self, "PlayerMoveSim.stepTick: self is nil")
+	assert(playerEntity, "PlayerMoveSim.stepTick: playerEntity is nil")
+
+	self.yaw = self.yaw + self.yawDeltaPerTick
+
+	local wishdirWorld = nil
+	if self.relativeWishDir then
+		wishdirWorld = relativeToWorldWishDir(self.relativeWishDir, self.yaw)
+		normalize2DInPlace(wishdirWorld)
+	end
+
+	local isOnGround = checkIsOnGround(self.origin, self.mins, self.maxs, self.index)
+
+	if isOnGround and self.velocity.z < 0 then
+		self.velocity.z = 0
+	end
+
+	applyFrictionInPlace(self.velocity, isOnGround, self.tickinterval)
+
+	if wishdirWorld then
+		local wishspeed = self.maxspeed -- (as requested: assume full maxspeed)
+
+		if isOnGround then
+			accelerateInPlace(self.velocity, wishdirWorld, wishspeed, accelerate, self.tickinterval)
+			self.velocity.z = 0
+		else
+			airAccelerateInPlace(
+				self.velocity,
+				wishdirWorld,
+				wishspeed,
+				airAccelerate,
+				self.tickinterval,
+				1,
+				playerEntity
+			)
+			self.velocity.z = self.velocity.z - gravity * self.tickinterval
+		end
+	else
+		-- No input: only gravity in-air.
+		if not isOnGround then
+			self.velocity.z = self.velocity.z - gravity * self.tickinterval
+		else
+			self.velocity.z = 0
+		end
+	end
+
+	tryPlayerMoveInPlace(self.origin, self.velocity, self.mins, self.maxs, self.index, self.tickinterval)
+
+	if isOnGround then
+		stayOnGround(self.origin, self.mins, self.maxs, stepSize, self.index)
+	end
+end
+
+function PlayerMoveSim.simulateTicks(self, playerEntity, ticks)
+	assert(self, "PlayerMoveSim.simulateTicks: self is nil")
+	assert(playerEntity, "PlayerMoveSim.simulateTicks: playerEntity is nil")
+	assert(type(ticks) == "number", "PlayerMoveSim.simulateTicks: ticks must be a number")
 
 	local path = {}
-	local velocity = player:GetPropVector("localdata", "m_vecVelocity[0]") or player:EstimateAbsVelocity()
-	local origin = player:GetAbsOrigin() + Vector3(0, 0, 1)
-
-	if not velocity or velocity:Length() <= 0.01 then
-		path[0] = origin
-		return path
-	end
-
-	local maxspeed = player:GetPropFloat("m_flMaxspeed") or 450
-	local tickinterval = globals.TickInterval()
-	local mins, maxs = player:GetMins(), player:GetMaxs()
-	local index = player:GetIndex()
-
-	-- ALWAYS use current yaw as beginning state (eye angles)
-	local currentYaw = player:GetPropFloat("tfnonlocaldata", "m_angEyeAngles[1]") or 0
-
-	-- Set up beginning state at beginning of simulation
-	local strafeRate = strafeRates[index] or 0
-	local relativeWishDir = stableWishDir[index] or Vector3(1, 0, 0)
-
-	-- STRAFE PREDICTION: Get current yaw, try to guess wishdir, simulate player
-	-- Use smoothed angular velocity to predict future yaw changes per tick
-	-- strafeRate represents degrees per tick of yaw change
-	-- Debug: Print strafe rate when significant
-	if math.abs(strafeRate) > 0.5 then
-		print(
-			string.format(
-				"[STRAFE PRED] Rate: %.2f deg/tick, WishDir: (%.2f, %.2f)",
-				strafeRate,
-				relativeWishDir.x,
-				relativeWishDir.y
-			)
-		)
-	end
-
-	path[0] = Vector3(origin.x, origin.y, origin.z)
-	local currentVel = Vector3(velocity.x, velocity.y, velocity.z)
+	path[0] = Vector3(self.origin.x, self.origin.y, self.origin.z)
 
 	for tick = 1, ticks do
-		-- STRAFE PREDICTION: Rotate yaw by strafe rate to predict future movement
-		currentYaw = currentYaw + strafeRate
-
-		-- Resolve wishdir (yaw rotates wishdir; no overrides)
-		local wishdir = RelativeToWorldWishDir(relativeWishDir, currentYaw)
-
-		-- Physics simulation: friction/gravity -> acceleration -> move with collision -> ground snap
-		local is_on_ground = CheckIsOnGround(origin, mins, maxs, index)
-
-		-- Apply friction
-		Friction(currentVel, is_on_ground, tickinterval)
-
-		-- Apply gravity if in air
-		if not is_on_ground then
-			currentVel.z = currentVel.z - gravity * tickinterval
-		end
-
-		-- Accelerate using wishdir (yaw-driven). Do this before collision move.
-		local wishspeed = math.min(currentVel:Length2D(), maxspeed)
-		if is_on_ground then
-			Accelerate(currentVel, wishdir, wishspeed, accelerate, tickinterval)
-			currentVel.z = 0
-		else
-			AirAccelerate(currentVel, wishdir, wishspeed, airAccelerate, tickinterval, 1, player)
-		end
-
-		-- Move with collision
-		origin = TryPlayerMove(origin, currentVel, mins, maxs, index, tickinterval)
-
-		-- Ground snap last
-		if is_on_ground then
-			StayOnGround(origin, mins, maxs, stepSize, index)
-		end
-
-		path[tick] = Vector3(origin.x, origin.y, origin.z)
+		self:stepTick(playerEntity)
+		path[tick] = Vector3(self.origin.x, self.origin.y, self.origin.z)
 	end
 
 	return path
@@ -472,53 +836,28 @@ local function DrawDots(path)
 	end
 end
 
--- Callbacks
+-- Self-init (optional) ---
+
+local strafeTracker = StrafeTracker.new()
+local wishDirTracker = WishDirTracker.new()
+
+-- Callbacks -----
+
 local function OnCreateMove(cmd)
 	local me = entities.GetLocalPlayer()
 	if not me or not me:IsAlive() then
 		return
 	end
 
-	-- Some environments return a table, others return a raw number; both are accepted.
-	if cmd and cmd.GetViewAngles then
-		local cmdAngles = cmd:GetViewAngles()
-		local cmdYaw = nil
+	local meIdx = me:GetIndex()
+	assert(meIdx, "OnCreateMove: meIdx is nil")
 
-		local function tryGet(from)
-			if from == nil then
-				return nil
-			end
-			local t = type(from)
-			if t == "number" then
-				return from
-			end
-			if t == "table" then
-				return from.y or from[2]
-			end
-			-- userdata/cdata: safest to pcall for field access
-			local ok, val = pcall(function()
-				return from.y
-			end)
-			if ok and type(val) == "number" then
-				return val
-			end
-			ok, val = pcall(function()
-				return from[2]
-			end)
-			if ok and type(val) == "number" then
-				return val
-			end
-			return nil
-		end
+	strafeTracker:updateEyeYaw(me, cmd)
+	strafeTracker:updateFromVelocity(me)
+	wishDirTracker:updateFromCmd(me, cmd)
 
-		cmdYaw = tryGet(cmdAngles)
-
-		if cmdYaw then
-			lastEyeYaw[me:GetIndex()] = cmdYaw
-		end
-	end
-
-	UpdateTracking(me)
+	local yawSeed = strafeTracker:getYawSeed(meIdx)
+	wishDirTracker:updateFromMotion(me, yawSeed)
 end
 
 local function OnDraw()
@@ -527,25 +866,34 @@ local function OnDraw()
 		return
 	end
 
-	-- Keep enemy yaw tracking updated
+	local meIdx = me:GetIndex()
+	assert(meIdx, "OnDraw: meIdx is nil")
+
+	-- Keep enemy tracking updated (for later extensions)
 	for _, player in ipairs(entities.FindByClass("CTFPlayer")) do
-		if player ~= me and player:IsAlive() then
-			UpdateTracking(player)
+		if player and player ~= me and player:IsAlive() then
+			local idx = player:GetIndex()
+			if idx then
+				strafeTracker:updateEyeYaw(player, nil)
+				strafeTracker:updateFromVelocity(player)
+				wishDirTracker:updateFromMotion(player, strafeTracker:getYawSeed(idx))
+			end
 		end
 	end
 
-	local path = PredictPath(me, PREDICT_TICKS)
+	local yawSeed = strafeTracker:getYawSeed(meIdx)
+	local yawDeltaPerTick = strafeTracker:getYawDeltaPerTick(meIdx)
+	local relWishDir = wishDirTracker:getRelativeWishDir(meIdx)
+
+	local sim = PlayerMoveSim.newFromPlayer(me, yawSeed, yawDeltaPerTick, relWishDir)
+	local path = sim:simulateTicks(me, PREDICT_TICKS)
 	if not path then
 		return
 	end
 
-	-- Draw strafe prediction path (with yaw changes)
 	DrawPath(path)
 	DrawDots(path)
 end
-
--- API: external scripts can call SetPredictionInputs to provide per-tick overrides
-_G.AdvancedPredictionVisualizer_SetInputs = SetPredictionInputs
 
 callbacks.Unregister("CreateMove", "AdvancedPredictionVisualizer_CM")
 callbacks.Unregister("Draw", "AdvancedPredictionVisualizer_Draw")
