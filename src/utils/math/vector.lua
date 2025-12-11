@@ -8,9 +8,6 @@ local VectorMath = {}
 ---@return Vector3
 function VectorMath.normalize(vec)
 	local len = vec:Length()
-	if len < 0.0001 then
-		return Vector3(0, 0, 0)
-	end
 	return vec / len
 end
 

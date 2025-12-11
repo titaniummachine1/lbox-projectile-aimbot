@@ -5,6 +5,20 @@ local G = require("globals")
 local Visuals = {}
 
 -- Local constants / utilities -----
+local WHITE_PIXEL_RGBA = string.char(255, 255, 255, 255)
+local whiteTexture = nil
+
+local function getWhiteTexture()
+	if whiteTexture then
+		return whiteTexture
+	end
+	if not draw or not draw.CreateTextureRGBA then
+		return nil
+	end
+	whiteTexture = draw.CreateTextureRGBA(WHITE_PIXEL_RGBA, 1, 1)
+	return whiteTexture
+end
+
 local function hsvToRgb(hue, saturation, value)
 	if saturation == 0 then
 		return value, value, value
@@ -37,9 +51,11 @@ local function xyuv(point, u, v)
 end
 
 local function drawLine(texture, p1, p2, thickness)
-	if not (texture and p1 and p2) then
+	if not (p1 and p2) then
 		return
 	end
+
+	local tex = texture or getWhiteTexture()
 
 	local dx = p2[1] - p1[1]
 	local dy = p2[2] - p1[2]
@@ -53,6 +69,11 @@ local function drawLine(texture, p1, p2, thickness)
 	local px = -dy * thickness
 	local py = dx * thickness
 
+	if not tex then
+		draw.Line(p1[1], p1[2], p2[1], p2[2])
+		return
+	end
+
 	local verts = {
 		{ p1[1] + px, p1[2] + py, 0, 0 },
 		{ p1[1] - px, p1[2] - py, 0, 1 },
@@ -60,7 +81,7 @@ local function drawLine(texture, p1, p2, thickness)
 		{ p2[1] + px, p2[2] + py, 1, 0 },
 	}
 
-	draw.TexturedPolygon(texture, verts, false)
+	draw.TexturedPolygon(tex, verts, false)
 end
 
 local function buildBoxFaces(worldMins, worldMaxs)
@@ -162,9 +183,10 @@ local function drawProjPath(texture, projPath, thickness)
 end
 
 local function drawImpactDot(texture, pos, size)
-	if not pos or not texture then
+	if not pos then
 		return
 	end
+	local tex = texture or getWhiteTexture()
 	local screen = client.WorldToScreen(pos)
 	if not screen then
 		return
@@ -178,7 +200,11 @@ local function drawImpactDot(texture, pos, size)
 		{ screen[1] - s, screen[2] + s, 0, 1 },
 	}
 
-	draw.TexturedPolygon(texture, verts, false)
+	if tex then
+		draw.TexturedPolygon(tex, verts, false)
+	else
+		draw.FilledRect(screen[1] - s, screen[2] - s, screen[1] + s, screen[2] + s)
+	end
 end
 
 local function lastVec(tbl)
@@ -198,6 +224,7 @@ local function drawMultipointTarget(texture, pos, thickness)
 		return
 	end
 
+	local tex = texture or getWhiteTexture()
 	local s = thickness
 	local verts = {
 		{ screen[1] - s, screen[2] - s, 0, 0 },
@@ -206,7 +233,11 @@ local function drawMultipointTarget(texture, pos, thickness)
 		{ screen[1] - s, screen[2] + s, 0, 1 },
 	}
 
-	draw.TexturedPolygon(texture, verts, false)
+	if tex then
+		draw.TexturedPolygon(tex, verts, false)
+	else
+		draw.FilledRect(screen[1] - s, screen[2] - s, screen[1] + s, screen[2] + s)
+	end
 end
 
 local function drawPlayerHitbox(texture, playerPos, targetMinHull, targetMaxHull, eyePos, thickness)
@@ -276,9 +307,11 @@ local function drawPlayerHitbox(texture, playerPos, targetMinHull, targetMaxHull
 end
 
 local function drawQuadFace(texture, projected, indices, flipU, flipV)
-	if not (texture and projected and indices) then
+	if not (projected and indices) then
 		return
 	end
+
+	local tex = texture or getWhiteTexture()
 
 	local uvs = {
 		{ 0, 0 },
@@ -309,7 +342,12 @@ local function drawQuadFace(texture, projected, indices, flipU, flipV)
 		poly[i] = xyuv(vertex, uvs[i][1], uvs[i][2])
 	end
 
-	draw.TexturedPolygon(texture, poly, true)
+	if tex then
+		draw.TexturedPolygon(tex, poly, true)
+	else
+		-- Fallback: basic filled quad if texture creation fails
+		draw.FilledRect(poly[1][1], poly[1][2], poly[3][1], poly[3][2])
+	end
 end
 
 local function getBoxVertices(pos, mins, maxs)
@@ -408,7 +446,7 @@ function Visuals.draw(state)
 	end
 
 	-- Create texture if needed (fallback to no-op if creation fails)
-	local texture = draw.CreateTextureRGBA(string.char(255, 255, 255, 255), 1, 1) or nil
+	local texture = getWhiteTexture()
 
 	-- Get eye position
 	local eyePos = nil

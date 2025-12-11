@@ -14,7 +14,7 @@ local TickProfiler = require("tick_profiler")
 local PlayerTracker = require("player_tracker")
 
 -- Local constants / utilities -----
-local DEFAULT_MAX_DISTANCE = 3000LO
+local DEFAULT_MAX_DISTANCE = 3000
 
 local utils = {}
 utils.math = require("utils.math")
@@ -216,10 +216,10 @@ local function CalculateHitchance(entity, projpath, hit, distance, speed, gravit
 		end
 
 		--- penalty for very long projectile paths (more chance for error)
-		if #projpath > 50 then
-			score = score - 10
-		elseif #projpath > 100 then
+		if #projpath > 100 then
 			score = score - 20
+		elseif #projpath > 50 then
+			score = score - 10
 		end
 	else
 		--- i dont remember if i ever return nil for projpath
@@ -292,14 +292,9 @@ end
 ---@return number length
 local function Normalize(vec)
 	local len = vec:Length()
-	if len < 0.0001 then
-		return 0
-	end
-
 	vec.x = vec.x / len
 	vec.y = vec.y / len
 	vec.z = vec.z / len
-
 	return len
 end
 

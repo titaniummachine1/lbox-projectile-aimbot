@@ -14,8 +14,11 @@ local VEC_ROT = function(a, b)
 	return (b:Forward() * a.x) + (b:Right() * a.y) + (b:Up() * a.z)
 end
 
+local WeaponOffsets = require("constants.weapon_offsets")
+
 local aProjectileInfo = {}
 local aItemDefinitions = {}
+local offsetOverrideCache = {}
 
 local PROJECTILE_TYPE_BASIC = 0
 local PROJECTILE_TYPE_PSEUDO = 1
@@ -35,7 +38,40 @@ end
 
 ---@return WeaponInfo
 function GetProjectileInformation(itemDefinitionIndex)
-	return aProjectileInfo[aItemDefinitions[itemDefinitionIndex or 0]]
+	local idx = itemDefinitionIndex or 0
+	local base = aProjectileInfo[aItemDefinitions[idx]]
+	if not base then
+		return nil
+	end
+
+	-- If we have a weapon-offset override, wrap the base info with a cached copy
+	local override = offsetOverrideCache[idx]
+	if override then
+		return override
+	end
+
+	if WeaponOffsets and WeaponOffsets.getOffset then
+		local existing = WeaponOffsets.getOffset(idx, false, false)
+		if existing then
+			local derived = {}
+			for k, v in pairs(base) do
+				derived[k] = v
+			end
+
+			derived.GetOffset = function(self, bDucking, bIsFlipped)
+				local off = WeaponOffsets.getOffset(idx, bDucking, bIsFlipped)
+				if off then
+					return off
+				end
+				return base:GetOffset(bDucking, bIsFlipped)
+			end
+
+			offsetOverrideCache[idx] = derived
+			return derived
+		end
+	end
+
+	return base
 end
 
 ---@return WeaponInfo?
