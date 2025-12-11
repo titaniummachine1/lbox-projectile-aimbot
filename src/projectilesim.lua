@@ -7,20 +7,28 @@ env:SetSimulationTimestep(globals.TickInterval())
 
 ---@return PhysicsObject
 local function GetPhysicsProjectile(info)
+	assert(info, "GetPhysicsProjectile: info is nil")
+	assert(info.m_sModelName, "GetPhysicsProjectile: info.m_sModelName is nil")
+	
 	local modelName = info.m_sModelName
 	if projectiles[modelName] then
 		return projectiles[modelName]
 	end
 
 	local solid, collision = physics.ParseModelByName(info.m_sModelName)
-	if solid == nil or collision == nil then
-		error("Solid/collision is nil! Model name: " .. info.m_sModelName)
-		return {}
-	end
-
-	local projectile = env:CreatePolyObject(collision, solid:GetSurfacePropName(), solid:GetObjectParameters())
+	assert(solid, "GetPhysicsProjectile: ParseModelByName returned nil solid for model: " .. info.m_sModelName)
+	assert(collision, "GetPhysicsProjectile: ParseModelByName returned nil collision for model: " .. info.m_sModelName)
+	
+	local surfaceProp = solid:GetSurfacePropName()
+	assert(surfaceProp, "GetPhysicsProjectile: GetSurfacePropName returned nil for model: " .. info.m_sModelName)
+	
+	local objectParams = solid:GetObjectParameters()
+	assert(objectParams, "GetPhysicsProjectile: GetObjectParameters returned nil for model: " .. info.m_sModelName)
+	
+	local projectile = env:CreatePolyObject(collision, surfaceProp, objectParams)
+	assert(projectile, "GetPhysicsProjectile: CreatePolyObject returned nil for model: " .. info.m_sModelName)
+	
 	projectiles[modelName] = projectile
-
 	return projectiles[modelName]
 end
 
@@ -76,10 +84,17 @@ end
 ---@param charge number
 ---@return Vector3[], boolean, boolean, number[]
 local function SimulateProjectile(target, targetPredictedPos, startPos, angle, info, localTeam, time_seconds, charge)
+    assert(target, "SimulateProjectile: target is nil")
+    assert(targetPredictedPos, "SimulateProjectile: targetPredictedPos is nil")
+    assert(startPos, "SimulateProjectile: startPos is nil")
+    assert(angle, "SimulateProjectile: angle is nil")
+    assert(info, "SimulateProjectile: info is nil")
+    assert(localTeam, "SimulateProjectile: localTeam is nil")
+    assert(time_seconds, "SimulateProjectile: time_seconds is nil")
+    
     local projectile = GetPhysicsProjectile(info)
-    if projectile == nil then
-        return {}, false, false, {}
-    end
+    assert(projectile, "SimulateProjectile: GetPhysicsProjectile returned nil")
+    
     projectile:Wake()
     local angForward = angle:Forward()
     local timeEnd = env:GetSimulationTime() + time_seconds
@@ -135,9 +150,23 @@ end
 ---@param charge number
 ---@return Vector3[], boolean, boolean, number[]
 local function SimulateFakeProjectile(target, targetPredictedPos, startPos, angle, info, localTeam, time_seconds, charge)
+    assert(target, "SimulateFakeProjectile: target is nil")
+    assert(targetPredictedPos, "SimulateFakeProjectile: targetPredictedPos is nil")
+    assert(startPos, "SimulateFakeProjectile: startPos is nil")
+    assert(angle, "SimulateFakeProjectile: angle is nil")
+    assert(info, "SimulateFakeProjectile: info is nil")
+    assert(localTeam, "SimulateFakeProjectile: localTeam is nil")
+    assert(time_seconds, "SimulateFakeProjectile: time_seconds is nil")
+    
     local angForward = angle:Forward()
+    assert(angForward, "SimulateFakeProjectile: angle:Forward() returned nil")
+    
     local tickInterval = globals.TickInterval()
+    assert(tickInterval, "SimulateFakeProjectile: globals.TickInterval() returned nil")
+    
     local velocityVector = info:GetVelocity(charge)
+    assert(velocityVector, "SimulateFakeProjectile: info:GetVelocity() returned nil")
+    
     local startVelocity = (angForward * velocityVector:Length2D()) + Vector3(0, 0, velocityVector.z)
     local mins, maxs = info.m_vecMins, info.m_vecMaxs
     local path = {}
@@ -197,6 +226,14 @@ end
 ---@param charge number
 ---@return Vector3[], boolean?, boolean, number[]
 local function Run(target, targetPredictedPos, startPos, angle, info, localTeam, time_seconds, charge)
+    assert(target, "projectilesim: target is nil")
+    assert(targetPredictedPos, "projectilesim: targetPredictedPos is nil")
+    assert(startPos, "projectilesim: startPos is nil")
+    assert(angle, "projectilesim: angle is nil")
+    assert(info, "projectilesim: info is nil")
+    assert(localTeam, "projectilesim: localTeam is nil")
+    assert(time_seconds, "projectilesim: time_seconds is nil")
+    
     local projpath = {}
     local hit = nil
 	local timetable = {}
@@ -207,6 +244,11 @@ local function Run(target, targetPredictedPos, startPos, angle, info, localTeam,
 	else
 		projpath, hit, full, timetable = SimulateFakeProjectile(target, targetPredictedPos, startPos, angle, info, localTeam, time_seconds, charge)
 	end
+	
+	assert(projpath, "projectilesim: simulation returned nil projpath")
+	assert(type(hit) == "boolean" or hit == nil, "projectilesim: hit must be boolean or nil")
+	assert(type(full) == "boolean", "projectilesim: full must be boolean")
+	assert(timetable, "projectilesim: simulation returned nil timetable")
 
     return projpath, hit, full, timetable
 end

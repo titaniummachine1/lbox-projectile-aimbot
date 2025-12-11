@@ -702,14 +702,36 @@ end
 ---@param time number
 ---@return Vector3[]
 function sim.Run(pInfo, pTarget, initial_pos, time)
-	local last_pos = initial_pos
+	-- Zero Trust: Assert all parameters and external state
+	assert(pInfo, "sim.Run: pInfo is nil")
+	assert(pTarget, "sim.Run: pTarget is nil")
+	assert(initial_pos, "sim.Run: initial_pos is nil")
+	assert(time, "sim.Run: time is nil")
+	assert(time > 0, "sim.Run: time must be positive")
+	
+	-- Assert all required pInfo fields
+	assert(pInfo.m_flFriction, "sim.Run: pInfo.m_flFriction is nil")
+	assert(pInfo.m_flAngularVelocity, "sim.Run: pInfo.m_flAngularVelocity is nil")
+	assert(pInfo.m_flMaxspeed, "sim.Run: pInfo.m_flMaxspeed is nil")
+	assert(pInfo.m_flStepSize, "sim.Run: pInfo.m_flStepSize is nil")
+	assert(pInfo.m_vecMins, "sim.Run: pInfo.m_vecMins is nil")
+	assert(pInfo.m_vecMaxs, "sim.Run: pInfo.m_vecMaxs is nil")
+	assert(pInfo.m_flGravityStep, "sim.Run: pInfo.m_flGravityStep is nil")
+	assert(pInfo.m_vecVelocity, "sim.Run: pInfo.m_vecVelocity is nil")
+	assert(pInfo.m_iTeam, "sim.Run: pInfo.m_iTeam is nil")
+	
 	local tick_interval = globals.TickInterval()
+	assert(tick_interval, "sim.Run: globals.TickInterval() returned nil")
+	assert(tick_interval > 0, "sim.Run: tick_interval must be positive")
+	
 	local local_player_index = client.GetLocalPlayerIndex()
+	assert(local_player_index, "sim.Run: client.GetLocalPlayerIndex() returned nil")
 
-	local surface_friction = pInfo.m_flFriction or 1.0
+	local last_pos = initial_pos
+	local surface_friction = pInfo.m_flFriction
 	local angular_velocity = pInfo.m_flAngularVelocity * tick_interval
-	local maxspeed = pInfo.m_flMaxspeed or 450
-	local step_size = pInfo.m_flStepSize or 18
+	local maxspeed = pInfo.m_flMaxspeed
+	local step_size = pInfo.m_flStepSize
 	local mins = pInfo.m_vecMins
 	local maxs = pInfo.m_vecMaxs
 	local gravity_step = pInfo.m_flGravityStep * tick_interval
@@ -790,6 +812,10 @@ function sim.Run(pInfo, pTarget, initial_pos, time)
 			surface_friction,
 			step_size
 		)
+		
+		-- Assert StepMove returns valid data
+		assert(new_pos, "sim.Run: StepMove returned nil new_pos")
+		assert(new_velocity, "sim.Run: StepMove returned nil new_velocity")
 
 		-- try to keep player on ground after move
 		--[[if settings.sim.stay_on_ground then
@@ -809,6 +835,10 @@ function sim.Run(pInfo, pTarget, initial_pos, time)
 			velocity.z = 0
 		end
 	end
+	
+	-- Assert we have valid output
+	assert(positions, "sim.Run: positions is nil")
+	assert(#positions > 0, "sim.Run: no positions generated")
 
 	return positions
 end

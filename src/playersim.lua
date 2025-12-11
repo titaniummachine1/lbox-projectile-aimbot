@@ -13,10 +13,24 @@ local function Run(player, time_seconds, lazyness)
 	
 	-- Create contexts using new architecture
 	local simCtx = PredictionContext.createContext()
+	assert(simCtx, "playersim: createContext returned nil")
+	assert(simCtx.sv_gravity, "playersim: simCtx.sv_gravity is nil")
+	assert(simCtx.tickinterval, "playersim: simCtx.tickinterval is nil")
+	
 	local playerCtx = PredictionContext.createPlayerContext(player, lazyness or 10)
+	assert(playerCtx, "playersim: createPlayerContext returned nil")
+	assert(playerCtx.origin, "playersim: playerCtx.origin is nil")
+	assert(playerCtx.velocity, "playersim: playerCtx.velocity is nil")
+	assert(playerCtx.mins, "playersim: playerCtx.mins is nil")
+	assert(playerCtx.maxs, "playersim: playerCtx.maxs is nil")
 	
 	-- Use new tick-based simulation
-	return PlayerTick.simulatePath(playerCtx, simCtx, time_seconds)
+	local path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, time_seconds)
+	assert(path, "playersim: PlayerTick.simulatePath returned nil path")
+	assert(lastPos, "playersim: PlayerTick.simulatePath returned nil lastPos")
+	assert(#path > 0, "playersim: PlayerTick.simulatePath returned empty path")
+	
+	return path, lastPos, timetable
 end
 
 return Run

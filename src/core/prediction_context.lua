@@ -17,19 +17,36 @@ local SimulationContext = {}
 ---@return SimulationContext
 function PredictionContext.createContext()
 	local _, sv_gravity = client.GetConVar("sv_gravity")
+	assert(sv_gravity, "createContext: client.GetConVar('sv_gravity') returned nil")
+	
 	local _, sv_friction = client.GetConVar("sv_friction")
+	assert(sv_friction, "createContext: client.GetConVar('sv_friction') returned nil")
+	
 	local _, sv_stopspeed = client.GetConVar("sv_stopspeed")
+	assert(sv_stopspeed, "createContext: client.GetConVar('sv_stopspeed') returned nil")
+	
 	local _, sv_accelerate = client.GetConVar("sv_accelerate")
+	assert(sv_accelerate, "createContext: client.GetConVar('sv_accelerate') returned nil")
+	
 	local _, sv_airaccelerate = client.GetConVar("sv_airaccelerate")
+	assert(sv_airaccelerate, "createContext: client.GetConVar('sv_airaccelerate') returned nil")
+	
+	local tickinterval = globals.TickInterval()
+	assert(tickinterval, "createContext: globals.TickInterval() returned nil")
+	assert(tickinterval > 0, "createContext: tickinterval must be positive")
+	
+	local curtime = globals.CurTime()
+	assert(curtime, "createContext: globals.CurTime() returned nil")
+	assert(curtime >= 0, "createContext: curtime must be non-negative")
 	
 	return {
-		sv_gravity = sv_gravity or 800,
-		sv_friction = sv_friction or 4,
-		sv_stopspeed = sv_stopspeed or 100,
-		sv_accelerate = sv_accelerate or 10,
-		sv_airaccelerate = sv_airaccelerate or 10,
-		tickinterval = globals.TickInterval(),
-		curtime = globals.CurTime(),
+		sv_gravity = sv_gravity,
+		sv_friction = sv_friction,
+		sv_stopspeed = sv_stopspeed,
+		sv_accelerate = sv_accelerate,
+		sv_airaccelerate = sv_airaccelerate,
+		tickinterval = tickinterval,
+		curtime = curtime,
 	}
 end
 
@@ -49,21 +66,35 @@ local PlayerContext = {}
 ---@param lazyness number? Optional tick multiplier
 ---@return PlayerContext
 function PredictionContext.createPlayerContext(entity, lazyness)
-	assert(entity, "PredictionContext: entity is nil")
+	assert(entity, "createPlayerContext: entity is nil")
 	
-	local velocity = entity:GetPropVector("localdata", "m_vecVelocity[0]") or Vector3()
-	local origin = entity:GetAbsOrigin() + Vector3(0, 0, 1)
-	local maxspeed = entity:GetPropFloat("m_flMaxspeed") or 450
+	local velocity = entity:GetPropVector("localdata", "m_vecVelocity[0]")
+	assert(velocity, "createPlayerContext: entity:GetPropVector('m_vecVelocity[0]') returned nil")
+	
+	local origin = entity:GetAbsOrigin()
+	assert(origin, "createPlayerContext: entity:GetAbsOrigin() returned nil")
+	
+	local maxspeed = entity:GetPropFloat("m_flMaxspeed")
+	assert(maxspeed, "createPlayerContext: entity:GetPropFloat('m_flMaxspeed') returned nil")
+	assert(maxspeed > 0, "createPlayerContext: maxspeed must be positive")
+	
 	local mins, maxs = entity:GetMins(), entity:GetMaxs()
+	assert(mins, "createPlayerContext: entity:GetMins() returned nil")
+	assert(maxs, "createPlayerContext: entity:GetMaxs() returned nil")
+	
+	local index = entity:GetIndex()
+	assert(index, "createPlayerContext: entity:GetIndex() returned nil")
+	
+	local originWithOffset = origin + Vector3(0, 0, 1)
 	
 	return {
 		entity = entity,
-		origin = Vector3(origin:Unpack()),
+		origin = Vector3(originWithOffset:Unpack()),
 		velocity = Vector3(velocity:Unpack()),
 		mins = mins,
 		maxs = maxs,
 		maxspeed = maxspeed,
-		index = entity:GetIndex(),
+		index = index,
 		stepheight = 18,
 		lazyness = lazyness or 1,
 	}
@@ -88,16 +119,28 @@ local ProjectileContext = {}
 ---@param localTeam integer
 ---@return ProjectileContext
 function PredictionContext.createProjectileContext(info, startPos, angle, charge, localTeam)
-	assert(info, "PredictionContext: info is nil")
-	assert(startPos, "PredictionContext: startPos is nil")
-	assert(angle, "PredictionContext: angle is nil")
+	assert(info, "createProjectileContext: info is nil")
+	assert(startPos, "createProjectileContext: startPos is nil")
+	assert(angle, "createProjectileContext: angle is nil")
+	assert(localTeam, "createProjectileContext: localTeam is nil")
 	
 	local _, sv_gravity = client.GetConVar("sv_gravity")
-	local gravity = sv_gravity * 0.5 * info:GetGravity(charge)
+	assert(sv_gravity, "createProjectileContext: client.GetConVar('sv_gravity') returned nil")
+	
+	local gravityMod = info:GetGravity(charge)
+	assert(gravityMod, "createProjectileContext: info:GetGravity() returned nil")
+	
+	local gravity = sv_gravity * 0.5 * gravityMod
+	
 	local velocityVector = info:GetVelocity(charge)
+	assert(velocityVector, "createProjectileContext: info:GetVelocity() returned nil")
+	
 	local speed = velocityVector:Length2D()
+	assert(speed > 0, "createProjectileContext: velocityVector speed must be positive")
 	
 	local angForward = angle:Forward()
+	assert(angForward, "createProjectileContext: angle:Forward() returned nil")
+	
 	local startVelocity = (angForward * velocityVector:Length2D()) + Vector3(0, 0, velocityVector.z)
 	
 	return {
@@ -107,7 +150,7 @@ function PredictionContext.createProjectileContext(info, startPos, angle, charge
 		velocity = startVelocity,
 		gravity = gravity,
 		speed = speed,
-		charge = charge,
+		charge = charge or 0,
 		localTeam = localTeam,
 	}
 end

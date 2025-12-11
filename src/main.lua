@@ -550,6 +550,11 @@ local function onCreateMove(cmd)
 		TickProfiler.BeginSection("CM:SimPlayer")
 		local path, lastPos, timetable = SimulatePlayer(entity, time, lazyness)
 		TickProfiler.EndSection("CM:SimPlayer")
+		
+		-- Zero Trust: Assert SimulatePlayer returns
+		assert(path, "Main: SimulatePlayer returned nil path")
+		assert(lastPos, "Main: SimulatePlayer returned nil lastPos")
+		assert(#path > 0, "Main: SimulatePlayer returned empty path")
 
 		local drop = gravity * time * time
 
@@ -558,9 +563,15 @@ local function onCreateMove(cmd)
 		-- to accept and use StrafePredictor.predictStrafeDirection per tick
 
 		TickProfiler.BeginSection("CM:Multipoint")
-		local _, multipointPos = multipoint.Run(entity, weapon, info, eyePos, lastPos, drop)
+		local multipointHitbox, multipointPos = multipoint.Run(entity, weapon, info, eyePos, lastPos, drop)
 		TickProfiler.EndSection("CM:Multipoint")
+		
+		-- Zero Trust: Assert multipoint returns (multipointPos can be nil, that's ok)
+		-- multipointHitbox can be nil if no multipoint selected, that's intentional
 		if multipointPos then
+			assert(type(multipointPos.x) == "number", "Main: multipointPos has invalid x")
+			assert(type(multipointPos.y) == "number", "Main: multipointPos has invalid y")
+			assert(type(multipointPos.z) == "number", "Main: multipointPos has invalid z")
 			lastPos = multipointPos
 			state.multipointPos = multipointPos
 		end
@@ -568,25 +579,43 @@ local function onCreateMove(cmd)
 		TickProfiler.BeginSection("CM:Ballistics")
 		local angle = utils.math.SolveBallisticArc(eyePos, lastPos, speed, gravity)
 		TickProfiler.EndSection("CM:Ballistics")
+		
+		-- Zero Trust: Assert ballistics solution
+		-- angle can be nil if no solution exists, skip this target
 
 		if angle then
 			--- check visibility
 			local firePos = info:GetFirePosition(plocal, eyePos, angle, weapon:IsViewModelFlipped())
+			assert(firePos, "Main: info:GetFirePosition returned nil")
 
 			-- Fedoraware Critical #2: Weapon-specific fire position offsets
 			local weaponDefIndex = weapon:GetPropInt("m_iItemDefinitionIndex")
+			assert(weaponDefIndex, "Main: weapon:GetPropInt('m_iItemDefinitionIndex') returned nil")
+			
 			local weaponOffset = WeaponOffsets.getFirePosition(plocal, eyePos, angle, weaponDefIndex)
+			-- weaponOffset can be nil, that's expected for weapons without offsets
 			if weaponOffset then
+				assert(type(weaponOffset.x) == "number", "Main: weaponOffset has invalid x")
+				assert(type(weaponOffset.y) == "number", "Main: weaponOffset has invalid y")
+				assert(type(weaponOffset.z) == "number", "Main: weaponOffset has invalid z")
 				firePos = weaponOffset
 			end
 
 			local translatedAngle = utils.math.SolveBallisticArc(firePos, lastPos, speed, gravity)
+			-- translatedAngle can be nil if no solution, that's expected
 
 			if translatedAngle then
 				TickProfiler.BeginSection("CM:SimProj")
 				local projpath, hit, fullSim, projtimetable =
 					SimulateProj(entity, lastPos, firePos, translatedAngle, info, plocal:GetTeamNumber(), time, charge)
 				TickProfiler.EndSection("CM:SimProj")
+				
+				-- Zero Trust: Assert SimulateProj returns
+				assert(projpath, "Main: SimulateProj returned nil projpath")
+				assert(type(fullSim) == "boolean", "Main: SimulateProj fullSim must be boolean")
+				-- hit can be nil or boolean, that's ok
+				-- projtimetable can be empty but not nil
+				assert(projtimetable, "Main: SimulateProj returned nil projtimetable")
 
 				if fullSim then
 					local confidence =

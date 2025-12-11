@@ -56,9 +56,7 @@ local function Accelerate(velocity, wishdir, wishspeed, accel, frametime)
 	if accelspeed > addspeed then
 		accelspeed = addspeed
 	end
-	velocity.x = velocity.x + wishdir.x * accelspeed
-	velocity.y = velocity.y + wishdir.y * accelspeed
-	velocity.z = velocity.z + wishdir.z * accelspeed
+	velocity = velocity + wishdir * accelspeed
 end
 
 local function GetAirSpeedCap(target)
@@ -77,9 +75,7 @@ local function AirAccelerate(v, wishdir, wishspeed, accel, dt, surf, target)
 		return
 	end
 	local accelspeed = math.min(accel * wishspeed * dt * surf, addspeed)
-	v.x = v.x + accelspeed * wishdir.x
-	v.y = v.y + accelspeed * wishdir.y
-	v.z = v.z + accelspeed * wishdir.z
+	v = v + wishdir * accelspeed
 end
 
 local function CheckIsOnGround(origin, mins, maxs, index)
@@ -121,17 +117,14 @@ local function Friction(velocity, is_on_ground, frametime)
 	local newspeed = speed - drop
 	if newspeed ~= speed then
 		newspeed = newspeed / speed
-		velocity.x = velocity.x * newspeed
-		velocity.y = velocity.y * newspeed
-		velocity.z = velocity.z * newspeed
+		velocity = velocity * newspeed
 	end
 end
 
 local function ClipVelocity(velocity, normal, overbounce)
 	local backoff = velocity:Dot(normal) * overbounce
-	velocity.x = velocity.x - normal.x * backoff
-	velocity.y = velocity.y - normal.y * backoff
-	velocity.z = velocity.z - normal.z * backoff
+	velocity = velocity - normal * backoff
+
 	if math.abs(velocity.x) < 0.01 then
 		velocity.x = 0
 	end
@@ -165,9 +158,7 @@ local function TryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
 		end)
 
 		if trace.fraction > 0 then
-			origin.x = trace.endpos.x
-			origin.y = trace.endpos.y
-			origin.z = trace.endpos.z
+			origin = trace.endpos
 			numplanes = 0
 		end
 
@@ -265,7 +256,7 @@ end
 -- Get eye yaw (prefer eye angles, fallback to velocity yaw)
 local function GetEyeYaw(entity, velocity)
 	if not entity then
-		return nil
+		error("GetEyeYaw: entity is nil")
 	end
 
 	-- Direct eye yaw property
@@ -275,18 +266,16 @@ local function GetEyeYaw(entity, velocity)
 	end
 
 	-- Some builds expose m_angEyeAngles as vector
-	local eyeVec = entity:GetPropVector() and entity:GetPropVector("tfnonlocaldata", "m_angEyeAngles")
+	local hasGetPropVector = entity.GetPropVector and type(entity.GetPropVector) == "function"
+	local eyeVec = hasGetPropVector and entity:GetPropVector("tfnonlocaldata", "m_angEyeAngles")
 	if eyeVec and eyeVec.y then
 		return eyeVec.y
 	end
 
-	-- Fallback to velocity yaw if nothing else
-	if velocity then
-		local ang = velocity:Angles()
-		return ang and ang.y
-	end
-
-	return nil
+	error(
+		"GetEyeYaw: unable to find valid eye yaw for entity index "
+			.. tostring(entity:GetIndex() and entity:GetIndex() or "unknown")
+	)
 end
 
 -- Tracking: velocity-based strafe detection (A_Swing_Prediction pattern)
@@ -342,13 +331,8 @@ local function UpdateTracking(entity)
 	if velYaw and lastVelocityYaw[idx] then
 		local angleDelta = velYaw - lastVelocityYaw[idx]
 
-		-- Normalize to -180..180
-		while angleDelta > 180 do
-			angleDelta = angleDelta - 360
-		end
-		while angleDelta < -180 do
-			angleDelta = angleDelta + 360
-		end
+		-- Normalize to -180..180 using modulo (no while loop)
+		angleDelta = ((angleDelta + 180) % 360) - 180
 
 		-- Exponential smoothing: 0.8 old + 0.2 new (same as A_Swing_Prediction)
 		strafeRates[idx] = (strafeRates[idx] or 0) * 0.8 + angleDelta * 0.2
@@ -363,7 +347,79 @@ function SetPredictionInputs(inputs)
 	tickInputs = inputs
 end
 
--- Prediction
+-- Baseline prediction (no strafe prediction, holds current yaw)
+local function PredictPathBaseline(player, ticks)
+	assert(player, "PredictPathBaseline: nil player")
+
+	local path = {}
+	local velocity = player:GetPropVector("localdata", "m_vecVelocity[0]") or player:EstimateAbsVelocity()
+	local origin = player:GetAbsOrigin() + Vector3(0, 0, 1)
+
+	if not velocity or velocity:Length() <= 0.01 then
+		path[0] = origin
+		return path
+	end
+
+	local maxspeed = player:GetPropFloat("m_flMaxspeed") or 450
+	local tickinterval = globals.TickInterval()
+	local mins, maxs = player:GetMins(), player:GetMaxs()
+	local index = player:GetIndex()
+
+	-- Use current yaw, NO strafe prediction
+	local currentYaw = player:GetPropFloat("tfnonlocaldata", "m_angEyeAngles[1]") or 0
+	local relativeWishDir = stableWishDir[index] or Vector3(1, 0, 0)
+
+	path[0] = Vector3(origin.x, origin.y, origin.z)
+	local currentVel = Vector3(velocity.x, velocity.y, velocity.z)
+
+	for tick = 1, ticks do
+		-- NO YAW ROTATION - baseline holds current yaw
+		local wishdir = RelativeToWorldWishDir(relativeWishDir, currentYaw)
+
+		-- Physics simulation (same as main prediction)
+		local is_on_ground = CheckIsOnGround(origin, mins, maxs, index)
+		Friction(currentVel, is_on_ground, tickinterval)
+
+		if currentVel:Length2D() > 0.1 then
+			local wishspeed = math.min(currentVel:Length2D(), maxspeed)
+			if is_on_ground then
+				Accelerate(currentVel, wishdir, wishspeed, accelerate, tickinterval)
+			else
+				if currentVel.z < 0 then
+					AirAccelerate(currentVel, wishdir, wishspeed, airAccelerate, tickinterval)
+				end
+			end
+		end
+
+		if is_on_ground then
+			local speed = currentVel:Length()
+			if speed > maxspeed then
+				currentVel.x = currentVel.x * maxspeed / speed
+				currentVel.y = currentVel.y * maxspeed / speed
+				currentVel.z = currentVel.z * maxspeed / speed
+			end
+		end
+
+		if not is_on_ground then
+			currentVel.z = currentVel.z - gravity * tickinterval
+		elseif currentVel.z < 0 then
+			currentVel.z = 0
+		end
+
+		local newPos = origin + currentVel * tickinterval
+		local clippedVel = TracePlayerMove(origin, newPos, mins, maxs, index)
+		if clippedVel then
+			currentVel = clippedVel
+		end
+
+		origin = origin + currentVel * tickinterval
+		path[tick] = Vector3(origin.x, origin.y, origin.z)
+	end
+
+	return path
+end
+
+-- Prediction (with strafe prediction)
 local function PredictPath(player, ticks)
 	assert(player, "PredictPath: nil player")
 
@@ -381,30 +437,27 @@ local function PredictPath(player, ticks)
 	local mins, maxs = player:GetMins(), player:GetMaxs()
 	local index = player:GetIndex()
 
-	-- FRESH yaw start: current real-time yaw (never accumulates between simulations)
-	local startYaw = nil
-	if player == entities.GetLocalPlayer() then
-		local viewAngles = engine.GetViewAngles()
-		if viewAngles and viewAngles.y then
-			startYaw = viewAngles.y
-		end
-	end
-	if not startYaw then
-		startYaw = lastEyeYaw[index] or GetEyeYaw(player, velocity) or velocity:Angles().y
-	end
+	-- ALWAYS use current yaw as beginning state (eye angles)
+	local currentYaw = player:GetPropFloat("tfnonlocaldata", "m_angEyeAngles[1]") or 0
 
-	-- Per-tick yaw change rate (smoothed from velocity tracking)
+	-- Set up beginning state at beginning of simulation
 	local strafeRate = strafeRates[index] or 0
-
-	-- LOCK wishdir (yaw-relative) ONCE before simulation - NEVER affected by collision
 	local relativeWishDir = stableWishDir[index] or Vector3(1, 0, 0)
+
+	-- STRAFE PREDICTION: Get current yaw, try to guess wishdir, simulate player
+	-- Use smoothed angular velocity to predict future yaw changes per tick
+	-- strafeRate represents degrees per tick of yaw change
+	-- Debug: Print strafe rate when significant
+	if math.abs(strafeRate) > 0.5 then
+		print(string.format("[STRAFE PRED] Rate: %.2f deg/tick, WishDir: (%.2f, %.2f)", strafeRate, relativeWishDir.x, relativeWishDir.y))
+	end
 
 	path[0] = Vector3(origin.x, origin.y, origin.z)
 	local currentVel = Vector3(velocity.x, velocity.y, velocity.z)
-	local currentYaw = startYaw -- Yaw resets fresh every simulation
 
 	for tick = 1, ticks do
-		-- Apply per-tick yaw delta (rotates yaw direction, NOT velocity)
+		-- STRAFE PREDICTION: Rotate yaw by strafe rate to predict future movement
+		-- This shows what happens if player continues current strafing pattern
 		currentYaw = currentYaw + strafeRate
 
 		-- Check for per-tick override
@@ -581,8 +634,43 @@ local function OnDraw()
 		return
 	end
 
+	-- Draw strafe prediction path (with yaw changes)
 	DrawPath(path)
 	DrawDots(path)
+
+	-- STRAFE PREDICTION VISUALIZATION: Draw baseline path without strafe prediction
+	local strafeRate = strafeRates[me:GetIndex()] or 0
+	if math.abs(strafeRate) > 0.1 then -- Only show if there's significant strafe
+		local baselinePath = PredictPathBaseline(me, PREDICT_TICKS)
+		if baselinePath then
+			-- Draw baseline as gray dotted line
+			draw.Color(128, 128, 128, 150)
+			for i = 0, PREDICT_TICKS - 1 do
+				local pos1 = baselinePath[i]
+				local pos2 = baselinePath[i + 1]
+				if pos1 and pos2 then
+					local screen1 = client.WorldToScreen(pos1)
+					local screen2 = client.WorldToScreen(pos2)
+					if screen1 and screen2 then
+						-- Dotted line effect
+						local dx = screen2[1] - screen1[1]
+						local dy = screen2[2] - screen1[2]
+						local dist = math.sqrt(dx*dx + dy*dy)
+						local segments = math.max(1, math.floor(dist / 10))
+						for j = 0, segments-1 do
+							local t1 = j / segments
+							local t2 = (j + 0.5) / segments
+							local x1 = screen1[1] + dx * t1
+							local y1 = screen1[2] + dy * t1
+							local x2 = screen1[1] + dx * t2
+							local y2 = screen1[2] + dy * t2
+							draw.Line(x1, y1, x2, y2)
+						end
+					end
+				end
+			end
+		end
+	end
 end
 
 -- API: external scripts can call SetPredictionInputs to provide per-tick overrides
@@ -592,5 +680,3 @@ callbacks.Unregister("CreateMove", "AdvancedPredictionVisualizer_CM")
 callbacks.Unregister("Draw", "AdvancedPredictionVisualizer_Draw")
 callbacks.Register("CreateMove", "AdvancedPredictionVisualizer_CM", OnCreateMove)
 callbacks.Register("Draw", "AdvancedPredictionVisualizer_Draw", OnDraw)
-
-print("[Advanced Prediction Visualizer] Loaded (prototype, per-tick overrides enabled)")
