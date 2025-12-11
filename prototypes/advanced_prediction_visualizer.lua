@@ -31,15 +31,14 @@ local stopSpeed = sv_stopspeed or 100
 local accelerate = sv_accelerate or 10
 local airAccelerate = sv_airaccelerate or 10
 
--- Strafe tracking - use EYE ANGLES, not velocity angles!
-local lastEyeYaw = {} -- Track actual eye angles, NOT velocity direction
-local strafeRates = {} -- Yaw change rate for strafe prediction
-local lastOrigin = {} -- For reference only
-local lastVelocity = {} -- For reference only
-local lastVelocityYaw = {} -- Track velocity yaw delta for strafe rate
+-- Strafe tracking (velocity-based like A_Swing_Prediction)
+local lastEyeYaw = {} -- Track eye yaw for simulation start
+local lastVelocityYaw = {} -- Track velocity yaw for delta calculation
+local strafeRates = {} -- Per-tick yaw delta (smoothed)
 
--- Stable wish direction (yaw-relative) - NEVER affected by simulation/collision
-local stableWishDir = {} -- Stored as relative to eye yaw, e.g. (1,0,0) = forward
+-- Stable wish direction (yaw-relative) resolved from movement
+local stableWishDir = {}
+local lastOrigin = {}
 
 -- External per-tick overrides: tickInputs[tick] = { viewangles = EulerAngles, wishdir = Vector3 (relative to view) }
 local tickInputs = nil
@@ -290,7 +289,7 @@ local function GetEyeYaw(entity, velocity)
 	return nil
 end
 
--- Tracking: resolve wishdir from position delta (same pattern as strafe pred)
+-- Tracking: velocity-based strafe detection (A_Swing_Prediction pattern)
 local function UpdateTracking(entity)
 	if not entity then
 		return
@@ -302,11 +301,11 @@ local function UpdateTracking(entity)
 	end
 
 	local idx = entity:GetIndex()
-	local currentPos = entity:GetAbsOrigin()
 	local velAngles = vel:Angles()
 	local velYaw = velAngles and velAngles.y
-	local currentYaw = GetEyeYaw(entity, vel) or velYaw
 
+	-- Track eye yaw for simulation start point
+	local currentYaw = GetEyeYaw(entity, vel) or velYaw
 	if not currentYaw then
 		if entity == entities.GetLocalPlayer() then
 			local viewAngles = engine.GetViewAngles()
@@ -315,32 +314,35 @@ local function UpdateTracking(entity)
 			end
 		end
 	end
-
-	-- Always track eye yaw
-	if not currentYaw then
-		currentYaw = lastEyeYaw[idx] or 0
+	if currentYaw then
+		lastEyeYaw[idx] = currentYaw
 	end
 
-	-- Resolve wishdir from position delta (just like strafe pred)
+	-- Skip strafe calc if barely moving
+	if vel:Length() < 10 then
+		lastVelocityYaw[idx] = velYaw
+		return
+	end
+
+	-- Resolve wishdir from position delta
+	local currentPos = entity:GetAbsOrigin()
 	if lastOrigin[idx] then
 		local delta = currentPos - lastOrigin[idx]
 		delta.z = 0
 		local len2d = delta:Length()
-
-		if len2d > 0.1 then
-			-- Convert world-space movement to yaw-relative wishdir
+		if len2d > 0.1 and currentYaw then
 			local worldWishDir = delta / len2d
 			local relWishDir = WorldToRelativeWishDir(worldWishDir, currentYaw)
 			stableWishDir[idx] = relWishDir
 		end
-		-- If no movement, keep existing wishdir
 	end
+	lastOrigin[idx] = currentPos
 
-	-- Update strafe rate tracking using velocity yaw (matches simple visualizer)
+	-- Calculate per-tick yaw delta from velocity (A_Swing_Prediction style)
 	if velYaw and lastVelocityYaw[idx] then
 		local angleDelta = velYaw - lastVelocityYaw[idx]
 
-		-- Normalize angle delta to -180 to 180
+		-- Normalize to -180..180
 		while angleDelta > 180 do
 			angleDelta = angleDelta - 360
 		end
@@ -348,12 +350,10 @@ local function UpdateTracking(entity)
 			angleDelta = angleDelta + 360
 		end
 
+		-- Exponential smoothing: 0.8 old + 0.2 new (same as A_Swing_Prediction)
 		strafeRates[idx] = (strafeRates[idx] or 0) * 0.8 + angleDelta * 0.2
 	end
 
-	lastEyeYaw[idx] = currentYaw
-	lastOrigin[idx] = currentPos
-	lastVelocity[idx] = vel
 	lastVelocityYaw[idx] = velYaw
 end
 
@@ -381,29 +381,30 @@ local function PredictPath(player, ticks)
 	local mins, maxs = player:GetMins(), player:GetMaxs()
 	local index = player:GetIndex()
 
-	-- Get strafe rate (matches simple visualizer)
-	local strafeRate = strafeRates[index] or 0
-	-- Seed yaw from current real-time view yaw (local), then last known eye yaw, then netprop/velocity
-	local realtimeYaw = nil
+	-- FRESH yaw start: current real-time yaw (never accumulates between simulations)
+	local startYaw = nil
 	if player == entities.GetLocalPlayer() then
 		local viewAngles = engine.GetViewAngles()
 		if viewAngles and viewAngles.y then
-			realtimeYaw = viewAngles.y
+			startYaw = viewAngles.y
 		end
 	end
+	if not startYaw then
+		startYaw = lastEyeYaw[index] or GetEyeYaw(player, velocity) or velocity:Angles().y
+	end
 
-	local currentYaw = realtimeYaw or lastEyeYaw[index] or GetEyeYaw(player, velocity) or velocity:Angles().y
+	-- Per-tick yaw change rate (smoothed from velocity tracking)
+	local strafeRate = strafeRates[index] or 0
 
-	-- LOCK in the base wishdir ONCE before prediction loop (yaw-relative)
-	-- Use stable wishdir if we have it, otherwise assume forward
-	-- This NEVER changes based on simulation - only strafe rate affects yaw
+	-- LOCK wishdir (yaw-relative) ONCE before simulation - NEVER affected by collision
 	local relativeWishDir = stableWishDir[index] or Vector3(1, 0, 0)
 
 	path[0] = Vector3(origin.x, origin.y, origin.z)
 	local currentVel = Vector3(velocity.x, velocity.y, velocity.z)
+	local currentYaw = startYaw -- Yaw resets fresh every simulation
 
 	for tick = 1, ticks do
-		-- Update yaw for this tick (strafe prediction)
+		-- Apply per-tick yaw delta (rotates yaw direction, NOT velocity)
 		currentYaw = currentYaw + strafeRate
 
 		-- Check for per-tick override
