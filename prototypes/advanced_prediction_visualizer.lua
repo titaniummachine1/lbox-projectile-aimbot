@@ -36,6 +36,7 @@ local lastEyeYaw = {} -- Track actual eye angles, NOT velocity direction
 local strafeRates = {} -- Yaw change rate for strafe prediction
 local lastOrigin = {} -- For reference only
 local lastVelocity = {} -- For reference only
+local lastVelocityYaw = {} -- Track velocity yaw delta for strafe rate
 
 -- Stable wish direction (yaw-relative) - NEVER affected by simulation/collision
 local stableWishDir = {} -- Stored as relative to eye yaw, e.g. (1,0,0) = forward
@@ -302,7 +303,18 @@ local function UpdateTracking(entity)
 
 	local idx = entity:GetIndex()
 	local currentPos = entity:GetAbsOrigin()
-	local currentYaw = GetEyeYaw(entity, vel)
+	local velAngles = vel:Angles()
+	local velYaw = velAngles and velAngles.y
+	local currentYaw = GetEyeYaw(entity, vel) or velYaw
+
+	if not currentYaw then
+		if entity == entities.GetLocalPlayer() then
+			local viewAngles = engine.GetViewAngles()
+			if viewAngles and viewAngles.y then
+				currentYaw = viewAngles.y
+			end
+		end
+	end
 
 	-- Always track eye yaw
 	if not currentYaw then
@@ -324,9 +336,9 @@ local function UpdateTracking(entity)
 		-- If no movement, keep existing wishdir
 	end
 
-	-- Update strafe rate tracking using eye yaw only
-	if lastEyeYaw[idx] then
-		local angleDelta = currentYaw - lastEyeYaw[idx]
+	-- Update strafe rate tracking using velocity yaw (matches simple visualizer)
+	if velYaw and lastVelocityYaw[idx] then
+		local angleDelta = velYaw - lastVelocityYaw[idx]
 
 		-- Normalize angle delta to -180 to 180
 		while angleDelta > 180 do
@@ -342,6 +354,7 @@ local function UpdateTracking(entity)
 	lastEyeYaw[idx] = currentYaw
 	lastOrigin[idx] = currentPos
 	lastVelocity[idx] = vel
+	lastVelocityYaw[idx] = velYaw
 end
 
 -- Public setter for per-tick inputs
@@ -370,8 +383,16 @@ local function PredictPath(player, ticks)
 
 	-- Get strafe rate (matches simple visualizer)
 	local strafeRate = strafeRates[index] or 0
-	-- Seed yaw from last known eye yaw (or eye angles fallback)
-	local currentYaw = lastEyeYaw[index] or GetEyeYaw(player, velocity) or velocity:Angles().y
+	-- Seed yaw from current real-time view yaw (local), then last known eye yaw, then netprop/velocity
+	local realtimeYaw = nil
+	if player == entities.GetLocalPlayer() then
+		local viewAngles = engine.GetViewAngles()
+		if viewAngles and viewAngles.y then
+			realtimeYaw = viewAngles.y
+		end
+	end
+
+	local currentYaw = realtimeYaw or lastEyeYaw[index] or GetEyeYaw(player, velocity) or velocity:Angles().y
 
 	-- LOCK in the base wishdir ONCE before prediction loop (yaw-relative)
 	-- Use stable wishdir if we have it, otherwise assume forward
@@ -493,11 +514,51 @@ local function DrawDots(path)
 end
 
 -- Callbacks
-local function OnCreateMove()
+local function OnCreateMove(cmd)
 	local me = entities.GetLocalPlayer()
 	if not me or not me:IsAlive() then
 		return
 	end
+
+	-- Some environments return a table, others return a raw number; both are accepted.
+	if cmd and cmd.GetViewAngles then
+		local cmdAngles = cmd:GetViewAngles()
+		local cmdYaw = nil
+
+		local function tryGet(from)
+			if from == nil then
+				return nil
+			end
+			local t = type(from)
+			if t == "number" then
+				return from
+			end
+			if t == "table" then
+				return from.y or from[2]
+			end
+			-- userdata/cdata: safest to pcall for field access
+			local ok, val = pcall(function()
+				return from.y
+			end)
+			if ok and type(val) == "number" then
+				return val
+			end
+			ok, val = pcall(function()
+				return from[2]
+			end)
+			if ok and type(val) == "number" then
+				return val
+			end
+			return nil
+		end
+
+		cmdYaw = tryGet(cmdAngles)
+
+		if cmdYaw then
+			lastEyeYaw[me:GetIndex()] = cmdYaw
+		end
+	end
+
 	UpdateTracking(me)
 end
 
