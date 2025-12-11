@@ -34,6 +34,10 @@ local airAccelerate = sv_airaccelerate or 10
 -- Strafe tracking (EXACTLY like simple visualizer)
 local lastVelocityAngles = {}
 local strafeRates = {}
+local lastResolvedWishdir = {}
+local lastOrigin = {}
+local lastVelocity = {}
+local resolvedWishdir = {}
 
 -- External per-tick overrides: tickInputs[tick] = { viewangles = EulerAngles, wishdir = Vector3 (relative to view) }
 local tickInputs = nil
@@ -241,11 +245,48 @@ local function UpdateTracking(entity)
 
 	local vel = entity:EstimateAbsVelocity()
 	if not vel or vel:Length() < 10 then
+		-- still stash origin/vel for coast resolution
+		local idx = entity:GetIndex()
+		lastOrigin[idx] = entity:GetAbsOrigin()
+		lastVelocity[idx] = vel
 		return
 	end
 
 	local currentAngle = vel:Angles()
 	local idx = entity:GetIndex()
+
+	-- Resolve wishdir by comparing actual movement vs zero-input coast from last tick
+	if lastOrigin[idx] and lastVelocity[idx] then
+		local prevOrigin = lastOrigin[idx]
+		local prevVel = lastVelocity[idx]
+		local mins, maxs = entity:GetMins(), entity:GetMaxs()
+		local tickinterval = globals.TickInterval()
+
+		-- Coast step: friction + gravity + collision, no acceleration
+		local coastVel = Vector3(prevVel.x, prevVel.y, prevVel.z)
+		local is_on_ground = CheckIsOnGround(prevOrigin, mins, maxs, idx)
+		Friction(coastVel, is_on_ground, tickinterval)
+		if not is_on_ground then
+			coastVel.z = coastVel.z - gravity * tickinterval
+		end
+		local coastPos =
+			TryPlayerMove(Vector3(prevOrigin.x, prevOrigin.y, prevOrigin.z), coastVel, mins, maxs, idx, tickinterval)
+		if is_on_ground then
+			StayOnGround(coastPos, mins, maxs, stepSize, idx)
+		end
+
+		-- Delta between actual and coasted gives applied input influence
+		local actualPos = entity:GetAbsOrigin()
+		local delta = actualPos - coastPos
+		delta.z = 0
+		local len2d = delta:Length()
+		if len2d > 1 then
+			resolvedWishdir[idx] = delta / len2d
+			lastResolvedWishdir[idx] = resolvedWishdir[idx]
+		else
+			resolvedWishdir[idx] = nil
+		end
+	end
 
 	if lastVelocityAngles[idx] then
 		local angleDelta = currentAngle.y - lastVelocityAngles[idx].y
@@ -262,6 +303,8 @@ local function UpdateTracking(entity)
 	end
 
 	lastVelocityAngles[idx] = currentAngle
+	lastOrigin[idx] = entity:GetAbsOrigin()
+	lastVelocity[idx] = vel
 end
 
 -- Public setter for per-tick inputs
@@ -290,6 +333,15 @@ local function PredictPath(player, ticks)
 
 	-- Get strafe rate (matches simple visualizer)
 	local strafeRate = strafeRates[index] or 0
+	-- Seed yaw from last known velocity angles (or current velocity)
+	local currentYaw = (lastVelocityAngles[index] and lastVelocityAngles[index].y) or velocity:Angles().y
+
+	-- LOCK in the base wishdir ONCE before prediction loop (from real player state, NOT simulation)
+	local baseWishdir = resolvedWishdir[index] or lastResolvedWishdir[index]
+	if not baseWishdir then
+		-- Fallback: forward along current yaw
+		baseWishdir = Vector3(math.cos(currentYaw * DEG2RAD), math.sin(currentYaw * DEG2RAD), 0)
+	end
 
 	path[0] = Vector3(origin.x, origin.y, origin.z)
 	local currentVel = Vector3(velocity.x, velocity.y, velocity.z)
@@ -312,29 +364,24 @@ local function PredictPath(player, ticks)
 					-- Default forward
 					wishdir = Vector3(math.cos(yaw * DEG2RAD), math.sin(yaw * DEG2RAD), 0)
 				end
+				-- Update yaw for next tick if overridden
+				currentYaw = yaw
 			elseif override.wishdir then
-				-- Wishdir provided without yaw - use current velocity yaw
-				local velYaw = math.atan(currentVel.y, currentVel.x) * (180 / math.pi)
+				-- Wishdir provided without yaw - use current yaw
 				local relAngle = math.atan(override.wishdir.y, override.wishdir.x) * (180 / math.pi)
-				local worldAngle = (velYaw + relAngle) * DEG2RAD
+				local worldAngle = (currentYaw + relAngle) * DEG2RAD
 				wishdir = Vector3(math.cos(worldAngle), math.sin(worldAngle), 0)
 			end
 		end
 
 		if not wishdir then
-			-- Default: rotate velocity by strafe rate (EXACTLY like simple visualizer)
-			local ang = currentVel:Angles()
-			ang.y = ang.y + strafeRate
-			local speed = currentVel:Length()
-			currentVel = ang:Forward() * speed
-
-			-- Wishdir = normalized velocity
-			local len = currentVel:Length()
-			if len > 0.01 then
-				wishdir = currentVel / len
-			else
-				wishdir = Vector3(1, 0, 0)
-			end
+			-- Use locked base wishdir, rotated by accumulated yaw change
+			-- (yaw advances by strafeRate each tick)
+			currentYaw = currentYaw + strafeRate
+			-- Rotate base wishdir by the yaw delta
+			local baseAngle = math.atan(baseWishdir.y, baseWishdir.x)
+			local newAngle = baseAngle + strafeRate * DEG2RAD
+			wishdir = Vector3(math.cos(newAngle), math.sin(newAngle), 0)
 		end
 
 		-- Physics simulation
