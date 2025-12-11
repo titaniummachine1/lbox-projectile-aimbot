@@ -19,6 +19,8 @@ local math_max              = math.max
 local math_floor            = math.floor
 local math_pi               = math.pi
 
+local WishdirTracker        = require("simulation.wishdir_tracker")
+
 -- constants
 local MIN_SPEED             = 25   -- HU/s
 local MAX_ANGULAR_VEL       = 360  -- deg/s
@@ -74,6 +76,60 @@ local RuneTypes_t           = {
 
 local function GetEntityOrigin(pEntity)
 	return pEntity:GetPropVector("tflocaldata", "m_vecOrigin") or pEntity:GetAbsOrigin()
+end
+
+local function GetEntityYaw(pEntity)
+	if not pEntity then return nil end
+	local yaw = pEntity:GetPropFloat("m_angEyeAngles[1]")
+	if yaw then return yaw end
+	if pEntity.GetPropVector and type(pEntity.GetPropVector) == "function" then
+		local eyeVec = pEntity:GetPropVector("tfnonlocaldata", "m_angEyeAngles")
+		if eyeVec and eyeVec.y then return eyeVec.y end
+	end
+	local vel = pEntity:EstimateAbsVelocity()
+	if vel and vel:Length2D() > 1 then
+		local ang = vel:Angles()
+		if ang and ang.y then return ang.y end
+	end
+	return nil
+end
+
+local function getYawBasis(yaw)
+	local ang = EulerAngles(0, yaw, 0)
+	local f, r = vector.AngleVectors(ang)
+	f.z, r.z = 0, 0
+	local flen = f:Length2D()
+	local rlen = r:Length2D()
+	if flen > 0 then f.x, f.y = f.x / flen, f.y / flen end
+	if rlen > 0 then r.x, r.y = r.x / rlen, r.y / rlen end
+	return f, r
+end
+
+local function worldToRelative(dir, yaw)
+	local f, r = getYawBasis(yaw)
+	return Vector3(dir:Dot(f), dir:Dot(r), 0)
+end
+
+local function relativeToWorld(rel, yaw)
+	local f, r = getYawBasis(yaw)
+	return Vector3(f.x * rel.x + r.x * rel.y, f.y * rel.x + r.y * rel.y, 0)
+end
+
+local function snapRelTo8(rel)
+	if not rel then return nil end
+	local ang = math_atan(rel.y, rel.x) * 180 / math_pi
+	local idx = (math_floor((ang + 22.5) / 45) % 8 + 8) % 8
+	local dirs = {
+		[0] = { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 },
+		{ -1, 0 }, { -1, -1 }, { 0, -1 }, { 1, -1 },
+	}
+	local d = dirs[idx]
+	local out = Vector3(d[1], d[2], 0)
+	local len = out:Length()
+	if len > 0 then
+		out.x, out.y = out.x / len, out.y / len
+	end
+	return out
 end
 
 ---@param vec Vector3
@@ -389,12 +445,16 @@ end
 function sim.RunBackground(pLocal, entitylist)
 	local enemy_team = pLocal:GetTeamNumber() == 2 and 3 or 2
 
+	local enemies = {}
 	for i, playerInfo in pairs(entitylist) do
 		local player = entities.GetByIndex(i)
 		if player and playerInfo.m_iTeam == enemy_team and player:IsAlive() and not player:IsDormant() then
 			AddPositionSample(player)
+			table.insert(enemies, player)
 		end
 	end
+
+	WishdirTracker.updateTop(pLocal, enemies, 4)
 end
 
 ---@param origin Vector3
@@ -737,6 +797,17 @@ function sim.Run(pInfo, pTarget, initial_pos, time)
 	local gravity_step = pInfo.m_flGravityStep * tick_interval
 
 	local velocity = pInfo.m_vecVelocity
+	local wishdir_world = WishdirTracker.getWorldWishdir(pTarget)
+	-- fallback to velocity direction clamped to nearest 8 relative to yaw
+	if not wishdir_world then
+		local yaw = GetEntityYaw(pTarget) or 0
+		local vel2d = Vector3(velocity.x, velocity.y, 0)
+		if vel2d:Length2D() > 0.01 then
+			local rel = worldToRelative(vel2d, yaw)
+			local snappedRel = snapRelTo8(rel)
+			wishdir_world = snappedRel and relativeToWorld(snappedRel, yaw) or nil
+		end
+	end
 
 	local positions = {}
 
@@ -767,16 +838,21 @@ function sim.Run(pInfo, pTarget, initial_pos, time)
 		local ground_trace = TraceLine(next_pos, next_pos + down_vector, MASK_PLAYERSOLID, shouldHitEntity)
 		local is_on_ground = ground_trace and ground_trace.fraction < 1.0 and velocity.z <= MIN_VELOCITY_Z
 
-		--- wtf is this?
-		local horizontal_vel = velocity
+		local horizontal_vel = Vector3(velocity.x, velocity.y, 0)
 		local horizontal_speed = horizontal_vel:Length2D()
 
 		ApplyFriction(velocity, pTarget, is_on_ground)
 
 		if horizontal_speed > 0.1 then
-			local inv_len = 1.0 / horizontal_speed
-			local wishdir = horizontal_vel * inv_len
-			wishdir.z = 0
+			local wishdir = nil
+			if wishdir_world then
+				wishdir = Vector3(wishdir_world.x, wishdir_world.y, 0)
+			else
+				local inv_len = 1.0 / horizontal_speed
+				wishdir = horizontal_vel * inv_len
+				wishdir.z = 0
+			end
+
 			local wishspeed = math_min(horizontal_speed, maxspeed)
 
 			if is_on_ground then

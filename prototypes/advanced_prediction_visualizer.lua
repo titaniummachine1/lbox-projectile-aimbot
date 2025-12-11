@@ -9,6 +9,7 @@
 -- Config
 local PREDICT_TICKS = 66
 local DOT_SIZE = 4
+local USE_CMD_WISHDIR = false -- set true to drive sim with current input; false to test guessed/stable wishdir
 
 -- Constants
 local FL_ONGROUND = (1 << 0)
@@ -420,7 +421,7 @@ function WishDirTracker.getRelativeWishDir(self, idx)
 	assert(idx, "WishDirTracker.getRelativeWishDir: idx is nil")
 
 	local cmdDir = self.cmdWishDir[idx]
-	if cmdDir then
+	if USE_CMD_WISHDIR and cmdDir then
 		return cmdDir
 	end
 
