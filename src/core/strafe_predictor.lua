@@ -7,10 +7,6 @@ local StrafePredictor = {}
 -- Velocity history storage (global per-player)
 local velocityHistory = {}
 
--- Cleanup tracking
-local lastCleanupTick = 0
-local CLEANUP_INTERVAL = 300 -- Clean every 300 ticks (~5 seconds)
-
 ---Records velocity sample for a player
 ---@param entityIndex integer
 ---@param velocity Vector3
@@ -46,32 +42,19 @@ function StrafePredictor.clearAllHistory()
 	velocityHistory = {}
 end
 
----Periodically cleans up stale history entries (players no longer in game)
----Call this once per tick to prevent memory leaks
-function StrafePredictor.periodicCleanup()
-	local currentTick = globals.TickCount()
-	
-	-- Only cleanup every CLEANUP_INTERVAL ticks
-	if currentTick - lastCleanupTick < CLEANUP_INTERVAL then
-		return
-	end
-	
-	lastCleanupTick = currentTick
-	
-	-- Get list of all valid player indices
+-- Cleans up stale history entries (players no longer in game)
+-- Call this once per tick to prevent memory leaks
+function StrafePredictor.cleanupStalePlayers()
 	local validIndices = {}
 	for _, player in pairs(entities.FindByClass("CTFPlayer")) do
 		if player then
 			validIndices[player:GetIndex()] = true
 		end
 	end
-	
-	-- Remove history for invalid indices
-	local removed = 0
-	for entityIndex, _ in pairs(velocityHistory) do
+
+	for entityIndex in pairs(velocityHistory) do
 		if not validIndices[entityIndex] then
 			velocityHistory[entityIndex] = nil
-			removed = removed + 1
 		end
 	end
 end
@@ -157,6 +140,8 @@ end
 ---@param entities table List of entities to track
 ---@param maxSamples integer
 function StrafePredictor.updateAll(entities, maxSamples)
+	StrafePredictor.cleanupStalePlayers()
+
 	for _, entity in ipairs(entities) do
 		if entity:IsAlive() and not entity:IsDormant() then
 			local velocity = entity:EstimateAbsVelocity()

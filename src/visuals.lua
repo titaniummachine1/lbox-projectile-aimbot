@@ -161,6 +161,33 @@ local function drawProjPath(texture, projPath, thickness)
 	end
 end
 
+local function drawImpactDot(texture, pos, size)
+	if not pos or not texture then
+		return
+	end
+	local screen = client.WorldToScreen(pos)
+	if not screen then
+		return
+	end
+
+	local s = size or 3
+	local verts = {
+		{ screen[1] - s, screen[2] - s, 0, 0 },
+		{ screen[1] + s, screen[2] - s, 1, 0 },
+		{ screen[1] + s, screen[2] + s, 1, 1 },
+		{ screen[1] - s, screen[2] + s, 0, 1 },
+	}
+
+	draw.TexturedPolygon(texture, verts, false)
+end
+
+local function lastVec(tbl)
+	if not tbl or #tbl == 0 then
+		return nil
+	end
+	return tbl[#tbl]
+end
+
 local function drawMultipointTarget(texture, pos, thickness)
 	if not pos then
 		return
@@ -380,11 +407,8 @@ function Visuals.draw(state)
 		return
 	end
 
-	-- Create texture if needed
-	local texture = draw.CreateTextureRGBA(string.char(255, 255, 255, 255), 1, 1)
-	if not texture then
-		return
-	end
+	-- Create texture if needed (fallback to no-op if creation fails)
+	local texture = draw.CreateTextureRGBA(string.char(255, 255, 255, 255), 1, 1) or nil
 
 	-- Get eye position
 	local eyePos = nil
@@ -404,6 +428,10 @@ function Visuals.draw(state)
 	local projPath = state and state.projpath
 	local multipointPos = state and state.multipointPos
 	local targetEntity = state and state.target
+	-- Determine a best-effort target position for rendering boxes/quads even if paths are missing
+	local targetPos = multipointPos
+		or lastVec(playerPath)
+		or (targetEntity and targetEntity.GetAbsOrigin and targetEntity:GetAbsOrigin() or nil)
 
 	-- Draw player path
 	if vis.DrawPlayerPath and playerPath and #playerPath > 0 then
@@ -413,13 +441,10 @@ function Visuals.draw(state)
 	end
 
 	-- Draw bounding box
-	if vis.DrawBoundingBox and playerPath and #playerPath > 0 and targetEntity and eyePos then
-		local pos = playerPath[#playerPath]
-		if pos then
-			local r, g, b, a = getColorFromHue(vis.Colors.BoundingBox)
-			draw.Color(r, g, b, a)
-			drawPlayerHitbox(texture, pos, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, vis.Thickness.BoundingBox)
-		end
+	if vis.DrawBoundingBox and targetPos and targetEntity and eyePos then
+		local r, g, b, a = getColorFromHue(vis.Colors.BoundingBox)
+		draw.Color(r, g, b, a)
+		drawPlayerHitbox(texture, targetPos, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, vis.Thickness.BoundingBox)
 	end
 
 	-- Draw projectile path
@@ -437,24 +462,29 @@ function Visuals.draw(state)
 	end
 
 	-- Draw quads
-	if vis.DrawQuads and playerPath and #playerPath > 0 and targetEntity and eyePos then
-		local pos = playerPath[#playerPath]
-		if pos then
-			local baseColor
-			if vis.Colors.Quads >= 360 then
-				baseColor = { r = 255, g = 255, b = 255, a = 25 }
-			else
-				local r, g, b = hsvToRgb(vis.Colors.Quads, 0.5, 1)
-				baseColor = {
-					r = (r * 255) // 1,
-					g = (g * 255) // 1,
-					b = (b * 255) // 1,
-					a = 25,
-				}
-			end
-
-			drawQuads(texture, pos, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, baseColor)
+	if vis.DrawQuads and targetPos and targetEntity and eyePos then
+		local baseColor
+		if vis.Colors.Quads >= 360 then
+			baseColor = { r = 255, g = 255, b = 255, a = 25 }
+		else
+			local r, g, b = hsvToRgb(vis.Colors.Quads, 0.5, 1)
+			baseColor = {
+				r = (r * 255) // 1,
+				g = (g * 255) // 1,
+				b = (b * 255) // 1,
+				a = 25,
+			}
 		end
+
+		drawQuads(texture, targetPos, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, baseColor)
+	end
+
+	-- Draw impact/last projectile point for quick visibility when path is short
+	if vis.DrawProjectilePath and projPath and #projPath >= 1 then
+		local impactPos = projPath[#projPath]
+		local r, g, b, a = getColorFromHue(vis.Colors.ProjectilePath)
+		draw.Color(r, g, b, a)
+		drawImpactDot(texture, impactPos, vis.Thickness.ProjectilePath * 2)
 	end
 
 	-- Cleanup texture

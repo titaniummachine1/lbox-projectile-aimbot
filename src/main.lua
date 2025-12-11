@@ -11,36 +11,32 @@ local Latency = require("core.latency")
 local WeaponOffsets = require("constants.weapon_offsets")
 local StrafePredictor = require("core.strafe_predictor")
 local TickProfiler = require("tick_profiler")
+local PlayerTracker = require("player_tracker")
 
 -- Local constants / utilities -----
-local DEFAULT_MAX_DISTANCE = 3000
+local DEFAULT_MAX_DISTANCE = 3000LO
 
 local utils = {}
 utils.math = require("utils.math")
 utils.weapon = require("utils.weapon_utils")
 
----@class State
+-- Fonts
+local confidenceFont = draw.CreateFont("Tahoma", 16, 700, FONTFLAG_OUTLINE)
+
+---@class State Current tick aim state (ephemeral)
 ---@field target Entity?
 ---@field angle EulerAngles?
----@field path Vector3[]?
----@field storedpath {path: Vector3[]?, projpath: Vector3[]?, projtimetable: number[]?, timetable: number[]?}
 ---@field charge number
 ---@field charges boolean
 ---@field silent boolean
 ---@field secondaryfire boolean
----@field confidence number?
----@field multipointPos Vector3?
 local state = {
 	target = nil,
 	angle = nil,
-	path = nil,
-	storedpath = { path = nil, projpath = nil, projtimetable = nil, timetable = nil },
 	charge = 0,
 	charges = false,
 	silent = true,
 	secondaryfire = false,
-	confidence = nil,
-	multipointPos = nil,
 }
 
 -- Activation mode state tracking
@@ -161,8 +157,13 @@ local function DrawPath(tbl)
 end
 
 local function CleanTimeTable(pathtbl, timetbl)
-	if not pathtbl or not timetbl or #pathtbl ~= #timetbl or #pathtbl < 2 then
-		return nil, nil
+	-- Keep data if counts differ so we don't throw away visuals when timetables
+	-- are missing/misaligned; only prune when we have matching timestamps.
+	if not pathtbl or not timetbl or #pathtbl < 2 then
+		return pathtbl, timetbl
+	end
+	if #pathtbl ~= #timetbl then
+		return pathtbl, timetbl
 	end
 
 	local curtime = globals.CurTime()
@@ -314,8 +315,6 @@ end
 
 -- Private helpers -----
 local function onDraw()
-	TickProfiler.BeginSection("Draw:Total")
-
 	-- Zero Trust: Assert external state
 	assert(G.Menu, "main: G.Menu is nil")
 	assert(G.Menu.Aimbot, "main: G.Menu.Aimbot is nil")
@@ -323,8 +322,9 @@ local function onDraw()
 	local cfg = G.Menu.Aimbot
 	local vis = G.Menu.Visuals
 
-	-- Update profiler state
+	-- Update profiler state before any BeginSection calls
 	TickProfiler.SetEnabled(vis.ShowProfiler)
+	TickProfiler.BeginSection("Draw:Total")
 
 	-- Guard clause: Check if aimbot is enabled
 	if not cfg.Enabled then
@@ -341,50 +341,53 @@ local function onDraw()
 		gui.SetValue("projectile aimbot", 0)
 	end
 
-	TickProfiler.BeginSection("Draw:PathCleanup")
-	-- Clean up old path data (remove expired timetables)
-	if state.storedpath.path and state.storedpath.timetable then
-		local cleanedpath, cleanedtime = CleanTimeTable(state.storedpath.path, state.storedpath.timetable)
-		state.storedpath.path = cleanedpath
-		state.storedpath.timetable = cleanedtime
-	end
+	TickProfiler.BeginSection("Draw:GetVisualData")
+	-- Get all valid player data for rendering
+	local allPlayerData = PlayerTracker.GetAll()
 
-	if state.storedpath.projpath and state.storedpath.projtimetable then
-		local cleanedprojpath, cleanedprojtime =
-			CleanTimeTable(state.storedpath.projpath, state.storedpath.projtimetable)
-		state.storedpath.projpath = cleanedprojpath
-		state.storedpath.projtimetable = cleanedprojtime
+	-- Find best target to visualize (most recent update)
+	local bestData = nil
+	local bestTick = -1
+	for _, data in pairs(allPlayerData) do
+		if data.lastUpdateTick > bestTick then
+			bestData = data
+			bestTick = data.lastUpdateTick
+		end
 	end
-	TickProfiler.EndSection("Draw:PathCleanup")
+	TickProfiler.EndSection("Draw:GetVisualData")
 
 	TickProfiler.BeginSection("Draw:Visuals")
-	-- Draw advanced visualizations from state
-	Visuals.draw({
-		path = state.storedpath.path,
-		projpath = state.storedpath.projpath,
-		multipointPos = state.multipointPos,
-		target = state.target,
-	})
+	-- Draw advanced visualizations from persistent player data
+	if bestData then
+		Visuals.draw({
+			path = bestData.path,
+			projpath = bestData.projpath,
+			multipointPos = bestData.multipointPos,
+			target = bestData.entity,
+		})
+	end
 	TickProfiler.EndSection("Draw:Visuals")
 
 	TickProfiler.BeginSection("Draw:Confidence")
-	-- Draw confidence score from state
-	if vis.ShowConfidence and state.confidence then
+	-- Draw confidence score from persistent player data
+	if vis.ShowConfidence and bestData and bestData.confidence then
 		local screenW, screenH = draw.GetScreenSize()
-		local text = string.format("Confidence: %.1f%%", state.confidence)
+		local text = string.format("Confidence: %.1f%%", bestData.confidence)
 
 		-- Color based on confidence
 		local r, g, b = 255, 255, 255
-		if state.confidence >= 70 then
+		if bestData.confidence >= 70 then
 			r, g, b = 100, 255, 100 -- Green
-		elseif state.confidence >= 50 then
+		elseif bestData.confidence >= 50 then
 			r, g, b = 255, 255, 100 -- Yellow
 		else
 			r, g, b = 255, 100, 100 -- Red
 		end
 
 		draw.Color(r, g, b, 255)
-		draw.SetFont(fonts.Create("Tahoma", 16, 700))
+		if confidenceFont then
+			draw.SetFont(confidenceFont)
+		end
 		local textW, textH = draw.GetTextSize(text)
 		draw.Text(screenW / 2 - textW / 2, screenH / 2 + 30, text)
 	end
@@ -401,16 +404,17 @@ local function onCreateMove(cmd)
 	assert(G.Menu, "main: G.Menu is nil")
 	assert(G.Menu.Aimbot, "main: G.Menu.Aimbot is nil")
 
-	--- Reset our state table every tick
+	--- Reset ephemeral aim state every tick
 	state.angle = nil
-	state.path = nil
 	state.target = nil
 	state.charge = 0
 	state.charges = false
-	state.confidence = nil
-	state.multipointPos = nil
 
 	local cfg = G.Menu.Aimbot
+
+	-- Update player list (detect disconnects/joins) and clean stale data
+	PlayerTracker.UpdatePlayerList()
+	StrafePredictor.cleanupStalePlayers()
 
 	-- Guard clauses
 	if not cfg.Enabled then
@@ -527,9 +531,6 @@ local function onCreateMove(cmd)
 
 	TickProfiler.BeginSection("CM:StrafeRecord")
 	-- Fedoraware Optional: Record velocity history for strafe prediction
-	-- Periodic cleanup to prevent memory leaks
-	StrafePredictor.periodicCleanup()
-
 	-- Update velocity history for all potential targets
 	for _, entData in ipairs(sortedEntities) do
 		local entity = entData.entity
@@ -599,18 +600,23 @@ local function onCreateMove(cmd)
 						local secondaryFire = doSecondaryFiretbl[weaponID]
 						local noSilent = noSilentTbl[weaponID]
 
+						-- Store ephemeral aim state for this tick
 						state.target = entity
-						state.path = path
 						state.angle = angle
-						state.storedpath.path = path
-						state.storedpath.projpath = projpath
-						state.storedpath.timetable = timetable
-						state.storedpath.projtimetable = projtimetable
 						state.charge = charge
 						state.charges = info.m_bCharges
 						state.secondaryfire = secondaryFire
 						state.silent = not noSilent
-						state.confidence = confidence
+
+						-- Store persistent visual data in player tracker
+						PlayerTracker.Update(entity, {
+							path = path,
+							projpath = projpath,
+							timetable = timetable,
+							projtimetable = projtimetable,
+							multipointPos = multipointPos,
+							confidence = confidence,
+						})
 
 						-- Found valid target, apply aim
 						break
@@ -633,6 +639,7 @@ local function onCreateMove(cmd)
 
 	if state.charges and state.charge < 0.1 then
 		cmd.buttons = cmd.buttons | IN_ATTACK
+		TickProfiler.EndSection("CM:Total")
 		return
 	end
 
