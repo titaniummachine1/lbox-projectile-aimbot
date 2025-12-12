@@ -24,6 +24,9 @@ local RADIUS_TOLERANCE = 1.0
 local NORMAL_TOLERANCE = 0.1 -- Reduced from 0.1 for more precise normal grouping
 local POSITION_EPSILON = 0.01 -- 1mm precision for position comparisons
 local VISIBILITY_THRESHOLD = 0.99 -- Increased from 0.99 for stricter visibility checks
+local CARDINAL_HULL_MINS = Vector3(-2, -2, -2)
+local CARDINAL_HULL_MAXS = Vector3(2, 2, 2)
+local MAX_SEGMENT_RADIUS = 1024
 
 -- circle helper
 local CIRCLE_RADIUS = 181 -- units from centre‑of‑player to sample
@@ -130,6 +133,16 @@ local function CanDamageFrom(pointPos, targetCOM, targetPlayer)
 	return tr.entity and tr.entity:GetIndex() == targetPlayer:GetIndex()
 end
 
+local function CanDamageFromAABB(pointPos, targetAABBMin, targetAABBMax, targetPlayer)
+	local closest = GetClosestPointOnAABB(targetAABBMin, targetAABBMax, pointPos)
+	if (pointPos - closest):Length() > BLAST_RADIUS then
+		return false
+	end
+	local targetCenter = (targetAABBMin + targetAABBMax) * 0.5
+	local tr = engine.TraceLine(pointPos, targetCenter, MASK_SHOT + CONTENTS_GRATE)
+	return tr.entity and tr.entity:GetIndex() == targetPlayer:GetIndex()
+end
+
 -- Function to perform binary search toward AABB closest point on the same plane
 -- Precision improvements:
 -- - Increased iterations from 7 to 10 for finer search
@@ -184,7 +197,7 @@ local function DrawPlayerAABB(player, localPlayer)
 		return
 	end
 
-	local shouldHitEntity = function(entity)
+	local shouldHitEntity = function(entity, _contentsMask)
 		return shouldHitEntityFun(entity, player, nil)
 	end
 
@@ -467,59 +480,156 @@ local function DrawPlayerAABB(player, localPlayer)
 				cachedRadii[playerIdx][directionIndex] = cachedRadii[playerIdx][directionIndex] or {}
 
 				-- 3) for each segment, binary search for max radius that can damage
+				local CIRCLE_SEARCH_ITERATIONS = 7
+				local CIRCLE_TRACE_OUT = 8
+				local CIRCLE_TRACE_IN = 32
 				local step = (2 * math.pi) / CIRCLE_SEGMENTS
 				local circlePoints = {}
+				local traceMask = MASK_SHOT + CONTENTS_GRATE
+
+				-- Calculate dynamic max radius based on target AABB
+				local aabbSize = (worldMaxs - worldMins):Length()
+				local dynamicMaxRadius = BLAST_RADIUS + (aabbSize * 2) + 20
+				print(
+					string.format(
+						"Dynamic max radius: %.2f (BLAST_RADIUS=%.2f, AABB_size=%.2f)",
+						dynamicMaxRadius,
+						BLAST_RADIUS,
+						aabbSize
+					)
+				)
 
 				for i = 0, CIRCLE_SEGMENTS - 1 do
 					local ang = i * step
 					local dir = u * math.cos(ang) + v * math.sin(ang)
 
 					-- Get cached radius as starting guess (or default)
-					local cachedR = cachedRadii[playerIdx][directionIndex][i] or BLAST_RADIUS
+					local cachedR = cachedRadii[playerIdx][directionIndex][i] or CIRCLE_RADIUS
 
 					-- Binary search for max radius that can hit target
-					local minR, maxR = 8, BLAST_RADIUS
-					local bestR = minR
+					local minR = 8
+					local bestR = nil
 					local bestPos = nil
+					local bestFraction = nil
 
-					-- Start from cached radius and search outward/inward
-					local low, high = minR, math.min(cachedR + 20, maxR)
+					-- bracket [lowOk, highFail] by expanding outward until we fail
+					local lowOk = nil
+					local highFail = nil
+					local function EvalRadius(radius)
+						local samplePos = hub + dir * radius
+						local start = samplePos + planeNormal * CIRCLE_TRACE_OUT
+						local stop = samplePos - planeNormal * CIRCLE_TRACE_IN
+						local tr = engine.TraceLine(start, stop, traceMask, shouldHitEntity)
+						if tr.fraction >= 1.0 then
+							return false
+						end
+						if not CanDamageFromAABB(tr.endpos, worldMins, worldMaxs, player) then
+							return false
+						end
+						return true, tr.endpos, tr.fraction
+					end
 
-					for _ = 1, BINARY_SEARCH_ITERATIONS do
-						local midR = (low + high) * 0.5
-						local testPos = hub + dir * midR
+					-- 1) ensure we have a known-good low bound
+					local okMin, impactMin, fracMin = EvalRadius(minR)
+					local expandR -- declare before any goto
+					if okMin then
+						lowOk = minR
+						bestR = minR
+						bestPos = impactMin
+						bestFraction = fracMin
+					else
+						-- segment never valid
+						cachedRadii[playerIdx][directionIndex][i] = minR
+						goto continue_segment
+					end
 
-						-- Trace to find actual surface point
-						local start = hub + planeNormal * 0.5
-						local tr = engine.TraceLine(start, testPos, MASK_SHOT + CONTENTS_GRATE, shouldHitEntity)
+					-- 2) expand upward starting from cachedR (but never below minR)
+					expandR = math.max(minR, cachedR)
+					if expandR > lowOk then
+						local okProbe, impactProbe, fracProbe = EvalRadius(expandR)
+						if okProbe then
+							lowOk = expandR
+							bestR = expandR
+							bestPos = impactProbe
+							bestFraction = fracProbe
+						else
+							highFail = expandR
+						end
+					else
+						expandR = lowOk
+					end
 
-						if tr.fraction < 1.0 then
-							-- Check if this point can damage target
-							if CanDamageFrom(tr.endpos, center, player) then
-								bestR = midR
-								bestPos = tr.endpos
-								low = midR -- Try larger radius
-							else
-								high = midR -- Need smaller radius
+					-- continue expanding until first fail
+					while (not highFail) and expandR < dynamicMaxRadius do
+						local nextR = expandR * 1.25 + 8
+						if nextR > dynamicMaxRadius then
+							nextR = dynamicMaxRadius
+						end
+						local ok, impact, frac = EvalRadius(nextR)
+						if ok then
+							lowOk = nextR
+							bestR = nextR
+							bestPos = impact
+							bestFraction = frac
+							expandR = nextR
+							if expandR >= dynamicMaxRadius then
+								highFail = dynamicMaxRadius
 							end
 						else
-							high = midR -- No geometry, try smaller
+							highFail = nextR
 						end
-
-						-- Early exit if converged
-						if (high - low) < RADIUS_TOLERANCE then
+						if highFail == lowOk then
 							break
 						end
 					end
 
+					-- 3) binary search between last ok and first fail
+					if highFail and highFail > lowOk then
+						local low = lowOk
+						local high = highFail
+						for _ = 1, CIRCLE_SEARCH_ITERATIONS do
+							local midR = (low + high) * 0.5
+							local ok, impact, frac = EvalRadius(midR)
+							if ok then
+								bestR = midR
+								bestPos = impact
+								bestFraction = frac
+								low = midR
+							else
+								high = midR
+							end
+							if (high - low) < RADIUS_TOLERANCE then
+								break
+							end
+						end
+					end
+
 					-- Cache the found radius for next tick
-					cachedRadii[playerIdx][directionIndex][i] = bestR
+					cachedRadii[playerIdx][directionIndex][i] = bestR or minR
+
+					-- Debug: print radii for segments 0, 6, 12, 18 to check irregularity
+					if i == 0 or i == 6 or i == 12 or i == 18 then
+						local failureReason = "none"
+						if not bestPos then
+							if lowOk == nil then
+								failureReason = "minR failed"
+							elseif highFail == nil then
+								failureReason = "reached dynamicMaxRadius"
+							else
+								failureReason = "binary search failed"
+							end
+						end
+						print(string.format("Segment %d: bestR=%.2f, failure=%s", i, bestR or 0, failureReason))
+					end
+
+					::continue_segment::
 
 					-- Add point if valid
 					if bestPos then
 						local s = client.WorldToScreen(bestPos)
 						local p = {
 							pos = bestPos,
+							fraction = bestFraction or 1.0,
 							radius = bestR,
 							normal = planeNormal,
 							screen = s,
@@ -562,7 +672,14 @@ local function DrawPlayerAABB(player, localPlayer)
 				----------------------------------------------------------------
 				-- first trace centre → aimPoint (mask = HULL)
 				----------------------------------------------------------------
-				local tr = engine.TraceLine(center, aimPoint, MASK_SHOT + CONTENTS_GRATE, shouldHitEntity)
+				local tr = engine.TraceHull(
+					center,
+					aimPoint,
+					CARDINAL_HULL_MINS,
+					CARDINAL_HULL_MAXS,
+					MASK_SHOT + CONTENTS_GRATE,
+					shouldHitEntity
+				)
 				if tr.fraction >= 1.0 then
 					print("Early return: nothing hit (fraction >= 1.0)")
 					return
@@ -588,7 +705,14 @@ local function DrawPlayerAABB(player, localPlayer)
 					local d = (hitPos - center):Length()
 					if d > BLAST_RADIUS + 0.1 then -- purely range issue
 						local newPos = center + dir * (BLAST_RADIUS - 0.01)
-						local tr2 = engine.TraceLine(center, newPos, MASK_SHOT + CONTENTS_GRATE, shouldHitEntity)
+						local tr2 = engine.TraceHull(
+							center,
+							newPos,
+							CARDINAL_HULL_MINS,
+							CARDINAL_HULL_MAXS,
+							MASK_SHOT + CONTENTS_GRATE,
+							shouldHitEntity
+						)
 						if tr2.fraction < 1.0 then
 							hitPos = tr2.endpos
 							dmgOK = CanDamageFrom(hitPos, center, player)
@@ -743,7 +867,9 @@ local function DrawPlayerAABB(player, localPlayer)
 
 			-- Sort collision points by fraction (closest to furthest)
 			table.sort(collisionPoints, function(a, b)
-				return a.fraction < b.fraction
+				local fa = (a and a.fraction) or 1.0
+				local fb = (b and b.fraction) or 1.0
+				return fa < fb
 			end)
 
 			-- Get view position for visibility checks
@@ -1003,8 +1129,10 @@ local function CheckAimPointAndVisualize(localPlayer, targetPlayer)
 		return
 	end -- shouldn't happen
 
-	-- enemy centre‑of‑mass (approx)
-	local com = targetPlayer:GetAbsOrigin() + Vector3(0, 0, 32)
+	-- enemy centre (AABB center)
+	local mins = targetPlayer:GetMins()
+	local maxs = targetPlayer:GetMaxs()
+	local com = targetPlayer:GetAbsOrigin() + (mins + maxs) / 2
 
 	-- build a capped segment: length = min(dist(COM), BLAST_RADIUS)
 	local delta = com - aimHit
