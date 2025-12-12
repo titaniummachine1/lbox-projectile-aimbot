@@ -1,6 +1,5 @@
--- Imports
+-- Module: latency utilities
 
--- Module declaration
 local Latency = {}
 
 ---Gets full network latency compensation value
@@ -43,3 +42,4 @@ function Latency.getAdjustedPredictionTime(distance, projectileSpeed)
 end
 
 return Latency
+

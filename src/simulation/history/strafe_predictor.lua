@@ -156,3 +156,4 @@ function StrafePredictor.updateAll(entities, maxSamples)
 end
 
 return StrafePredictor
+
