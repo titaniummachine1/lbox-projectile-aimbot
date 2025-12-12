@@ -30,6 +30,17 @@ local MAX_SEGMENT_RADIUS = 1024
 local CIRCLE_RADIUS = 181 -- units from centre‑of‑player to sample
 local CIRCLE_SEGMENTS = 24 -- how many points around the ring
 
+local CIRCLE_COS = {}
+local CIRCLE_SIN = {}
+do
+	local step = (2 * math.pi) / CIRCLE_SEGMENTS
+	for i = 0, CIRCLE_SEGMENTS - 1 do
+		local ang = i * step
+		CIRCLE_COS[i] = math.cos(ang)
+		CIRCLE_SIN[i] = math.sin(ang)
+	end
+end
+
 -- composite cost tuning
 local DAMAGE_WT = 0.75 -- 75% weight on damage proximity (distance to target)
 local DISTANCE_WT = 0.25 -- 25% weight on shooter distance
@@ -61,6 +72,16 @@ local cachedRadii = {} -- [playerIndex][directionIndex][segmentIndex] = radius
 local cachedProjectileInfoResolver = nil
 local cachedBlastRadiusWeaponId = nil
 local cachedBlastRadiusValue = 169
+
+local EXTRA_TRACE_REACH = 77
+local cachedSplashData = {}
+
+local cachedSegmentRadii = {}
+local PLANE_NORMAL_SIMILARITY = 0.95
+local RADIUS_HYSTERESIS = 1.5
+local SEGMENT_SEARCH_ITERATIONS = 6
+local SEGMENT_SEARCH_EPSILON = 1.0
+local cachedBlueprint = {}
 
 -- Function to check if entity should be hit (ignore target player and teammates)
 local function shouldHitEntityFun(entity, targetPlayer, ignoreEntities)
@@ -126,7 +147,42 @@ local function GetPlayerCOM(player)
 	return player:GetAbsOrigin() + (mins + maxs) / 2
 end
 
-local function CanSplashFromPoint(pointPos, targetCOM, targetPlayer, blastRadius)
+ local function GetPlayerWorldAABB(player)
+	local mins = player:GetMins()
+	local maxs = player:GetMaxs()
+	if not mins or not maxs then
+		return nil
+	end
+	local pos = player:GetAbsOrigin()
+	return pos + mins, pos + maxs
+ end
+
+ local function CanSplashDamagePlayerFromPoint(pointPos, targetPlayer, blastRadius)
+	if not pointPos or not targetPlayer or not blastRadius then
+		return false
+	end
+
+	local aabbMin, aabbMax = GetPlayerWorldAABB(targetPlayer)
+	if not aabbMin or not aabbMax then
+		return false
+	end
+
+	local closest = GetClosestPointOnAABB(aabbMin, aabbMax, pointPos)
+	if (pointPos - closest):Length() > blastRadius then
+		return false
+	end
+
+	local start = pointPos
+	local dir = closest - pointPos
+	local dist = dir:Length()
+	if dist > 0 then
+		start = pointPos + (dir / dist) * 0.5
+	end
+	local tr = engine.TraceLine(start, closest, MASK_SHOT + CONTENTS_GRATE)
+	return tr.entity and tr.entity:GetIndex() == targetPlayer:GetIndex()
+ end
+
+ local function CanSplashFromPoint(pointPos, targetCOM, targetPlayer, blastRadius)
 	if not pointPos or not targetCOM or not targetPlayer then
 		return false
 	end
@@ -143,8 +199,233 @@ local function CanSplashFromPoint(pointPos, targetCOM, targetPlayer, blastRadius
 	return tr.entity and tr.entity:GetIndex() == targetPlayer:GetIndex()
 end
 
+ local GetWeaponBlastRadius
+ local CanDamageFrom
+
+
+ local function ComputeSplashDataForPlayer(targetPlayer, localPlayer, prevData)
+	assert(targetPlayer, "ComputeSplashDataForPlayer: missing targetPlayer")
+	assert(localPlayer, "ComputeSplashDataForPlayer: missing localPlayer")
+
+	local viewOffset = localPlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
+	if not viewOffset then
+		return nil
+	end
+	local eye = localPlayer:GetAbsOrigin() + viewOffset
+
+	local com = GetPlayerCOM(targetPlayer)
+	if not com then
+		return nil
+	end
+
+	local blastRadius = GetWeaponBlastRadius()
+	local maxProbeDist = blastRadius + EXTRA_TRACE_REACH
+
+	local shouldHitEntity = function(entity, _contentsMask)
+		return shouldHitEntityFun(entity, targetPlayer, nil)
+	end
+
+	local traceMask = MASK_SHOT + CONTENTS_GRATE
+
+	local playerIdx = targetPlayer:GetIndex()
+	cachedRadii[playerIdx] = cachedRadii[playerIdx] or {}
+	cachedBlueprint[playerIdx] = cachedBlueprint[playerIdx] or {}
+
+	local function BuildBasis(n)
+		local tmp = (math.abs(n.z) < 0.9) and Vector3(0, 0, 1) or Vector3(1, 0, 0)
+		local u = vector.Normalize(tmp:Cross(n))
+		local v = n:Cross(u)
+		return u, v
+	end
+
+	local axisDirs = {
+		Vector3(1, 0, 0),
+		Vector3(-1, 0, 0),
+		Vector3(0, 1, 0),
+		Vector3(0, -1, 0),
+		Vector3(0, 0, 1),
+		Vector3(0, 0, -1),
+	}
+
+	local out = prevData or {}
+	local points = out.points or {}
+	for i = #points, 1, -1 do
+		points[i] = nil
+	end
+	local step = (2 * math.pi) / CIRCLE_SEGMENTS
+
+	for planeId = 1, #axisDirs do
+		local axis = axisDirs[planeId]
+		local seedTr = engine.TraceLine(com, com + axis * maxProbeDist, traceMask, shouldHitEntity)
+		local planeLocked = false
+		local planePoint = nil
+		local planeNormal = nil
+		local hub = nil
+		if seedTr and seedTr.fraction < 1.0 and seedTr.endpos and seedTr.plane then
+			planePoint = seedTr.endpos
+			planeNormal = seedTr.plane
+			if PlaneFacesPlayer(planeNormal, eye, planePoint) then
+				local toCom = com - planePoint
+				hub = com - planeNormal * toCom:Dot(planeNormal)
+				planeLocked = true
+			end
+		end
+		if not planeLocked then
+			-- fallback: assume an orientation plane at max range
+			planePoint = com + axis * maxProbeDist
+			planeNormal = axis * -1
+			hub = planePoint
+			cachedBlueprint[playerIdx][planeId] = nil
+		end
+
+		local planeBlueprint = planeLocked and cachedBlueprint[playerIdx][planeId] or nil
+		local useCache = false
+		if planeBlueprint and planeBlueprint.normal and planeBlueprint.hub and planeBlueprint.maxProbeDist then
+			if planeBlueprint.maxProbeDist == maxProbeDist then
+				local hubDelta = hub - planeBlueprint.hub
+				if hubDelta:Length() <= 1.0 and planeBlueprint.normal:Dot(planeNormal) >= 0.999 then
+					useCache = true
+				end
+			end
+		end
+
+		local function RebuildDirs()
+			local u, v = BuildBasis(planeNormal)
+			local newDirs = {}
+			for seg = 0, CIRCLE_SEGMENTS - 1 do
+				local dirPlane = u * CIRCLE_COS[seg] + v * CIRCLE_SIN[seg]
+				dirPlane = vector.Normalize(dirPlane)
+				newDirs[seg] = dirPlane
+			end
+			return newDirs
+		end
+
+		local dirs
+		if useCache then
+			dirs = planeBlueprint.dirs
+		else
+			dirs = RebuildDirs()
+			if planeLocked then
+				cachedBlueprint[playerIdx][planeId] = {
+					normal = planeNormal,
+					hub = hub,
+					maxProbeDist = maxProbeDist,
+					dirs = dirs,
+				}
+			end
+		end
+
+		cachedRadii[playerIdx][planeId] = cachedRadii[playerIdx][planeId] or {}
+
+		for seg = 0, CIRCLE_SEGMENTS - 1 do
+
+			local prevR = cachedRadii[playerIdx][planeId][seg]
+			local low = 0
+			local high = maxProbeDist
+			if prevR then
+				low = math.max(0, math.min(prevR - 4, maxProbeDist))
+			end
+
+			local function EvalRadius(radius)
+				local dirPlane = dirs[seg]
+				local goal = hub + dirPlane * radius
+				local delta = goal - com
+				local dist = delta:Length()
+				if dist <= 0.001 then
+					return false
+				end
+				local rayDir = delta / dist
+				local rayEnd = com + rayDir * maxProbeDist
+				local tr = engine.TraceLine(com, rayEnd, traceMask, shouldHitEntity)
+				if (not tr) or tr.fraction >= 1.0 or (not tr.endpos) or (not tr.plane) then
+					return false
+				end
+				if not planeLocked then
+					planePoint = tr.endpos
+					planeNormal = tr.plane
+					local toCom = com - planePoint
+					hub = com - planeNormal * toCom:Dot(planeNormal)
+					planeLocked = PlaneFacesPlayer(planeNormal, eye, planePoint)
+					dirs = RebuildDirs()
+					if planeLocked then
+						cachedBlueprint[playerIdx][planeId] = {
+							normal = planeNormal,
+							hub = hub,
+							maxProbeDist = maxProbeDist,
+							dirs = dirs,
+						}
+					end
+				end
+				if planeLocked then
+					if tr.plane:Dot(planeNormal) < PLANE_NORMAL_SIMILARITY then
+						return false
+					end
+					if not PlaneFacesPlayer(tr.plane, eye, tr.endpos) then
+						return false
+					end
+				end
+				if not CanDamageFrom(tr.endpos, com, targetPlayer, blastRadius) then
+					return false
+				end
+				return true, tr.endpos, tr.fraction, tr.plane
+			end
+
+			local bestR = nil
+			local bestPos = nil
+			local bestFrac = nil
+			local bestN = nil
+
+			for _ = 1, SEGMENT_SEARCH_ITERATIONS do
+				if (high - low) <= SEGMENT_SEARCH_EPSILON then
+					break
+				end
+				local mid = (low + high) * 0.5
+				local okMid, posMid, fracMid, nMid = EvalRadius(mid)
+				if okMid then
+					bestR, bestPos, bestFrac, bestN = mid, posMid, fracMid, nMid
+					low = mid
+				else
+					high = mid
+				end
+			end
+
+			if not bestR or bestR < 10 then
+				goto continue_segment
+			end
+
+			if prevR and math.abs(bestR - prevR) < RADIUS_HYSTERESIS then
+				local okPrev, posPrev, fracPrev, nPrev = EvalRadius(prevR)
+				if okPrev then
+					bestR, bestPos, bestFrac, bestN = prevR, posPrev, fracPrev, nPrev
+				end
+			end
+			cachedRadii[playerIdx][planeId][seg] = bestR
+
+			table.insert(points, {
+				pos = bestPos,
+				fraction = bestFrac or 1.0,
+				radius = bestR,
+				normal = bestN or planeNormal,
+				segmentIndex = seg,
+				planeId = planeId,
+			})
+
+			::continue_segment::
+		end
+
+		::continue_plane::
+	end
+
+	out.playerIndex = targetPlayer:GetIndex()
+	out.com = com
+	out.blastRadius = blastRadius
+	out.eye = eye
+	out.points = points
+	return out
+ end
+
 -- Function to check if an explosion at pointPos will splash the player's COM
-local function GetWeaponBlastRadius()
+GetWeaponBlastRadius = function()
 	local localPlayer = entities.GetLocalPlayer()
 	if not localPlayer then return 169 end -- fallback
 	
@@ -181,7 +462,7 @@ local function GetWeaponBlastRadius()
 	return blastRadius
 end
 
-local function CanDamageFrom(pointPos, targetCOM, targetPlayer, blastRadius)
+CanDamageFrom = function(pointPos, targetCOM, targetPlayer, blastRadius)
 	local BLAST_RADIUS = blastRadius or GetWeaponBlastRadius()
 	return CanSplashFromPoint(pointPos, targetCOM, targetPlayer, BLAST_RADIUS)
 end
@@ -1083,31 +1364,43 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 	end
 end
 
+
 -- Visual helper: draw a yellow line only when the point you are aiming at
 -- could splash the enemy's COM within 169 u.
-local function CheckAimPointAndVisualize(localPlayer, targetPlayer, eye, aimHit, blastRadius)
+local function CheckAimPointAndVisualize(localPlayer, targetPlayer)
 	if not localPlayer or not targetPlayer then
 		return
 	end
-	if not eye or not aimHit then
-		return
-	end
 
-	local com = GetPlayerCOM(targetPlayer)
-	if not com then
-		return
-	end
+	local eye = localPlayer:GetAbsOrigin() + localPlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
+	local aimDir = engine.GetViewAngles():Forward()
+	local aimPos = eye + aimDir * 1000 -- long look‑ray
 
-	local BLAST_RADIUS = blastRadius or GetWeaponBlastRadius()
-	if CanSplashFromPoint(aimHit, com, targetPlayer, BLAST_RADIUS) then
-		local delta = com - aimHit
-		local dist = delta:Length()
-		if dist == 0 then
-			return
-		end
-		local dir = delta / dist
-		local segEnd = aimHit + dir * math.min(dist, BLAST_RADIUS)
-		local splash = engine.TraceLine(aimHit, segEnd, MASK_SHOT + CONTENTS_GRATE)
+	-- where your crosshair ray first hits the world
+	local aimHit = engine.TraceLine(eye, aimPos, MASK_SHOT + CONTENTS_GRATE).endpos
+	if not aimHit then
+		return
+	end -- shouldn't happen
+
+	-- enemy centre (AABB center)
+	local mins = targetPlayer:GetMins()
+	local maxs = targetPlayer:GetMaxs()
+	local com = targetPlayer:GetAbsOrigin() + (mins + maxs) / 2
+
+	-- build a capped segment: length = min(dist(COM), BLAST_RADIUS)
+	local BLAST_RADIUS = GetWeaponBlastRadius()
+	local delta = com - aimHit
+	local dist = delta:Length()
+	if dist == 0 then
+		return
+	end -- already inside player
+	local dir = delta / dist
+	local segEnd = aimHit + dir * math.min(dist, BLAST_RADIUS)
+
+	-- trace along that capped segment
+	local splash = engine.TraceLine(aimHit, segEnd, MASK_SHOT + CONTENTS_GRATE)
+
+	if splash.entity and splash.entity:GetIndex() == targetPlayer:GetIndex() then
 		local sA = client.WorldToScreen(aimHit)
 		local sB = client.WorldToScreen(splash.endpos) -- first hull touch
 		if sA and sB then
@@ -1126,17 +1419,6 @@ local function OnPaint()
 		return
 	end
 
-	local viewOffset = localPlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
-	if not viewOffset then
-		return
-	end
-	local eye = localPlayer:GetAbsOrigin() + viewOffset
-	local blastRadius = GetWeaponBlastRadius()
-
-	local aimDir = engine.GetViewAngles():Forward()
-	local aimPos = eye + aimDir * 1000
-	local aimHit = engine.TraceLine(eye, aimPos, MASK_SHOT + CONTENTS_GRATE).endpos
-
 	local localTeam = localPlayer:GetTeamNumber()
 
 	-- Find all players using entities.FindByClass
@@ -1147,14 +1429,67 @@ local function OnPaint()
 
 			-- Draw AABB for enemies (adjust this logic as needed)
 			if playerTeam ~= localTeam then
-				DrawPlayerAABB(player, localPlayer, blastRadius, eye)
-
-				-- Check what we're looking at and visualize blast damage
-				CheckAimPointAndVisualize(localPlayer, player, eye, aimHit, blastRadius)
+				local data = cachedSplashData[player:GetIndex()]
+				if data and data.points then
+					for _, point in ipairs(data.points) do
+						local s = client.WorldToScreen(point.pos)
+						if s then
+							draw.Color(table.unpack(CIRCLE_DOT_COLOR))
+							draw.FilledRect(
+								math.floor(s[1] - 3),
+								math.floor(s[2] - 3),
+								math.floor(s[1] + 3),
+								math.floor(s[2] + 3)
+							)
+						end
+					end
+				end
 			end
+		end
+	end
+end
+
+local function OnCreateMove(_cmd)
+	local localPlayer = entities.GetLocalPlayer()
+	if not localPlayer or not localPlayer:IsAlive() then
+		return
+	end
+	local localTeam = localPlayer:GetTeamNumber()
+	local players = entities.FindByClass("CTFPlayer")
+	local present = {}
+	for _, player in pairs(players) do
+		if player and player:IsAlive() and player:GetTeamNumber() ~= localTeam then
+			local idx = player:GetIndex()
+			present[idx] = true
+			local data = ComputeSplashDataForPlayer(player, localPlayer, cachedSplashData[idx])
+			if data then
+				cachedSplashData[idx] = data
+			end
+		end
+	end
+
+	for idx, _ in pairs(cachedSplashData) do
+		if not present[idx] then
+			cachedSplashData[idx] = nil
+		end
+	end
+	for idx, _ in pairs(cachedRadii) do
+		if not present[idx] then
+			cachedRadii[idx] = nil
+		end
+	end
+	for idx, _ in pairs(cachedBlueprint) do
+		if not present[idx] then
+			cachedBlueprint[idx] = nil
+		end
+	end
+	for idx, _ in pairs(cachedSegmentRadii) do
+		if not present[idx] then
+			cachedSegmentRadii[idx] = nil
 		end
 	end
 end
 
 -- Register the paint hook
 callbacks.Register("Draw", OnPaint)
+callbacks.Register("CreateMove", OnCreateMove)
