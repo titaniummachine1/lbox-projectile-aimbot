@@ -116,9 +116,24 @@ local function GetClosestPointOnAABB(aabbMin, aabbMax, point)
 end
 
 -- Function to check if an explosion at pointPos will splash the player's COM
-local BLAST_RADIUS = 169 -- 169 u
+local function GetWeaponBlastRadius()
+	local localPlayer = entities.GetLocalPlayer()
+	if not localPlayer then return 169 end -- fallback
+	
+	local weapon = localPlayer:GetActiveWeapon()
+	if not weapon then return 169 end
+	
+	local projectileInfo = GetProjectileInformation(weapon:GetItemDefIndex())
+	if projectileInfo and projectileInfo.m_flDamageRadius then
+		return projectileInfo.m_flDamageRadius
+	end
+	
+	return 169 -- fallback for unknown weapons
+end
 
 local function CanDamageFrom(pointPos, targetCOM, targetPlayer)
+	local BLAST_RADIUS = GetWeaponBlastRadius()
+	
 	-- must be inside blast radius
 	if (pointPos - targetCOM):Length() > BLAST_RADIUS then
 		return false
@@ -134,6 +149,7 @@ local function CanDamageFrom(pointPos, targetCOM, targetPlayer)
 end
 
 local function CanDamageFromAABB(pointPos, targetAABBMin, targetAABBMax, targetPlayer)
+	local BLAST_RADIUS = GetWeaponBlastRadius()
 	local closest = GetClosestPointOnAABB(targetAABBMin, targetAABBMax, pointPos)
 	if (pointPos - closest):Length() > BLAST_RADIUS then
 		return false
@@ -338,6 +354,7 @@ local function DrawPlayerAABB(player, localPlayer)
 				end
 				dir = vector.Normalize(dir)
 
+				local BLAST_RADIUS = GetWeaponBlastRadius()
 				local lo, hi = 0, BLAST_RADIUS
 				for _ = 1, 12 do
 					local mid = (lo + hi) * 0.5
@@ -360,6 +377,7 @@ local function DrawPlayerAABB(player, localPlayer)
 				assert(dirInPlane, "FindMaxRadiusOnPlaneRay: missing dirInPlane")
 				assert(radiusGuess, "FindMaxRadiusOnPlaneRay: missing radiusGuess")
 
+				local BLAST_RADIUS = GetWeaponBlastRadius()
 				radiusGuess = math.max(0, math.min(radiusGuess, BLAST_RADIUS))
 				local lo, hi = 0, BLAST_RADIUS
 				local bestTr = nil
@@ -482,32 +500,13 @@ local function DrawPlayerAABB(player, localPlayer)
 				-- 3) Simple approach: expand by half blast radius, then binary search
 				local step = (2 * math.pi) / CIRCLE_SEGMENTS
 				local traceMask = MASK_SHOT + CONTENTS_GRATE
-				local halfBlastRadius = BLAST_RADIUS / 2
 				local pointsAdded = 0
+				local BLAST_RADIUS = GetWeaponBlastRadius()
+				local halfBlastRadius = BLAST_RADIUS / 2
 
-				-- Helper function to check if a position can hit the target
+				-- Helper function to check if a position can hit the target (same as debug yellow line)
 				local function CanHitFrom(pos)
-					local start = pos + planeNormal * 8
-					local stop = pos - planeNormal * 32
-					local tr = engine.TraceLine(start, stop, traceMask, shouldHitEntity)
-
-					if tr.fraction >= 1.0 then
-						return false
-					end
-
-					-- Use exact same check as yellow debug line
-					local explosionPos = tr.endpos
-					local com = player:GetAbsOrigin() + (worldMins + worldMaxs) / 2
-					local delta = com - explosionPos
-					local dist = delta:Length()
-					if dist == 0 then
-						return false
-					end
-					local dirToCom = delta / dist
-					local segEnd = explosionPos + dirToCom * math.min(dist, BLAST_RADIUS)
-					local splash = engine.TraceLine(explosionPos, segEnd, MASK_SHOT + CONTENTS_GRATE, shouldHitEntity)
-
-					return splash.entity and splash.entity:GetIndex() == player:GetIndex()
+					return CanDamageFrom(pos, center, player)
 				end
 
 				-- Generate circle points using the simple approach
@@ -595,6 +594,7 @@ local function DrawPlayerAABB(player, localPlayer)
 				print("DrawDirectionDot called with direction:", direction.x, direction.y, direction.z)
 				-- Normalize direction
 				local dir = vector.Normalize(direction)
+				local BLAST_RADIUS = GetWeaponBlastRadius()
 				local aimPoint = center + dir * BLAST_RADIUS -- raw white dot
 
 				----------------------------------------------------------------

@@ -5,8 +5,6 @@ local HITBOX_COLOR = { 255, 255, 0, 255 } -- Yellow color for hitbox
 local CENTER_COLOR = { 0, 255, 0, 255 } -- Green color for center square
 local CENTER_SIZE = 12 -- Size of the center square (increased for visibility)
 local LINE_COLOR = { 255, 255, 255, 255 } -- White color for lines
-local EXTENDED_COLOR = { 255, 255, 255, 255 } -- White color for extended squares
-local EXTENDED_SIZE = 4 -- Size of extended squares
 
 local CARDINAL_DOT_SIZE = 3 -- Size of cardinal direction dots
 local TRACE_COLLISION_COLOR = { 255, 0, 0, 255 } -- Red color for trace collision points
@@ -59,6 +57,10 @@ end
 
 -- Cached radii for each direction and segment (persists between ticks)
 local cachedRadii = {} -- [playerIndex][directionIndex][segmentIndex] = radius
+
+local cachedProjectileInfoResolver = nil
+local cachedBlastRadiusWeaponId = nil
+local cachedBlastRadiusValue = 169
 
 -- Function to check if entity should be hit (ignore target player and teammates)
 local function shouldHitEntityFun(entity, targetPlayer, ignoreEntities)
@@ -115,32 +117,73 @@ local function GetClosestPointOnAABB(aabbMin, aabbMax, point)
 	)
 end
 
--- Function to check if an explosion at pointPos will splash the player's COM
-local BLAST_RADIUS = 169 -- 169 u
+local function GetPlayerCOM(player)
+	local mins = player:GetMins()
+	local maxs = player:GetMaxs()
+	if not mins or not maxs then
+		return nil
+	end
+	return player:GetAbsOrigin() + (mins + maxs) / 2
+end
 
-local function CanDamageFrom(pointPos, targetCOM, targetPlayer)
-	-- must be inside blast radius
-	if (pointPos - targetCOM):Length() > BLAST_RADIUS then
+local function CanSplashFromPoint(pointPos, targetCOM, targetPlayer, blastRadius)
+	if not pointPos or not targetCOM or not targetPlayer then
 		return false
 	end
 
-	-- straight trace from the explosion point to COM
-	--  • MASK_SHOT + CONTENTS_GRATE = hit world hulls + player hulls
-	--  • NO ignore callback – we want to know if *something* blocks
-	local tr = engine.TraceLine(pointPos, targetCOM, MASK_SHOT + CONTENTS_GRATE)
+	local delta = targetCOM - pointPos
+	local dist = delta:Length()
+	if dist == 0 then
+		return false
+	end
 
-	-- valid only if the first hull we hit is the target player
+	local dir = delta / dist
+	local segEnd = pointPos + dir * math.min(dist, blastRadius)
+	local tr = engine.TraceLine(pointPos, segEnd, MASK_SHOT + CONTENTS_GRATE)
 	return tr.entity and tr.entity:GetIndex() == targetPlayer:GetIndex()
 end
 
-local function CanDamageFromAABB(pointPos, targetAABBMin, targetAABBMax, targetPlayer)
-	local closest = GetClosestPointOnAABB(targetAABBMin, targetAABBMax, pointPos)
-	if (pointPos - closest):Length() > BLAST_RADIUS then
-		return false
+-- Function to check if an explosion at pointPos will splash the player's COM
+local function GetWeaponBlastRadius()
+	local localPlayer = entities.GetLocalPlayer()
+	if not localPlayer then return 169 end -- fallback
+	
+	local weapon = localPlayer:GetPropEntity("m_hActiveWeapon")
+	if not weapon then return cachedBlastRadiusValue end
+
+	if not cachedProjectileInfoResolver then
+		local success, projectileInfo = pcall(function()
+			return require("projectile_info")
+		end)
+		if success and projectileInfo then
+			cachedProjectileInfoResolver = projectileInfo
+		end
 	end
-	local targetCenter = (targetAABBMin + targetAABBMax) * 0.5
-	local tr = engine.TraceLine(pointPos, targetCenter, MASK_SHOT + CONTENTS_GRATE)
-	return tr.entity and tr.entity:GetIndex() == targetPlayer:GetIndex()
+
+	local weaponId = weapon:GetPropInt("m_iItemDefinitionIndex")
+	if not weaponId then
+		weaponId = 0
+	end
+	if weaponId and cachedBlastRadiusWeaponId == weaponId then
+		return cachedBlastRadiusValue
+	end
+
+	local blastRadius = 169
+	if cachedProjectileInfoResolver and weaponId then
+		local info = cachedProjectileInfoResolver(weaponId)
+		if info and info.m_flDamageRadius then
+			blastRadius = info.m_flDamageRadius
+		end
+	end
+
+	cachedBlastRadiusWeaponId = weaponId
+	cachedBlastRadiusValue = blastRadius
+	return blastRadius
+end
+
+local function CanDamageFrom(pointPos, targetCOM, targetPlayer, blastRadius)
+	local BLAST_RADIUS = blastRadius or GetWeaponBlastRadius()
+	return CanSplashFromPoint(pointPos, targetCOM, targetPlayer, BLAST_RADIUS)
 end
 
 -- Function to perform binary search toward AABB closest point on the same plane
@@ -192,7 +235,7 @@ local function BinarySearchTowardAABB(visiblePt, targetAABBPoint, planeNormal, v
 end
 
 -- Function to draw AABB collision bounds around a player
-local function DrawPlayerAABB(player, localPlayer)
+local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 	if not player or not player:IsAlive() then
 		return
 	end
@@ -204,6 +247,9 @@ local function DrawPlayerAABB(player, localPlayer)
 	-- Get player collision bounds (AABB)
 	local mins = player:GetMins()
 	local maxs = player:GetMaxs()
+	if not mins or not maxs then
+		return
+	end
 	local playerPos = player:GetAbsOrigin()
 
 	-- Calculate world space bounds
@@ -261,7 +307,8 @@ local function DrawPlayerAABB(player, localPlayer)
 		draw.Line(vertices[4][1], vertices[4][2], vertices[8][1], vertices[8][2])
 
 		-- Calculate center of the AABB
-		local center = (worldMins + worldMaxs) / 2
+		local center = playerPos + (mins + maxs) / 2
+		local BLAST_RADIUS = blastRadius or GetWeaponBlastRadius()
 		local centerScreen = client.WorldToScreen(center)
 
 		-- Variable to store the binary search result for green square
@@ -306,12 +353,10 @@ local function DrawPlayerAABB(player, localPlayer)
 					return nil
 				end
 
-				local eye = entities.GetLocalPlayer():GetAbsOrigin()
-					+ entities.GetLocalPlayer():GetPropVector("localdata", "m_vecViewOffset[0]")
 				if not PlaneFacesPlayer(tr.plane, eye, tr.endpos) then
 					return nil
 				end
-				if not CanDamageFrom(tr.endpos, center, player) then
+				if not CanDamageFrom(tr.endpos, center, player, BLAST_RADIUS) then
 					return nil
 				end
 
@@ -342,7 +387,7 @@ local function DrawPlayerAABB(player, localPlayer)
 				for _ = 1, 12 do
 					local mid = (lo + hi) * 0.5
 					local test = hub + dir * mid
-					if CanDamageFrom(test, targetCOM, targetPlayer) then
+					if CanDamageFrom(test, targetCOM, targetPlayer, BLAST_RADIUS) then
 						lo = mid
 					else
 						hi = mid
@@ -403,8 +448,6 @@ local function DrawPlayerAABB(player, localPlayer)
 				assert(planeNormal, "AddIrregularCirclePointsOnPlane: missing planeNormal")
 				assert(planePoint, "AddIrregularCirclePointsOnPlane: missing planePoint")
 
-				local eye = entities.GetLocalPlayer():GetAbsOrigin()
-					+ entities.GetLocalPlayer():GetPropVector("localdata", "m_vecViewOffset[0]")
 				if not PlaneFacesPlayer(planeNormal, eye, planePoint) then
 					return
 				end
@@ -457,13 +500,9 @@ local function DrawPlayerAABB(player, localPlayer)
 			----------------------------------------------------------------
 			local function AddCirclePointsOnPlane(planeNormal, planePoint, directionIndex)
 				-- 0) make sure the plane still faces us
-				local eye = entities.GetLocalPlayer():GetAbsOrigin()
-					+ entities.GetLocalPlayer():GetPropVector("localdata", "m_vecViewOffset[0]")
 				if not PlaneFacesPlayer(planeNormal, eye, planePoint) then
-					print("Plane doesn't face player, skipping circle")
 					return
 				end
-				print("Generating circle on plane with normal:", planeNormal.x, planeNormal.y, planeNormal.z)
 
 				-- 1) hub = projection of enemy COM onto that plane
 				local toCom = center - planePoint
@@ -490,14 +529,6 @@ local function DrawPlayerAABB(player, localPlayer)
 				-- Calculate dynamic max radius based on target AABB
 				local aabbSize = (worldMaxs - worldMins):Length()
 				local dynamicMaxRadius = BLAST_RADIUS + (aabbSize * 2) + 20
-				print(
-					string.format(
-						"Dynamic max radius: %.2f (BLAST_RADIUS=%.2f, AABB_size=%.2f)",
-						dynamicMaxRadius,
-						BLAST_RADIUS,
-						aabbSize
-					)
-				)
 
 				for i = 0, CIRCLE_SEGMENTS - 1 do
 					local ang = i * step
@@ -523,7 +554,7 @@ local function DrawPlayerAABB(player, localPlayer)
 						if tr.fraction >= 1.0 then
 							return false
 						end
-						if not CanDamageFromAABB(tr.endpos, worldMins, worldMaxs, player) then
+						if not CanDamageFrom(tr.endpos, center, player, BLAST_RADIUS) then
 							return false
 						end
 						return true, tr.endpos, tr.fraction
@@ -607,20 +638,6 @@ local function DrawPlayerAABB(player, localPlayer)
 					-- Cache the found radius for next tick
 					cachedRadii[playerIdx][directionIndex][i] = bestR or minR
 
-					-- Debug: print radii for segments 0, 6, 12, 18 to check irregularity
-					if i == 0 or i == 6 or i == 12 or i == 18 then
-						local failureReason = "none"
-						if not bestPos then
-							if lowOk == nil then
-								failureReason = "minR failed"
-							elseif highFail == nil then
-								failureReason = "reached dynamicMaxRadius"
-							else
-								failureReason = "binary search failed"
-							end
-						end
-						print(string.format("Segment %d: bestR=%.2f, failure=%s", i, bestR or 0, failureReason))
-					end
 
 					::continue_segment::
 
@@ -649,12 +666,10 @@ local function DrawPlayerAABB(player, localPlayer)
 					end
 				end
 
-				print("Generated", #circlePoints, "valid circle points")
 				return circlePoints
 			end
 
 			local function DrawDirectionDot(direction, directionIndex)
-				print("DrawDirectionDot called with direction:", direction.x, direction.y, direction.z)
 				-- Normalize direction
 				local dir = vector.Normalize(direction)
 				local aimPoint = center + dir * BLAST_RADIUS -- raw white dot
@@ -681,22 +696,16 @@ local function DrawPlayerAABB(player, localPlayer)
 					shouldHitEntity
 				)
 				if tr.fraction >= 1.0 then
-					print("Early return: nothing hit (fraction >= 1.0)")
-					return
-				end -- nothing hit
-
-				--  centre → aim trace already stored in  'tr'
-				local eye = entities.GetLocalPlayer():GetAbsOrigin()
-					+ entities.GetLocalPlayer():GetPropVector("localdata", "m_vecViewOffset[0]")
+					return -- nothing hit
+				end
 
 				-- Early backface culling - if surface faces away, skip all processing
 				if not PlaneFacesPlayer(tr.plane, eye, tr.endpos) then
-					print("Early return: plane doesn't face player")
 					return -- cull before any further work
 				end
 
 				local hitPos = tr.endpos
-				local dmgOK = CanDamageFrom(hitPos, center, player)
+				local dmgOK = CanDamageFrom(hitPos, center, player, BLAST_RADIUS)
 
 				----------------------------------------------------------------
 				-- If too far, pull the point back to exactly BLAST_RADIUS
@@ -715,14 +724,13 @@ local function DrawPlayerAABB(player, localPlayer)
 						)
 						if tr2.fraction < 1.0 then
 							hitPos = tr2.endpos
-							dmgOK = CanDamageFrom(hitPos, center, player)
+							dmgOK = CanDamageFrom(hitPos, center, player, BLAST_RADIUS)
 						end
 					end
 				end
 				if not dmgOK then
-					print("Early return: cannot damage from this point")
-					return
-				end -- still useless, cull
+					return -- still useless, cull
+				end
 
 				AddCirclePointsOnPlane(tr.plane, hitPos, directionIndex)
 
@@ -745,16 +753,12 @@ local function DrawPlayerAABB(player, localPlayer)
 				local key = string.format("%.3f,%.3f,%.3f", surfN.x, surfN.y, surfN.z)
 				normalGroups[key] = normalGroups[key] or {}
 				table.insert(normalGroups[key], pointT)
-				print("Added collision point with normal:", surfN.x, surfN.y, surfN.z)
 			end
 
 			-- Draw all cardinal direction dots
-			print("Drawing cardinal directions...")
 			for dirIdx, direction in ipairs(cardinalDirections) do
 				DrawDirectionDot(direction, dirIdx)
 			end
-
-			print("After drawing all direction dots, collision points:", #collisionPoints)
 
 			----------------------------------------------------------------
 			--  add splash ring beneath / above the player for each floor/ceiling hit
@@ -830,15 +834,7 @@ local function DrawPlayerAABB(player, localPlayer)
 
 			-- Generate ground circle
 			if false then
-				print("About to generate ground circle...")
 				GenerateGroundCircle()
-				print("Ground circle generation completed")
-			end
-			print("After ground circle, total collision points:", #collisionPoints)
-			print("Total collision points:", #collisionPoints)
-			print("Total normal groups:", 0)
-			for k, v in pairs(normalGroups) do
-				print("Normal group:", k, "with", #v, "points")
 			end
 
 			if false then
@@ -854,15 +850,11 @@ local function DrawPlayerAABB(player, localPlayer)
 			end
 
 			-- Always draw test circle to verify drawing works
-			print("Drawing test circle")
 			local testCenter = center + Vector3(0, 0, 50) -- Above the player
 			local testScreen = client.WorldToScreen(testCenter)
 			if testScreen then
 				draw.Color(255, 0, 255, 255) -- Magenta for test
 				draw.FilledRect(testScreen[1] - 10, testScreen[2] - 10, testScreen[1] + 10, testScreen[2] + 10)
-				print("Test circle drawn at screen pos:", testScreen[1], testScreen[2])
-			else
-				print("Failed to convert test center to screen coordinates")
 			end
 
 			-- Sort collision points by fraction (closest to furthest)
@@ -1019,24 +1011,15 @@ local function DrawPlayerAABB(player, localPlayer)
 			-- Deferred validation: check best candidate first, fallback if needed
 			local validatedCandidate = nil
 			for _, candidate in ipairs(allCandidates) do
-				print("Validating candidate with score:", candidate.score)
 				if ValidateRocketTrajectory(candidate.pos, center, candidate.normal) then
-					print("Candidate validated!")
 					validatedCandidate = candidate
 					break
-				else
-					print("Candidate failed validation, trying next...")
 				end
-			end
-
-			if not validatedCandidate then
-				print("No candidates passed validation")
-				return
 			end
 
 			-- Store the validated result
 			binarySearchResult = validatedCandidate
-			closestVisiblePoint = validatedCandidate.firstVis
+			closestVisiblePoint = validatedCandidate and validatedCandidate.firstVis
 
 			-- Draw orange square for binary search result
 			if binarySearchResult and binarySearchResult.screen then
@@ -1048,17 +1031,7 @@ local function DrawPlayerAABB(player, localPlayer)
 					math.floor(binarySearchResult.screen[1] + halfSize),
 					math.floor(binarySearchResult.screen[2] + halfSize)
 				)
-
-				-- Debug: Print info about the binary search result
-				print(
-					"Binary search result found at:",
-					binarySearchResult.pos.x,
-					binarySearchResult.pos.y,
-					binarySearchResult.pos.z
-				)
-				print("Screen position:", binarySearchResult.screen[1], binarySearchResult.screen[2])
 			else
-				print("No binary search result found")
 			end
 
 			-- Draw cyan dot for closest visible point
@@ -1091,7 +1064,6 @@ local function DrawPlayerAABB(player, localPlayer)
 			end
 
 			-- Draw only points from visible groups
-			print("Drawing circle points...")
 			local circlePointsDrawn = 0
 			for _, points in pairs(visibleGroups) do
 				for _, point in ipairs(points) do
@@ -1107,46 +1079,35 @@ local function DrawPlayerAABB(player, localPlayer)
 					end
 				end
 			end
-			print("Drew", circlePointsDrawn, "circle points from visible groups")
 		end
 	end
 end
 
 -- Visual helper: draw a yellow line only when the point you are aiming at
 -- could splash the enemy's COM within 169 u.
-local function CheckAimPointAndVisualize(localPlayer, targetPlayer)
+local function CheckAimPointAndVisualize(localPlayer, targetPlayer, eye, aimHit, blastRadius)
 	if not localPlayer or not targetPlayer then
 		return
 	end
-
-	local eye = localPlayer:GetAbsOrigin() + localPlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
-	local aimDir = engine.GetViewAngles():Forward()
-	local aimPos = eye + aimDir * 1000 -- long look‑ray
-
-	-- where your crosshair ray first hits the world
-	local aimHit = engine.TraceLine(eye, aimPos, MASK_SHOT + CONTENTS_GRATE).endpos
-	if not aimHit then
+	if not eye or not aimHit then
 		return
-	end -- shouldn't happen
+	end
 
-	-- enemy centre (AABB center)
-	local mins = targetPlayer:GetMins()
-	local maxs = targetPlayer:GetMaxs()
-	local com = targetPlayer:GetAbsOrigin() + (mins + maxs) / 2
-
-	-- build a capped segment: length = min(dist(COM), BLAST_RADIUS)
-	local delta = com - aimHit
-	local dist = delta:Length()
-	if dist == 0 then
+	local com = GetPlayerCOM(targetPlayer)
+	if not com then
 		return
-	end -- already inside player
-	local dir = delta / dist
-	local segEnd = aimHit + dir * math.min(dist, BLAST_RADIUS)
+	end
 
-	-- trace along that capped segment
-	local splash = engine.TraceLine(aimHit, segEnd, MASK_SHOT + CONTENTS_GRATE)
-
-	if splash.entity and splash.entity:GetIndex() == targetPlayer:GetIndex() then
+	local BLAST_RADIUS = blastRadius or GetWeaponBlastRadius()
+	if CanSplashFromPoint(aimHit, com, targetPlayer, BLAST_RADIUS) then
+		local delta = com - aimHit
+		local dist = delta:Length()
+		if dist == 0 then
+			return
+		end
+		local dir = delta / dist
+		local segEnd = aimHit + dir * math.min(dist, BLAST_RADIUS)
+		local splash = engine.TraceLine(aimHit, segEnd, MASK_SHOT + CONTENTS_GRATE)
 		local sA = client.WorldToScreen(aimHit)
 		local sB = client.WorldToScreen(splash.endpos) -- first hull touch
 		if sA and sB then
@@ -1165,6 +1126,17 @@ local function OnPaint()
 		return
 	end
 
+	local viewOffset = localPlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
+	if not viewOffset then
+		return
+	end
+	local eye = localPlayer:GetAbsOrigin() + viewOffset
+	local blastRadius = GetWeaponBlastRadius()
+
+	local aimDir = engine.GetViewAngles():Forward()
+	local aimPos = eye + aimDir * 1000
+	local aimHit = engine.TraceLine(eye, aimPos, MASK_SHOT + CONTENTS_GRATE).endpos
+
 	local localTeam = localPlayer:GetTeamNumber()
 
 	-- Find all players using entities.FindByClass
@@ -1175,10 +1147,10 @@ local function OnPaint()
 
 			-- Draw AABB for enemies (adjust this logic as needed)
 			if playerTeam ~= localTeam then
-				DrawPlayerAABB(player, localPlayer)
+				DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 
 				-- Check what we're looking at and visualize blast damage
-				CheckAimPointAndVisualize(localPlayer, player)
+				CheckAimPointAndVisualize(localPlayer, player, eye, aimHit, blastRadius)
 			end
 		end
 	end
