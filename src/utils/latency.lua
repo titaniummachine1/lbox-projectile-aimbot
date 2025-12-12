@@ -2,29 +2,25 @@
 
 local Latency = {}
 
----Gets full network latency compensation value
----Includes: outgoing + incoming latency + lerp time
----@return number totalLatency
-function Latency.getFullLatency()
+---Gets client interpolation delay (lerp)
+---@return number lerpTime
+function Latency.getLerpTime()
+	local _, cl_interp = client.GetConVar("cl_interp")
+	local _, cl_interp_ratio = client.GetConVar("cl_interp_ratio")
+	local _, cl_updaterate = client.GetConVar("cl_updaterate")
+
+	return math.max(cl_interp or 0, (cl_interp_ratio or 1) / (cl_updaterate or 66))
+end
+
+---Gets one-way outgoing latency (client -> server)
+---@return number outgoingLatency
+function Latency.getOutgoingLatency()
 	local netchannel = clientstate.GetNetChannel()
 	if not netchannel then
 		return 0
 	end
 
-	-- Get round-trip latency
-	local outgoing = netchannel:GetLatency(E_Flows.FLOW_OUTGOING)
-	local incoming = netchannel:GetLatency(E_Flows.FLOW_INCOMING)
-
-	-- Get lerp time (interpolation delay)
-	local _, cl_interp = client.GetConVar("cl_interp")
-	local _, cl_interp_ratio = client.GetConVar("cl_interp_ratio")
-	local _, cl_updaterate = client.GetConVar("cl_updaterate")
-
-	-- Calculate lerp: max(cl_interp, cl_interp_ratio / cl_updaterate)
-	local lerpTime = math.max(cl_interp or 0, (cl_interp_ratio or 1) / (cl_updaterate or 66))
-
-	-- Total compensation = round-trip + lerp
-	return outgoing + incoming + lerpTime
+	return netchannel:GetLatency(E_Flows.FLOW_OUTGOING) or 0
 end
 
 ---Gets latency adjusted prediction time
@@ -35,11 +31,12 @@ function Latency.getAdjustedPredictionTime(distance, projectileSpeed)
 	assert(projectileSpeed > 0, "Latency: projectileSpeed must be > 0")
 
 	local flightTime = distance / projectileSpeed
-	local netLatency = Latency.getFullLatency()
+	local outgoing = Latency.getOutgoingLatency()
+	local lerp = Latency.getLerpTime()
 
-	-- Aim further into future to compensate for server spawn delay
-	return flightTime + netLatency
+	-- Predict into server-time: projectile spawns after outgoing delay;
+	-- target origin we read is typically behind by lerp (interpolation)
+	return flightTime + outgoing + lerp
 end
 
 return Latency
-

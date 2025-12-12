@@ -1,65 +1,65 @@
 ---@diagnostic disable: duplicate-doc-field, missing-fields
 
-local sim                   = {}
+local sim = {}
 
-local MASK_SHOT_HULL        = MASK_SHOT_HULL
-local MASK_PLAYERSOLID      = MASK_PLAYERSOLID
-local DoTraceHull           = engine.TraceHull
-local TraceLine             = engine.TraceLine
-local Vector3               = Vector3
-local math_deg              = math.deg
-local math_rad              = math.rad
-local math_atan             = math.atan
-local math_cos              = math.cos
-local math_sin              = math.sin
-local math_abs              = math.abs
-local math_acos             = math.acos
-local math_min              = math.min
-local math_max              = math.max
-local math_floor            = math.floor
-local math_pi               = math.pi
+local MASK_SHOT_HULL = MASK_SHOT_HULL
+local MASK_PLAYERSOLID = MASK_PLAYERSOLID
+local DoTraceHull = engine.TraceHull
+local TraceLine = engine.TraceLine
+local Vector3 = Vector3
+local math_deg = math.deg
+local math_rad = math.rad
+local math_atan = math.atan
+local math_cos = math.cos
+local math_sin = math.sin
+local math_abs = math.abs
+local math_acos = math.acos
+local math_min = math.min
+local math_max = math.max
+local math_floor = math.floor
+local math_pi = math.pi
 
-local G                     = require("globals")
-local TargetSelector        = require("targeting.target_selector")
-local WishdirTracker        = require("simulation.history.wishdir_tracker")
+local G = require("globals")
+local TargetSelector = require("targeting.target_selector")
+local WishdirTracker = require("simulation.history.wishdir_tracker")
 
 -- constants
-local MIN_SPEED             = 25   -- HU/s
-local MAX_ANGULAR_VEL       = 360  -- deg/s
-local WALKABLE_ANGLE        = 45   -- degrees
-local MIN_VELOCITY_Z        = 0.1
-local AIR_ACCELERATE        = 10.0 -- Default air acceleration value
-local GROUND_ACCELERATE     = 10.0 -- Default ground acceleration value
-local SURFACE_FRICTION      = 1.0  -- Default surface friction
+local MIN_SPEED = 25 -- HU/s
+local MAX_ANGULAR_VEL = 360 -- deg/s
+local WALKABLE_ANGLE = 45 -- degrees
+local MIN_VELOCITY_Z = 0.1
+local AIR_ACCELERATE = 10.0 -- Default air acceleration value
+local GROUND_ACCELERATE = 10.0 -- Default ground acceleration value
+local SURFACE_FRICTION = 1.0 -- Default surface friction
 
-local MAX_CLIP_PLANES       = 5
-local DIST_EPSILON          = 0.03125 -- Small epsilon for step calculations
+local MAX_CLIP_PLANES = 5
+local DIST_EPSILON = 0.03125 -- Small epsilon for step calculations
 
-local MAX_SAMPLES           = 16      -- tuned window size
-local SMOOTH_ALPHA_G        = 0.392   -- tuned ground α
-local SMOOTH_ALPHA_A        = 0.127   -- tuned air α
+local MAX_SAMPLES = 16 -- tuned window size
+local SMOOTH_ALPHA_G = 0.392 -- tuned ground α
+local SMOOTH_ALPHA_A = 0.127 -- tuned air α
 
 local COORD_FRACTIONAL_BITS = 5
-local COORD_DENOMINATOR     = (1 << (COORD_FRACTIONAL_BITS))
-local COORD_RESOLUTION      = (1.0 / (COORD_DENOMINATOR))
+local COORD_DENOMINATOR = (1 << COORD_FRACTIONAL_BITS)
+local COORD_RESOLUTION = (1.0 / COORD_DENOMINATOR)
 
-local impact_planes         = {}
-local MAX_IMPACT_PLANES     = 5
+local impact_planes = {}
+local MAX_IMPACT_PLANES = 5
 
 ---@class Sample
 ---@field pos Vector3
 ---@field time number
 
 ---@type table<number, Sample[]>
-local position_samples      = {}
+local position_samples = {}
 
-local zero_vector           = Vector3(0, 0, 0)
-local up_vector             = Vector3(0, 0, 1)
-local down_vector           = Vector3()
+local zero_vector = Vector3(0, 0, 0)
+local up_vector = Vector3(0, 0, 1)
+local down_vector = Vector3()
 
 ---this "zero-GC" shit is killing me
 
-local RuneTypes_t           = {
+local RuneTypes_t = {
 	RUNE_NONE = -1,
 	RUNE_STRENGTH = 0,
 	RUNE_HASTE = 1,
@@ -74,24 +74,32 @@ local RuneTypes_t           = {
 	RUNE_PLAGUE = 10,
 	RUNE_SUPERNOVA = 11,
 	RUNE_TYPES_MAX = 12,
-};
+}
 
 local function GetEntityOrigin(pEntity)
 	return pEntity:GetPropVector("tflocaldata", "m_vecOrigin") or pEntity:GetAbsOrigin()
 end
 
 local function GetEntityYaw(pEntity)
-	if not pEntity then return nil end
+	if not pEntity then
+		return nil
+	end
 	local yaw = pEntity:GetPropFloat("m_angEyeAngles[1]")
-	if yaw then return yaw end
+	if yaw then
+		return yaw
+	end
 	if pEntity.GetPropVector and type(pEntity.GetPropVector) == "function" then
 		local eyeVec = pEntity:GetPropVector("tfnonlocaldata", "m_angEyeAngles")
-		if eyeVec and eyeVec.y then return eyeVec.y end
+		if eyeVec and eyeVec.y then
+			return eyeVec.y
+		end
 	end
 	local vel = pEntity:EstimateAbsVelocity()
 	if vel and vel:Length2D() > 1 then
 		local ang = vel:Angles()
-		if ang and ang.y then return ang.y end
+		if ang and ang.y then
+			return ang.y
+		end
 	end
 	return nil
 end
@@ -102,8 +110,12 @@ local function getYawBasis(yaw)
 	f.z, r.z = 0, 0
 	local flen = f:Length2D()
 	local rlen = r:Length2D()
-	if flen > 0 then f.x, f.y = f.x / flen, f.y / flen end
-	if rlen > 0 then r.x, r.y = r.x / rlen, r.y / rlen end
+	if flen > 0 then
+		f.x, f.y = f.x / flen, f.y / flen
+	end
+	if rlen > 0 then
+		r.x, r.y = r.x / rlen, r.y / rlen
+	end
 	return f, r
 end
 
@@ -118,12 +130,20 @@ local function relativeToWorld(rel, yaw)
 end
 
 local function snapRelTo8(rel)
-	if not rel then return nil end
+	if not rel then
+		return nil
+	end
 	local ang = math_atan(rel.y, rel.x) * 180 / math_pi
 	local idx = (math_floor((ang + 22.5) / 45) % 8 + 8) % 8
 	local dirs = {
-		[0] = { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 },
-		{ -1, 0 }, { -1, -1 }, { 0, -1 }, { 1, -1 },
+		[0] = { 1, 0 },
+		{ 1, 1 },
+		{ 0, 1 },
+		{ -1, 1 },
+		{ -1, 0 },
+		{ -1, -1 },
+		{ 0, -1 },
+		{ 1, -1 },
 	}
 	local d = dirs[idx]
 	local out = Vector3(d[1], d[2], 0)
@@ -147,7 +167,7 @@ local function GetAirSpeedCap(pTarget)
 	if m_hGrapplingHookTarget then
 		if pTarget:GetCarryingRuneType() == RuneTypes_t.RUNE_AGILITY then
 			local m_iClass = pTarget:GetPropInt("m_iClass")
-			if m_iClass == E_Character.TF2_Soldier or E_Character.TF2_Heavy then
+			if m_iClass == E_Character.TF2_Soldier or m_iClass == E_Character.TF2_Heavy then
 				return 850
 			else
 				return 950
@@ -173,8 +193,8 @@ local function GetAirSpeedCap(pTarget)
 				local _, tf_halloween_kart_dash_speed = client.GetConVar("tf_halloween_kart_dash_speed")
 				return tf_halloween_kart_dash_speed
 			end
-			local _, tf_hallowen_kart_aircontrol = client.GetConVar("tf_hallowen_kart_aircontrol")
-			flCap = flCap * tf_hallowen_kart_aircontrol
+			local _, tf_halloween_kart_aircontrol = client.GetConVar("tf_halloween_kart_aircontrol")
+			flCap = flCap * tf_halloween_kart_aircontrol
 		end
 
 		local flIncreasedAirControl = pTarget:AttributeHookFloat("mod_air_control")
@@ -202,11 +222,15 @@ end
 local function AccelerateInPlace(velocity, wishdir, wishspeed, accel, dt, surf)
 	--local currentspeed = v:Dot(wishdir)
 	local currentspeed = velocity:Length()
-	local addspeed     = wishspeed - currentspeed
-	if addspeed <= 0 then return end
+	local addspeed = wishspeed - currentspeed
+	if addspeed <= 0 then
+		return
+	end
 
 	local accelspeed = accel * dt * wishspeed * surf
-	if accelspeed > addspeed then accelspeed = addspeed end
+	if accelspeed > addspeed then
+		accelspeed = addspeed
+	end
 
 	velocity.x = velocity.x + accelspeed * wishdir.x
 	velocity.y = velocity.y + accelspeed * wishdir.y
@@ -221,15 +245,21 @@ end
 ---@param surf number
 ---@param pTarget Entity
 local function AirAccelerateInPlace(v, wishdir, wishspeed, accel, dt, surf, pTarget)
-	if wishspeed > GetAirSpeedCap(pTarget) then wishspeed = GetAirSpeedCap(pTarget) end
+	if wishspeed > GetAirSpeedCap(pTarget) then
+		wishspeed = GetAirSpeedCap(pTarget)
+	end
 
 	--local currentspeed = v:Dot(wishdir)
 	local currentspeed = v:Length()
-	local addspeed     = wishspeed - currentspeed
-	if addspeed <= 0 then return end
+	local addspeed = wishspeed - currentspeed
+	if addspeed <= 0 then
+		return
+	end
 
 	local accelspeed = accel * wishspeed * dt * surf
-	if accelspeed > addspeed then accelspeed = addspeed end
+	if accelspeed > addspeed then
+		accelspeed = addspeed
+	end
 
 	v.x = v.x + accelspeed * wishdir.x
 	v.y = v.y + accelspeed * wishdir.y
@@ -498,7 +528,8 @@ local function TryPlayerMove(origin, velocity, frametime, mins, maxs, shouldHitE
 
 		if trace.fraction > 0 then
 			if numbumps > 0 and trace.fraction == 1 then
-				local stuck_trace = DoTraceHull(trace.endpos, trace.endpos, mins, maxs, MASK_PLAYERSOLID, shouldHitEntity)
+				local stuck_trace =
+					DoTraceHull(trace.endpos, trace.endpos, mins, maxs, MASK_PLAYERSOLID, shouldHitEntity)
 				if stuck_trace.startsolid or stuck_trace.fraction ~= 1.0 then
 					return current_origin, Vector3(0, 0, 0), 4
 				end
@@ -597,22 +628,16 @@ end
 local function StayOnGround(vecPos, mins, maxs, step_size, shouldHitEntity)
 	local up_start = Vector3(vecPos.x, vecPos.y, vecPos.z + 2)
 	local down_end = Vector3(vecPos.x, vecPos.y, vecPos.z - step_size)
-	local trace = DoTraceHull(
-		up_start,
-		down_end,
-		mins,
-		maxs,
-		MASK_PLAYERSOLID,
-		shouldHitEntity
-	)
+	local trace = DoTraceHull(up_start, down_end, mins, maxs, MASK_PLAYERSOLID, shouldHitEntity)
 
 	local normal = math_acos(math.rad(trace.plane:Dot(up_vector)))
 
-	if trace
+	if
+		trace
 		and trace.fraction > 0.0 --- he must go somewhere
 		and trace.fraction < 1.0 --- hit something
 		and not trace.startsolid --- cant be embedded in a solid
-		and normal >= 0.7  --- cant hit on a steep slope that we cant stand on anyway
+		and normal >= 0.7 --- cant hit on a steep slope that we cant stand on anyway
 	then
 		local z_delta = math_abs(vecPos.z - trace.endpos.z)
 		if z_delta > 0.5 * COORD_RESOLUTION then
@@ -773,7 +798,7 @@ function sim.Run(pInfo, pTarget, initial_pos, time)
 	assert(initial_pos, "sim.Run: initial_pos is nil")
 	assert(time, "sim.Run: time is nil")
 	assert(time > 0, "sim.Run: time must be positive")
-	
+
 	-- Assert all required pInfo fields
 	assert(pInfo.m_flFriction, "sim.Run: pInfo.m_flFriction is nil")
 	assert(pInfo.m_flAngularVelocity, "sim.Run: pInfo.m_flAngularVelocity is nil")
@@ -784,11 +809,11 @@ function sim.Run(pInfo, pTarget, initial_pos, time)
 	assert(pInfo.m_flGravityStep, "sim.Run: pInfo.m_flGravityStep is nil")
 	assert(pInfo.m_vecVelocity, "sim.Run: pInfo.m_vecVelocity is nil")
 	assert(pInfo.m_iTeam, "sim.Run: pInfo.m_iTeam is nil")
-	
+
 	local tick_interval = globals.TickInterval()
 	assert(tick_interval, "sim.Run: globals.TickInterval() returned nil")
 	assert(tick_interval > 0, "sim.Run: tick_interval must be positive")
-	
+
 	local local_player_index = client.GetLocalPlayerIndex()
 	assert(local_player_index, "sim.Run: client.GetLocalPlayerIndex() returned nil")
 
@@ -866,8 +891,15 @@ function sim.Run(pInfo, pTarget, initial_pos, time)
 			else
 				-- apply air acceleration when not on ground and falling
 				if velocity.z < 0 then
-					AirAccelerateInPlace(velocity, wishdir, wishspeed, AIR_ACCELERATE, tick_interval, surface_friction,
-						pTarget)
+					AirAccelerateInPlace(
+						velocity,
+						wishdir,
+						wishspeed,
+						AIR_ACCELERATE,
+						tick_interval,
+						surface_friction,
+						pTarget
+					)
 				end
 			end
 		end
@@ -893,7 +925,7 @@ function sim.Run(pInfo, pTarget, initial_pos, time)
 			surface_friction,
 			step_size
 		)
-		
+
 		-- Assert StepMove returns valid data
 		assert(new_pos, "sim.Run: StepMove returned nil new_pos")
 		assert(new_velocity, "sim.Run: StepMove returned nil new_velocity")
@@ -916,7 +948,7 @@ function sim.Run(pInfo, pTarget, initial_pos, time)
 			velocity.z = 0
 		end
 	end
-	
+
 	-- Assert we have valid output
 	assert(positions, "sim.Run: positions is nil")
 	assert(#positions > 0, "sim.Run: no positions generated")

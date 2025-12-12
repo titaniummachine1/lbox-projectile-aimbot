@@ -440,7 +440,7 @@ function Visuals.draw(state)
 	assert(G.Menu.Visuals, "Visuals: G.Menu.Visuals is nil")
 
 	local vis = G.Menu.Visuals
-	
+
 	if not vis.Enabled then
 		return
 	end
@@ -482,7 +482,14 @@ function Visuals.draw(state)
 	if vis.DrawBoundingBox and targetPos and targetEntity and eyePos then
 		local r, g, b, a = getColorFromHue(vis.Colors.BoundingBox)
 		draw.Color(r, g, b, a)
-		drawPlayerHitbox(texture, targetPos, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, vis.Thickness.BoundingBox)
+		drawPlayerHitbox(
+			texture,
+			targetPos,
+			targetEntity:GetMins(),
+			targetEntity:GetMaxs(),
+			eyePos,
+			vis.Thickness.BoundingBox
+		)
 	end
 
 	-- Draw projectile path
@@ -524,10 +531,6 @@ function Visuals.draw(state)
 		draw.Color(r, g, b, a)
 		drawImpactDot(texture, impactPos, vis.Thickness.ProjectilePath * 2)
 	end
-
-	-- Cleanup texture
-	draw.DeleteTexture(texture)
 end
 
 return Visuals
-

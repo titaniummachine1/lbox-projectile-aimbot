@@ -487,6 +487,14 @@ local function onCreateMove(cmd)
 	end
 
 	local eyePos = localPos + plocal:GetPropVector("localdata", "m_vecViewOffset[0]")
+	local aimEyePos = eyePos
+	do
+		local outgoingLatency = netchannel:GetLatency(E_Flows.FLOW_OUTGOING) or 0
+		local localVel = plocal:EstimateAbsVelocity() or Vector3()
+		if outgoingLatency > 0 then
+			aimEyePos = eyePos + (localVel * outgoingLatency)
+		end
+	end
 	local viewangle = engine.GetViewAngles()
 
 	local charge = info.m_bCharges and weapon:GetCurrentCharge() or 0.0
@@ -500,7 +508,7 @@ local function onCreateMove(cmd)
 	local RAD2DEG = 180 / math.pi
 	for _, entity in ipairs(entitylist) do
 		local entityCenter = entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5
-		local dirToEntity = (entityCenter - eyePos)
+		local dirToEntity = (entityCenter - aimEyePos)
 		Normalize(dirToEntity)
 		local forward = viewangle:Forward()
 		local angle = math.acos(forward:Dot(dirToEntity)) * RAD2DEG
@@ -542,7 +550,8 @@ local function onCreateMove(cmd)
 	TickProfiler.BeginSection("CM:PredictionLoop")
 	for _, entData in ipairs(sortedEntities) do
 		local entity = entData.entity
-		local distance = (localPos - entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5):Length()
+		local entityCenter = entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5
+		local distance = (entityCenter - localPos):Length()
 		-- Fedoraware Critical #1: Full latency compensation (outgoing + incoming + lerp)
 		local time = Latency.getAdjustedPredictionTime(distance, speed)
 		local lazyness = cfg.MinAccuracy
@@ -557,7 +566,7 @@ local function onCreateMove(cmd)
 
 		local path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, time)
 		TickProfiler.EndSection("CM:SimPlayer")
-		
+
 		-- Zero Trust: Assert SimulatePlayer returns
 		assert(path, "Main: SimulatePlayer returned nil path")
 		assert(lastPos, "Main: SimulatePlayer returned nil lastPos")
@@ -570,9 +579,9 @@ local function onCreateMove(cmd)
 		-- to accept and use StrafePredictor.predictStrafeDirection per tick
 
 		TickProfiler.BeginSection("CM:Multipoint")
-		local multipointHitbox, multipointPos = multipoint.Run(entity, weapon, info, eyePos, lastPos, drop)
+		local multipointHitbox, multipointPos = multipoint.Run(entity, weapon, info, aimEyePos, lastPos, drop)
 		TickProfiler.EndSection("CM:Multipoint")
-		
+
 		-- Zero Trust: Assert multipoint returns (multipointPos can be nil, that's ok)
 		-- multipointHitbox can be nil if no multipoint selected, that's intentional
 		if multipointPos then
@@ -584,22 +593,22 @@ local function onCreateMove(cmd)
 		end
 
 		TickProfiler.BeginSection("CM:Ballistics")
-		local angle = utils.math.SolveBallisticArc(eyePos, lastPos, speed, gravity)
+		local angle = utils.math.SolveBallisticArc(aimEyePos, lastPos, speed, gravity)
 		TickProfiler.EndSection("CM:Ballistics")
-		
+
 		-- Zero Trust: Assert ballistics solution
 		-- angle can be nil if no solution exists, skip this target
 
 		if angle then
 			--- check visibility
-			local firePos = info:GetFirePosition(plocal, eyePos, angle, weapon:IsViewModelFlipped())
+			local firePos = info:GetFirePosition(plocal, aimEyePos, angle, weapon:IsViewModelFlipped())
 			assert(firePos, "Main: info:GetFirePosition returned nil")
 
 			-- Fedoraware Critical #2: Weapon-specific fire position offsets
 			local weaponDefIndex = weapon:GetPropInt("m_iItemDefinitionIndex")
 			assert(weaponDefIndex, "Main: weapon:GetPropInt('m_iItemDefinitionIndex') returned nil")
-			
-			local weaponOffset = WeaponOffsets.getFirePosition(plocal, eyePos, angle, weaponDefIndex)
+
+			local weaponOffset = WeaponOffsets.getFirePosition(plocal, aimEyePos, angle, weaponDefIndex)
 			-- weaponOffset can be nil, that's expected for weapons without offsets
 			if weaponOffset then
 				assert(type(weaponOffset.x) == "number", "Main: weaponOffset has invalid x")
@@ -616,17 +625,17 @@ local function onCreateMove(cmd)
 				local projpath, hit, fullSim, projtimetable =
 					SimulateProj(entity, lastPos, firePos, translatedAngle, info, plocal:GetTeamNumber(), time, charge)
 				TickProfiler.EndSection("CM:SimProj")
-				
+
 				-- Zero Trust: Assert SimulateProj returns
 				assert(projpath, "Main: SimulateProj returned nil projpath")
 				assert(type(fullSim) == "boolean", "Main: SimulateProj fullSim must be boolean")
 				-- hit can be nil or boolean, that's ok
 				-- projtimetable can be empty but not nil
 				assert(projtimetable, "Main: SimulateProj returned nil projtimetable")
-
 				if fullSim then
+					local distance = (entityCenter - localPos):Length()
 					local confidence =
-						CalculateHitchance(entity, projpath, fullSim, distance, speed, gravity, time, cfg.MaxDistance)
+						CalculateHitchance(entity, projpath, hit, distance, speed, gravity, time, cfg.MaxDistance)
 					if confidence >= cfg.MinConfidence then
 						local secondaryFire = doSecondaryFiretbl[weaponID]
 						local noSilent = noSilentTbl[weaponID]
