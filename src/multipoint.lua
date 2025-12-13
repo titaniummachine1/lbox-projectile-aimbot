@@ -2,6 +2,7 @@ local multipoint = {}
 
 -- Imports
 local G = require("globals")
+local WeaponOffsets = require("constants.weapon_offsets")
 local utils = {}
 utils.math = require("utils.math")
 
@@ -390,7 +391,7 @@ local function binarySearchHorizontal(canShootAtPoint, viewPos, startPoint, face
 
 	-- Offset by hull size from the edge we found
 	if hullSize > 0 and best ~= startPoint then
-		local edgeDir = normalize(startPoint - faceCenter)
+		local edgeDir = normalize(Vector3(startPoint.x - faceCenter.x, startPoint.y - faceCenter.y, 0))
 		best = best + edgeDir * hullSize
 	end
 
@@ -512,6 +513,27 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local closestFace, faceCenter = findClosestFace(corners, referenceShootPos)
 	local bl, br, tl, tr = closestFace[1], closestFace[2], closestFace[3], closestFace[4]
 
+	local faceX = nil
+	local faceY = nil
+	do
+		local c1 = corners[bl]
+		local c2 = corners[br]
+		local c3 = corners[tl]
+		if math.abs(c1.x - c2.x) < 0.01 and math.abs(c1.x - c3.x) < 0.01 then
+			faceX = c1.x
+		elseif math.abs(c1.y - c2.y) < 0.01 and math.abs(c1.y - c3.y) < 0.01 then
+			faceY = c1.y
+		end
+	end
+	assert(faceX or faceY, "multipoint.Run: failed to determine closestFace plane")
+
+	local facePointXY
+	if faceX then
+		facePointXY = Vector3(faceX, clampNumber(referenceShootPos.y, worldMins.y, worldMaxs.y), 0)
+	else
+		facePointXY = Vector3(clampNumber(referenceShootPos.x, worldMins.x, worldMaxs.x), faceY, 0)
+	end
+
 	-- Store debug state for visuals
 	multipoint.debugState.corners = corners
 	multipoint.debugState.visibleCorners = visibleCorners
@@ -524,8 +546,8 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local feetTargetZ = groundZ + feetHeight -- ~5 units above ground
 	local centerTargetZ = (groundZ + topZ) * 0.5 -- center of AABB
 
-	local bottomCenter = Vector3(aabbCenter.x, aabbCenter.y, groundZ)
-	local topCenter = Vector3(aabbCenter.x, aabbCenter.y, topZ)
+	local bottomCenter = Vector3(facePointXY.x, facePointXY.y, groundZ)
+	local topCenter = Vector3(facePointXY.x, facePointXY.y, topZ)
 
 	-- Phase 1: Vertical search - find best Z height
 	local bestVerticalPoint = nil
@@ -578,13 +600,8 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 
 	table.insert(multipoint.debugState.searchPath, bestVerticalPoint)
 
-	local closestPoint = Vector3(
-		clampNumber(referenceShootPos.x, worldMins.x, worldMaxs.x),
-		clampNumber(referenceShootPos.y, worldMins.y, worldMaxs.y),
-		bestVerticalPoint.z
-	)
-
-	local finalPoint = binarySearchTowardTarget(canShootAtPoint, bestVerticalPoint, closestPoint, hullSize)
+	local finalPoint =
+		binarySearchHorizontal(canShootAtPoint, referenceShootPos, bestVerticalPoint, faceCenter, hullSize)
 
 	table.insert(multipoint.debugState.searchPath, finalPoint)
 	multipoint.debugState.bestPoint = finalPoint
