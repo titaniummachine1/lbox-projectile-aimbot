@@ -579,7 +579,8 @@ local function onCreateMove(cmd)
 		-- to accept and use StrafePredictor.predictStrafeDirection per tick
 
 		TickProfiler.BeginSection("CM:Multipoint")
-		local multipointHitbox, multipointPos = multipoint.Run(entity, weapon, info, aimEyePos, lastPos, drop)
+		local multipointHitbox, multipointPos =
+			multipoint.Run(entity, weapon, info, aimEyePos, lastPos, drop, speed, gravity)
 		TickProfiler.EndSection("CM:Multipoint")
 
 		-- Zero Trust: Assert multipoint returns (multipointPos can be nil, that's ok)

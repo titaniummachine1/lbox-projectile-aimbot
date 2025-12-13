@@ -20,6 +20,9 @@ local DefaultConfig = {
 		AimSentry = true,
 		AimOtherBuildings = false,
 		TrackedTargets = 4, -- how many enemies to keep movement history for
+		PreferFeet = true, -- prioritize shooting ~5 units above ground to launch enemies
+		FeetHeight = 5, -- units above ground to aim when PreferFeet is enabled
+		FeetFallback = 10, -- if can't hit within this height, aim at center instead
 	},
 
 	-- Visual settings

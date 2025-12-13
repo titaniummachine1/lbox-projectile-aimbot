@@ -1,5 +1,6 @@
 -- Imports
 local G = require("globals")
+local multipoint = require("multipoint")
 
 -- Module declaration
 local Visuals = {}
@@ -240,6 +241,96 @@ local function drawMultipointTarget(texture, pos, thickness)
 	end
 end
 
+local function drawMultipointDebug(texture, thickness)
+	local dbg = multipoint.debugState
+	if not dbg or not dbg.corners then
+		return
+	end
+
+	local tex = texture or getWhiteTexture()
+	local cornerSize = 3
+
+	-- Draw all 8 corners with visibility status
+	for i = 1, 8 do
+		local corner = dbg.corners[i]
+		if corner then
+			local screen = client.WorldToScreen(corner)
+			if screen then
+				local isVisible = dbg.visibleCorners and dbg.visibleCorners[i]
+				if isVisible then
+					-- Green for visible corners
+					draw.Color(100, 255, 100, 255)
+				else
+					-- Red for blocked corners
+					draw.Color(255, 100, 100, 180)
+				end
+				draw.FilledRect(
+					math.floor(screen[1] - cornerSize),
+					math.floor(screen[2] - cornerSize),
+					math.floor(screen[1] + cornerSize),
+					math.floor(screen[2] + cornerSize)
+				)
+			end
+		end
+	end
+
+	-- Draw AABB center (cyan)
+	if dbg.aabbCenter then
+		local screen = client.WorldToScreen(dbg.aabbCenter)
+		if screen then
+			draw.Color(100, 255, 255, 200)
+			draw.FilledRect(
+				math.floor(screen[1] - 2),
+				math.floor(screen[2] - 2),
+				math.floor(screen[1] + 2),
+				math.floor(screen[2] + 2)
+			)
+		end
+	end
+
+	-- Draw face center (yellow - target for horizontal search)
+	if dbg.faceCenter then
+		local screen = client.WorldToScreen(dbg.faceCenter)
+		if screen then
+			draw.Color(255, 255, 0, 220)
+			draw.FilledRect(
+				math.floor(screen[1] - 3),
+				math.floor(screen[2] - 3),
+				math.floor(screen[1] + 3),
+				math.floor(screen[2] + 3)
+			)
+		end
+	end
+
+	-- Draw binary search path (orange line)
+	if dbg.searchPath and #dbg.searchPath >= 2 then
+		draw.Color(255, 165, 0, 255)
+		local prev = client.WorldToScreen(dbg.searchPath[1])
+		for i = 2, #dbg.searchPath do
+			local curr = client.WorldToScreen(dbg.searchPath[i])
+			if prev and curr then
+				drawLine(tex, prev, curr, thickness)
+			end
+			prev = curr
+		end
+	end
+
+	-- Draw final best point (large magenta square)
+	if dbg.bestPoint then
+		local screen = client.WorldToScreen(dbg.bestPoint)
+		if screen then
+			draw.Color(255, 0, 255, 255)
+			local s = 5
+			draw.FilledRect(
+				math.floor(screen[1] - s),
+				math.floor(screen[2] - s),
+				math.floor(screen[1] + s),
+				math.floor(screen[2] + s)
+			)
+		end
+	end
+end
+
 local function drawPlayerHitbox(texture, playerPos, targetMinHull, targetMaxHull, eyePos, thickness)
 	if not (playerPos and targetMinHull and targetMaxHull) then
 		return
@@ -467,8 +558,7 @@ function Visuals.draw(state)
 	local multipointPos = state and state.multipointPos
 	local targetEntity = state and state.target
 	-- Determine a best-effort target position for rendering boxes/quads even if paths are missing
-	local targetPos = multipointPos
-		or lastVec(playerPath)
+	local targetPos = lastVec(playerPath)
 		or (targetEntity and targetEntity.GetAbsOrigin and targetEntity:GetAbsOrigin() or nil)
 
 	-- Draw player path
@@ -504,6 +594,8 @@ function Visuals.draw(state)
 		local r, g, b, a = getColorFromHue(vis.Colors.MultipointTarget)
 		draw.Color(r, g, b, a)
 		drawMultipointTarget(texture, multipointPos, vis.Thickness.MultipointTarget)
+		-- Also draw multipoint debug visualization
+		drawMultipointDebug(texture, vis.Thickness.MultipointTarget * 0.5)
 	end
 
 	-- Draw quads

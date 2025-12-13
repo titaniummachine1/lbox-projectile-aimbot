@@ -50,6 +50,10 @@ local CIRCLE_DOT_SIZE = 2 -- pixels; was TRACE_DOT_SIZE (=4)
 local GRID_DOT_COLOR = { 255, 255, 255, 255 } -- white
 local CIRCLE_DOT_COLOR = { 255, 0, 0, 255 } -- red
 
+local DEBUG_DRAW_SEGMENT_SAMPLES = false
+local SEGMENT_SAMPLE_COLOR = { 255, 255, 255, 120 }
+local SEGMENT_SAMPLE_SIZE = 4
+
 local function scoreSplash(distTarget, distView)
 	return DAMAGE_WT * distTarget + DISTANCE_WT * distView
 end
@@ -316,53 +320,60 @@ end
 		end
 
 		cachedRadii[playerIdx][planeId] = cachedRadii[playerIdx][planeId] or {}
+		cachedSegmentRadii[playerIdx] = cachedSegmentRadii[playerIdx] or {}
+		cachedSegmentRadii[playerIdx][planeId] = cachedSegmentRadii[playerIdx][planeId] or {}
 
 		for seg = 0, CIRCLE_SEGMENTS - 1 do
-
-			local prevR = cachedRadii[playerIdx][planeId][seg]
-			local low = 0
-			local high = maxProbeDist
-			if prevR then
-				low = math.max(0, math.min(prevR - 4, maxProbeDist))
+			local dirPlane = dirs[seg]
+			local segCache = cachedSegmentRadii[playerIdx][planeId][seg]
+			if not segCache then
+				segCache = { buf = {}, head = 1, count = 0 }
+				cachedSegmentRadii[playerIdx][planeId][seg] = segCache
+			end
+			local function PushSample(sample)
+				local idx = segCache.head
+				segCache.buf[idx] = sample
+				segCache.head = idx + 1
+				if segCache.head > 22 then
+					segCache.head = 1
+				end
+				if segCache.count < 22 then
+					segCache.count = segCache.count + 1
+				end
 			end
 
-			local function EvalRadius(radius)
-				local dirPlane = dirs[seg]
-				local goal = hub + dirPlane * radius
-				local delta = goal - com
-				local dist = delta:Length()
-				if dist <= 0.001 then
-					return false
-				end
-				local rayDir = delta / dist
-				local rayEnd = com + rayDir * maxProbeDist
-				local tr = engine.TraceLine(com, rayEnd, traceMask, shouldHitEntity)
+			local traceOut = 16
+			local traceIn = 64
+			local function TraceSurface(radius)
+				local sample = hub + dirPlane * radius
+				PushSample(sample)
+				local start = sample + planeNormal * traceOut
+				local stop = sample - planeNormal * traceIn
+				local tr = engine.TraceLine(start, stop, traceMask, shouldHitEntity)
 				if (not tr) or tr.fraction >= 1.0 or (not tr.endpos) or (not tr.plane) then
+					return nil
+				end
+				if tr.plane:Dot(planeNormal) < PLANE_NORMAL_SIMILARITY then
+					return nil
+				end
+				if not PlaneFacesPlayer(tr.plane, eye, tr.endpos) then
+					return nil
+				end
+				return tr
+			end
+			local function EvalRadius(radius)
+				local tr = TraceSurface(radius)
+				if not tr then
 					return false
 				end
-				if not planeLocked then
-					planePoint = tr.endpos
-					planeNormal = tr.plane
-					local toCom = com - planePoint
-					hub = com - planeNormal * toCom:Dot(planeNormal)
-					planeLocked = PlaneFacesPlayer(planeNormal, eye, planePoint)
-					dirs = RebuildDirs()
-					if planeLocked then
-						cachedBlueprint[playerIdx][planeId] = {
-							normal = planeNormal,
-							hub = hub,
-							maxProbeDist = maxProbeDist,
-							dirs = dirs,
-						}
-					end
+				if not CanDamageFrom(tr.endpos, com, targetPlayer, blastRadius) then
+					return false
 				end
-				if planeLocked then
-					if tr.plane:Dot(planeNormal) < PLANE_NORMAL_SIMILARITY then
-						return false
-					end
-					if not PlaneFacesPlayer(tr.plane, eye, tr.endpos) then
-						return false
-					end
+				return true, tr.endpos, tr.fraction, tr.plane
+			end
+			local function EvalTrace(tr)
+				if not tr then
+					return false
 				end
 				if not CanDamageFrom(tr.endpos, com, targetPlayer, blastRadius) then
 					return false
@@ -370,25 +381,81 @@ end
 				return true, tr.endpos, tr.fraction, tr.plane
 			end
 
+			local minR = 8
+			local maxR = math.min(maxProbeDist, MAX_SEGMENT_RADIUS)
+			if maxR <= minR then
+				goto continue_segment
+			end
+
+			local prevR = cachedRadii[playerIdx][planeId][seg]
+			local trPrev = nil
+			if prevR and prevR >= minR and prevR <= maxR then
+				trPrev = TraceSurface(prevR)
+			end
+			local trMax = TraceSurface(maxR)
+			local trMin = nil
+			if (not trPrev) and (not trMax) then
+				trMin = TraceSurface(minR)
+				if not trMin then
+					goto continue_segment
+				end
+			end
+			local low = minR
+			local high = maxR
+
 			local bestR = nil
 			local bestPos = nil
 			local bestFrac = nil
 			local bestN = nil
 
-			for _ = 1, SEGMENT_SEARCH_ITERATIONS do
-				if (high - low) <= SEGMENT_SEARCH_EPSILON then
-					break
-				end
-				local mid = (low + high) * 0.5
-				local okMid, posMid, fracMid, nMid = EvalRadius(mid)
-				if okMid then
-					bestR, bestPos, bestFrac, bestN = mid, posMid, fracMid, nMid
-					low = mid
-				else
-					high = mid
+			if trPrev and prevR and prevR >= minR and prevR <= maxR then
+				local okPrevR, posPrevR, fracPrevR, nPrevR = EvalTrace(trPrev)
+				if okPrevR then
+					bestR, bestPos, bestFrac, bestN = prevR, posPrevR, fracPrevR, nPrevR
+					low = prevR
 				end
 			end
 
+			local okMax, posMax, fracMax, nMax = EvalTrace(trMax)
+			if okMax then
+				bestR, bestPos, bestFrac, bestN = maxR, posMax, fracMax, nMax
+			else
+				if not bestR then
+					if not trMin then
+						trMin = TraceSurface(minR)
+					end
+					local okMin, posMin, fracMin, nMin = EvalTrace(trMin)
+					if okMin then
+						bestR, bestPos, bestFrac, bestN = minR, posMin, fracMin, nMin
+						low = minR
+					else
+						local midR = (minR + maxR) * 0.5
+						local okMid, posMid, fracMid, nMid = EvalRadius(midR)
+						if okMid then
+							bestR, bestPos, bestFrac, bestN = midR, posMid, fracMid, nMid
+							low = midR
+						else
+							goto continue_segment
+						end
+					end
+				end
+				high = maxR
+				local iterCount = math.min(SEGMENT_SEARCH_ITERATIONS, 4)
+				for _ = 1, iterCount do
+					if (high - low) <= SEGMENT_SEARCH_EPSILON then
+						break
+					end
+					local mid = (low + high) * 0.5
+					local okMid, posMid, fracMid, nMid = EvalRadius(mid)
+					if okMid then
+						bestR, bestPos, bestFrac, bestN = mid, posMid, fracMid, nMid
+						low = mid
+					else
+						high = mid
+					end
+				end
+			end
+			
 			if not bestR or bestR < 10 then
 				goto continue_segment
 			end
@@ -1441,6 +1508,35 @@ local function OnPaint()
 								math.floor(s[1] + 3),
 								math.floor(s[2] + 3)
 							)
+						end
+					end
+					if DEBUG_DRAW_SEGMENT_SAMPLES then
+						local idx = player:GetIndex()
+						local perPlane = cachedSegmentRadii[idx]
+						if perPlane then
+							draw.Color(table.unpack(SEGMENT_SAMPLE_COLOR))
+							for _, perSeg in pairs(perPlane) do
+								if perSeg then
+									for _, segCache in pairs(perSeg) do
+										if segCache and segCache.buf and segCache.count and segCache.count > 0 then
+											for i = 1, segCache.count do
+												local samplePos = segCache.buf[i]
+												if samplePos then
+													local ss = client.WorldToScreen(samplePos)
+													if ss then
+														draw.FilledRect(
+															math.floor(ss[1] - SEGMENT_SAMPLE_SIZE),
+															math.floor(ss[2] - SEGMENT_SAMPLE_SIZE),
+															math.floor(ss[1] + SEGMENT_SAMPLE_SIZE),
+															math.floor(ss[2] + SEGMENT_SAMPLE_SIZE)
+														)
+													end
+												end
+											end
+										end
+									end
+								end
+							end
 						end
 					end
 				end
