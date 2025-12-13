@@ -610,17 +610,20 @@ local function onCreateMove(cmd)
 			local weaponOffset = WeaponOffsets.getOffset(weaponDefIndex, isDucking, isFlipped)
 
 			local function computeFirePos(testAngle)
-				local pos = info:GetFirePosition(plocal, aimEyePos, testAngle, isFlipped)
-				if not pos then
-					return nil
-				end
 				if weaponOffset then
-					pos = aimEyePos
+					local offsetPos = aimEyePos
 						+ (testAngle:Forward() * weaponOffset.x)
 						+ (testAngle:Right() * weaponOffset.y)
 						+ (testAngle:Up() * weaponOffset.z)
+					local resultTrace =
+						engine.TraceHull(aimEyePos, offsetPos, -Vector3(8, 8, 8), Vector3(8, 8, 8), MASK_SHOT_HULL)
+					if not resultTrace or resultTrace.startsolid then
+						return nil
+					end
+					return resultTrace.endpos
 				end
-				return pos
+
+				return info:GetFirePosition(plocal, aimEyePos, testAngle, isFlipped)
 			end
 
 			local firePos = computeFirePos(angle)

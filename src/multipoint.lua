@@ -118,7 +118,12 @@ local function createCanShootAt(
 	local pTargetIndex = pTarget:GetIndex()
 	assert(pTargetIndex, "createCanShootAt: pTarget:GetIndex() returned nil")
 
+	local weaponDefIndex = pWeapon:GetPropInt("m_iItemDefinitionIndex")
+	assert(weaponDefIndex, "createCanShootAt: pWeapon:GetPropInt('m_iItemDefinitionIndex') returned nil")
+
 	local isFlipped = pWeapon.IsViewModelFlipped and pWeapon:IsViewModelFlipped() or false
+	local isDucking = (pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0
+	local weaponOffset = WeaponOffsets.getOffset(weaponDefIndex, isDucking, isFlipped)
 
 	local function shouldHitEntity(ent, contentsMask)
 		if not ent then
@@ -141,7 +146,24 @@ local function createCanShootAt(
 			return false
 		end
 
-		local firePos = weaponInfo:GetFirePosition(pLocal, viewPos, aimAngle, isFlipped)
+		local function computeFirePos(testAngle)
+			if weaponOffset then
+				local offsetPos = viewPos
+					+ (testAngle:Forward() * weaponOffset.x)
+					+ (testAngle:Right() * weaponOffset.y)
+					+ (testAngle:Up() * weaponOffset.z)
+				local resultTrace =
+					engine.TraceHull(viewPos, offsetPos, -Vector3(8, 8, 8), Vector3(8, 8, 8), MASK_SHOT_HULL)
+				if not resultTrace or resultTrace.startsolid then
+					return nil
+				end
+				return resultTrace.endpos
+			end
+
+			return weaponInfo:GetFirePosition(pLocal, viewPos, testAngle, isFlipped)
+		end
+
+		local firePos = computeFirePos(aimAngle)
 		if not firePos then
 			return false
 		end
@@ -151,11 +173,18 @@ local function createCanShootAt(
 			return false
 		end
 
-		local translatedFirePos = weaponInfo:GetFirePosition(pLocal, viewPos, translatedAngle, isFlipped)
-		if not translatedFirePos then
+		firePos = computeFirePos(translatedAngle)
+		if not firePos then
 			return false
 		end
-		firePos = translatedFirePos
+
+		local finalAngle = utils.math.SolveBallisticArc(firePos, targetPoint, speed, gravity)
+		if finalAngle then
+			local finalFirePos = computeFirePos(finalAngle)
+			if finalFirePos then
+				firePos = finalFirePos
+			end
+		end
 
 		local trace
 		if hasHull then
@@ -424,8 +453,44 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local centerAimAngle = utils.math.SolveBallisticArc(vHeadPos, aabbCenter, speed, gravity)
 	if centerAimAngle then
 		local isFlipped = pWeapon.IsViewModelFlipped and pWeapon:IsViewModelFlipped() or false
-		local referenceFirePos = weaponInfo:GetFirePosition(pLocal, vHeadPos, centerAimAngle, isFlipped)
+		local weaponDefIndex = pWeapon:GetPropInt("m_iItemDefinitionIndex")
+		assert(weaponDefIndex, "multipoint.Run: pWeapon:GetPropInt('m_iItemDefinitionIndex') returned nil")
+		local isDucking = (pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0
+		local weaponOffset = WeaponOffsets.getOffset(weaponDefIndex, isDucking, isFlipped)
+
+		local function computeReferenceFirePos(testAngle)
+			if weaponOffset then
+				local offsetPos = vHeadPos
+					+ (testAngle:Forward() * weaponOffset.x)
+					+ (testAngle:Right() * weaponOffset.y)
+					+ (testAngle:Up() * weaponOffset.z)
+				local resultTrace =
+					engine.TraceHull(vHeadPos, offsetPos, -Vector3(8, 8, 8), Vector3(8, 8, 8), MASK_SHOT_HULL)
+				if not resultTrace or resultTrace.startsolid then
+					return nil
+				end
+				return resultTrace.endpos
+			end
+
+			return weaponInfo:GetFirePosition(pLocal, vHeadPos, testAngle, isFlipped)
+		end
+
+		local referenceFirePos = computeReferenceFirePos(centerAimAngle)
 		if referenceFirePos then
+			local angle1 = utils.math.SolveBallisticArc(referenceFirePos, aabbCenter, speed, gravity)
+			if angle1 then
+				local pos1 = computeReferenceFirePos(angle1)
+				if pos1 then
+					referenceFirePos = pos1
+					local angle2 = utils.math.SolveBallisticArc(referenceFirePos, aabbCenter, speed, gravity)
+					if angle2 then
+						local pos2 = computeReferenceFirePos(angle2)
+						if pos2 then
+							referenceFirePos = pos2
+						end
+					end
+				end
+			end
 			referenceShootPos = referenceFirePos
 		end
 	end
