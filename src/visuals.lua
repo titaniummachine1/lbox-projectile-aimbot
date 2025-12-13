@@ -302,6 +302,19 @@ local function drawMultipointDebug(texture, thickness)
 		end
 	end
 
+	if dbg.intersectPoint then
+		local screen = client.WorldToScreen(dbg.intersectPoint)
+		if screen then
+			draw.Color(255, 255, 255, 240)
+			draw.FilledRect(
+				math.floor(screen[1] - 3),
+				math.floor(screen[2] - 3),
+				math.floor(screen[1] + 3),
+				math.floor(screen[2] + 3)
+			)
+		end
+	end
+
 	-- Draw binary search path (orange line)
 	if dbg.searchPath and #dbg.searchPath >= 2 then
 		draw.Color(255, 165, 0, 255)

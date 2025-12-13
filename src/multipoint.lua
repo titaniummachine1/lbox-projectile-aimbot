@@ -19,6 +19,8 @@ multipoint.debugState = {
 	aabbCenter = nil, -- Center of AABB
 	closestFace = nil, -- The face we're targeting
 	faceCenter = nil, -- Center of the closest face
+	intersectPoint = nil,
+	intersectNormal = nil,
 }
 
 ---Normalize vector (handles zero-length)
@@ -32,39 +34,96 @@ local function clampNumber(value, minValue, maxValue)
 	return math.max(minValue, math.min(value, maxValue))
 end
 
-local function computeVerticalFaceIntersectionXY(shootPos, comPos, worldMins, worldMaxs)
-	assert(shootPos, "computeVerticalFaceIntersectionXY: missing shootPos")
-	assert(comPos, "computeVerticalFaceIntersectionXY: missing comPos")
-	assert(worldMins and worldMaxs, "computeVerticalFaceIntersectionXY: missing bounds")
+local function rayAABBClosestFaceHit(rayOrigin, rayTarget, worldMins, worldMaxs, verticalFacesOnly)
+	assert(rayOrigin, "rayAABBClosestFaceHit: missing rayOrigin")
+	assert(rayTarget, "rayAABBClosestFaceHit: missing rayTarget")
+	assert(worldMins and worldMaxs, "rayAABBClosestFaceHit: missing bounds")
 
-	local dx = shootPos.x - comPos.x
-	local dy = shootPos.y - comPos.y
+	local dir = rayTarget - rayOrigin
+	local eps = 1e-6
 
-	if math.abs(dx) < 0.0001 and math.abs(dy) < 0.0001 then
-		return nil
+	local bestT = math.huge
+	local bestPoint = nil
+	local bestAxis = nil
+	local bestPlane = nil
+	local bestNormal = nil
+
+	local function tryAxis(axis)
+		local originAxis
+		local dirAxis
+		local minAxis
+		local maxAxis
+
+		if axis == "x" then
+			originAxis = rayOrigin.x
+			dirAxis = dir.x
+			minAxis = worldMins.x
+			maxAxis = worldMaxs.x
+		elseif axis == "y" then
+			originAxis = rayOrigin.y
+			dirAxis = dir.y
+			minAxis = worldMins.y
+			maxAxis = worldMaxs.y
+		else
+			originAxis = rayOrigin.z
+			dirAxis = dir.z
+			minAxis = worldMins.z
+			maxAxis = worldMaxs.z
+		end
+
+		if math.abs(dirAxis) < eps then
+			return
+		end
+
+		local planeAxis
+		local normalSign
+		if dirAxis > 0 then
+			planeAxis = minAxis
+			normalSign = -1
+		else
+			planeAxis = maxAxis
+			normalSign = 1
+		end
+
+		local t = (planeAxis - originAxis) / dirAxis
+		if t <= 1e-4 or t >= bestT then
+			return
+		end
+
+		local hit = rayOrigin + (dir * t)
+		local isInside = true
+		if axis ~= "x" and (hit.x < worldMins.x or hit.x > worldMaxs.x) then
+			isInside = false
+		elseif axis ~= "y" and (hit.y < worldMins.y or hit.y > worldMaxs.y) then
+			isInside = false
+		elseif axis ~= "z" and (hit.z < worldMins.z or hit.z > worldMaxs.z) then
+			isInside = false
+		end
+
+		if not isInside then
+			return
+		end
+
+		bestT = t
+		bestPoint = hit
+		bestAxis = axis
+		bestPlane = planeAxis
+		if axis == "x" then
+			bestNormal = Vector3(normalSign, 0, 0)
+		elseif axis == "y" then
+			bestNormal = Vector3(0, normalSign, 0)
+		else
+			bestNormal = Vector3(0, 0, normalSign)
+		end
 	end
 
-	local tx = math.huge
-	local faceX = nil
-	if math.abs(dx) >= 0.0001 then
-		faceX = (dx > 0) and worldMaxs.x or worldMins.x
-		tx = (faceX - comPos.x) / dx
+	tryAxis("x")
+	tryAxis("y")
+	if not verticalFacesOnly then
+		tryAxis("z")
 	end
 
-	local ty = math.huge
-	local faceY = nil
-	if math.abs(dy) >= 0.0001 then
-		faceY = (dy > 0) and worldMaxs.y or worldMins.y
-		ty = (faceY - comPos.y) / dy
-	end
-
-	if tx < ty then
-		local y = comPos.y + dy * tx
-		return Vector3(faceX, clampNumber(y, worldMins.y, worldMaxs.y), comPos.z), "x", faceX
-	end
-
-	local x = comPos.x + dx * ty
-	return Vector3(clampNumber(x, worldMins.x, worldMaxs.x), faceY, comPos.z), "y", faceY
+	return bestPoint, bestAxis, bestPlane, bestNormal
 end
 
 local function binarySearchTowardTarget(canShootAtPoint, startPoint, targetPoint, hullSize)
@@ -169,7 +228,10 @@ local function createCanShootAt(
 		if idx == pLocalIndex then
 			return false
 		end
-		return true
+		if idx == pTargetIndex then
+			return true
+		end
+		return false
 	end
 
 	local hasHull = (hullMins:Length() > 0.01 or hullMaxs:Length() > 0.01)
@@ -550,8 +612,13 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local closestFace, faceCenter = findClosestFace(corners, referenceShootPos)
 	local bl, br, tl, tr = closestFace[1], closestFace[2], closestFace[3], closestFace[4]
 
-	local intersectPoint, intersectAxis, intersectPlaneValue =
-		computeVerticalFaceIntersectionXY(referenceShootPos, comPos, worldMins, worldMaxs)
+	local intersectPoint, intersectAxis, intersectPlaneValue = nil, nil, nil
+	local hitPoint, hitAxis, hitPlane, hitNormal = rayAABBClosestFaceHit(vHeadPos, comPos, worldMins, worldMaxs, true)
+	if hitPoint then
+		intersectPoint = hitPoint
+		intersectAxis = hitAxis
+		intersectPlaneValue = hitPlane
+	end
 	if not intersectPoint then
 		intersectPoint = faceCenter
 		intersectAxis = "x"
@@ -564,14 +631,83 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	multipoint.debugState.aabbCenter = aabbCenter
 	multipoint.debugState.closestFace = closestFace
 	multipoint.debugState.faceCenter = faceCenter
+	multipoint.debugState.intersectPoint = intersectPoint
+	multipoint.debugState.intersectNormal = hitNormal
 	multipoint.debugState.searchPath = {}
 
 	-- Calculate target heights
 	local feetTargetZ = groundZ + feetHeight -- ~5 units above ground
 	local centerTargetZ = (groundZ + topZ) * 0.5 -- center of AABB
 
-	local bottomCenter = Vector3(intersectPoint.x, intersectPoint.y, groundZ)
-	local topCenter = Vector3(intersectPoint.x, intersectPoint.y, topZ)
+	local baseX = intersectPoint.x
+	local baseY = intersectPoint.y
+	local facePlane = intersectPlaneValue
+	local faceAxis = intersectAxis
+
+	local function makeFacePoint(coord, z)
+		if faceAxis == "x" then
+			return Vector3(facePlane, coord, z)
+		end
+		return Vector3(coord, facePlane, z)
+	end
+
+	local function isVerticalLineViable(coord)
+		local bottom = makeFacePoint(coord, groundZ)
+		local feet = makeFacePoint(coord, feetTargetZ)
+		local center = makeFacePoint(coord, centerTargetZ)
+		local top = makeFacePoint(coord, topZ)
+		return canShootAtPoint(bottom) or canShootAtPoint(feet) or canShootAtPoint(center) or canShootAtPoint(top)
+	end
+
+	local function tryFindClosestViableCoordToTarget(targetCoord, minCoord, maxCoord)
+		local minOk = isVerticalLineViable(minCoord)
+		local maxOk = isVerticalLineViable(maxCoord)
+
+		local startCoord = nil
+		if minOk and maxOk then
+			startCoord = (math.abs(targetCoord - minCoord) < math.abs(targetCoord - maxCoord)) and minCoord or maxCoord
+		elseif minOk then
+			startCoord = minCoord
+		elseif maxOk then
+			startCoord = maxCoord
+		else
+			return nil
+		end
+
+		local near = startCoord
+		local far = targetCoord
+		for _ = 1, BINARY_SEARCH_ITERATIONS do
+			local mid = (near + far) * 0.5
+			if isVerticalLineViable(mid) then
+				near = mid
+			else
+				far = mid
+			end
+		end
+
+		return near
+	end
+
+	if faceAxis == "x" then
+		local targetCoord = baseY
+		if not isVerticalLineViable(targetCoord) then
+			local bestCoord = tryFindClosestViableCoordToTarget(targetCoord, worldMins.y, worldMaxs.y)
+			if bestCoord then
+				baseY = bestCoord
+			end
+		end
+	else
+		local targetCoord = baseX
+		if not isVerticalLineViable(targetCoord) then
+			local bestCoord = tryFindClosestViableCoordToTarget(targetCoord, worldMins.x, worldMaxs.x)
+			if bestCoord then
+				baseX = bestCoord
+			end
+		end
+	end
+
+	local bottomCenter = Vector3(baseX, baseY, groundZ)
+	local topCenter = Vector3(baseX, baseY, topZ)
 
 	-- Phase 1: Vertical search - find best Z height
 	local bestVerticalPoint = nil
@@ -633,16 +769,7 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 
 	table.insert(multipoint.debugState.searchPath, bestVerticalPoint)
 
-	local horizontalTarget
-	if intersectAxis == "x" then
-		horizontalTarget =
-			Vector3(intersectPlaneValue, clampNumber(comPos.y, worldMins.y, worldMaxs.y), bestVerticalPoint.z)
-	else
-		horizontalTarget =
-			Vector3(clampNumber(comPos.x, worldMins.x, worldMaxs.x), intersectPlaneValue, bestVerticalPoint.z)
-	end
-
-	local finalPoint = binarySearchTowardTarget(canShootAtPoint, bestVerticalPoint, horizontalTarget, hullSize)
+	local finalPoint = bestVerticalPoint
 
 	table.insert(multipoint.debugState.searchPath, finalPoint)
 	multipoint.debugState.bestPoint = finalPoint
