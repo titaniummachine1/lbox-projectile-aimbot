@@ -267,6 +267,9 @@ local function Run(target, targetPredictedPos, startPos, angle, info, localTeam,
 	assert(type(full) == "boolean", "projectilesim: full must be boolean")
 	assert(timetable, "projectilesim: simulation returned nil timetable")
 
+	table.insert(projpath, 1, Vector3(startPos:Unpack()))
+	table.insert(timetable, 1, globals.CurTime())
+
 	return projpath, hit, full, timetable
 end
 

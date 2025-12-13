@@ -2,7 +2,6 @@ local multipoint = {}
 
 -- Imports
 local G = require("globals")
-local WeaponOffsets = require("constants.weapon_offsets")
 local utils = {}
 utils.math = require("utils.math")
 
@@ -26,6 +25,48 @@ multipoint.debugState = {
 ---@return Vector3
 local function normalize(v)
 	return v / v:Length()
+end
+
+local function clampNumber(value, minValue, maxValue)
+	return math.max(minValue, math.min(value, maxValue))
+end
+
+local function binarySearchTowardTarget(canShootAtPoint, startPoint, targetPoint, hullSize)
+	assert(type(canShootAtPoint) == "function", "binarySearchTowardTarget: canShootAtPoint must be function")
+	assert(startPoint, "binarySearchTowardTarget: missing startPoint")
+	assert(targetPoint, "binarySearchTowardTarget: missing targetPoint")
+	assert(type(hullSize) == "number", "binarySearchTowardTarget: hullSize must be number")
+
+	if canShootAtPoint(targetPoint) then
+		local best = targetPoint
+		if hullSize > 0 then
+			local dir = normalize(targetPoint - startPoint)
+			best = best - dir * hullSize
+		end
+		return best
+	end
+
+	local best = startPoint
+	local low = 0.0
+	local high = 1.0
+
+	for _ = 1, BINARY_SEARCH_ITERATIONS do
+		local mid = (low + high) * 0.5
+		local p = startPoint + (targetPoint - startPoint) * mid
+		if canShootAtPoint(p) then
+			best = p
+			low = mid
+		else
+			high = mid
+		end
+	end
+
+	if hullSize > 0 and best ~= startPoint then
+		local dir = normalize(targetPoint - startPoint)
+		best = best - dir * hullSize
+	end
+
+	return best
 end
 
 ---Get 8 corners of player AABB in world space
@@ -77,9 +118,6 @@ local function createCanShootAt(
 	local pTargetIndex = pTarget:GetIndex()
 	assert(pTargetIndex, "createCanShootAt: pTarget:GetIndex() returned nil")
 
-	local weaponDefIndex = pWeapon:GetPropInt("m_iItemDefinitionIndex")
-	assert(weaponDefIndex, "createCanShootAt: pWeapon:GetPropInt('m_iItemDefinitionIndex') returned nil")
-
 	local isFlipped = pWeapon.IsViewModelFlipped and pWeapon:IsViewModelFlipped() or false
 
 	local function shouldHitEntity(ent, contentsMask)
@@ -108,15 +146,16 @@ local function createCanShootAt(
 			return false
 		end
 
-		local weaponOffset = WeaponOffsets.getFirePosition(pLocal, viewPos, aimAngle, weaponDefIndex)
-		if weaponOffset then
-			firePos = weaponOffset
-		end
-
 		local translatedAngle = utils.math.SolveBallisticArc(firePos, targetPoint, speed, gravity)
 		if not translatedAngle then
 			return false
 		end
+
+		local translatedFirePos = weaponInfo:GetFirePosition(pLocal, viewPos, translatedAngle, isFlipped)
+		if not translatedFirePos then
+			return false
+		end
+		firePos = translatedFirePos
 
 		local trace
 		if hasHull then
@@ -370,6 +409,8 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local aabbCenter = getAABBCenter(adjustedPos, mins, maxs)
 	local groundZ = (adjustedPos + mins).z -- bottom of AABB
 	local topZ = (adjustedPos + maxs).z
+	local worldMins = adjustedPos + mins
+	local worldMaxs = adjustedPos + maxs
 
 	-- Get projectile info
 	local hullMins = weaponInfo.m_vecMins or Vector3(0, 0, 0)
@@ -379,8 +420,18 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local canShootAtPoint =
 		createCanShootAt(pLocal, pTarget, pWeapon, weaponInfo, vHeadPos, speed, gravity, hullMins, hullMaxs, traceMask)
 
+	local referenceShootPos = vHeadPos
+	local centerAimAngle = utils.math.SolveBallisticArc(vHeadPos, aabbCenter, speed, gravity)
+	if centerAimAngle then
+		local isFlipped = pWeapon.IsViewModelFlipped and pWeapon:IsViewModelFlipped() or false
+		local referenceFirePos = weaponInfo:GetFirePosition(pLocal, vHeadPos, centerAimAngle, isFlipped)
+		if referenceFirePos then
+			referenceShootPos = referenceFirePos
+		end
+	end
+
 	-- Find furthest corner to exclude
-	local furthestIdx = findFurthestCorner(corners, vHeadPos)
+	local furthestIdx = findFurthestCorner(corners, referenceShootPos)
 
 	-- Check which corners are shootable (7 corners, excluding furthest)
 	local visibleCorners = {}
@@ -393,7 +444,7 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	end
 
 	-- Find closest face to shooter
-	local closestFace, faceCenter = findClosestFace(corners, vHeadPos)
+	local closestFace, faceCenter = findClosestFace(corners, referenceShootPos)
 	local bl, br, tl, tr = closestFace[1], closestFace[2], closestFace[3], closestFace[4]
 
 	-- Store debug state for visuals
@@ -408,9 +459,8 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local feetTargetZ = groundZ + feetHeight -- ~5 units above ground
 	local centerTargetZ = (groundZ + topZ) * 0.5 -- center of AABB
 
-	-- Get bottom and top points of closest face (center of bottom/top edges)
-	local bottomCenter = (corners[bl] + corners[br]) * 0.5
-	local topCenter = (corners[tl] + corners[tr]) * 0.5
+	local bottomCenter = Vector3(aabbCenter.x, aabbCenter.y, groundZ)
+	local topCenter = Vector3(aabbCenter.x, aabbCenter.y, topZ)
 
 	-- Phase 1: Vertical search - find best Z height
 	local bestVerticalPoint = nil
@@ -463,8 +513,13 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 
 	table.insert(multipoint.debugState.searchPath, bestVerticalPoint)
 
-	-- Phase 2: Horizontal search - move toward center line of face
-	local finalPoint = binarySearchHorizontal(canShootAtPoint, vHeadPos, bestVerticalPoint, faceCenter, hullSize)
+	local closestPoint = Vector3(
+		clampNumber(referenceShootPos.x, worldMins.x, worldMaxs.x),
+		clampNumber(referenceShootPos.y, worldMins.y, worldMaxs.y),
+		bestVerticalPoint.z
+	)
+
+	local finalPoint = binarySearchTowardTarget(canShootAtPoint, bestVerticalPoint, closestPoint, hullSize)
 
 	table.insert(multipoint.debugState.searchPath, finalPoint)
 	multipoint.debugState.bestPoint = finalPoint

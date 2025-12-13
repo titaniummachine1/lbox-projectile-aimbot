@@ -602,24 +602,50 @@ local function onCreateMove(cmd)
 
 		if angle then
 			--- check visibility
-			local firePos = info:GetFirePosition(plocal, aimEyePos, angle, weapon:IsViewModelFlipped())
-			assert(firePos, "Main: info:GetFirePosition returned nil")
+			local isFlipped = weapon:IsViewModelFlipped()
 
-			-- Fedoraware Critical #2: Weapon-specific fire position offsets
 			local weaponDefIndex = weapon:GetPropInt("m_iItemDefinitionIndex")
 			assert(weaponDefIndex, "Main: weapon:GetPropInt('m_iItemDefinitionIndex') returned nil")
+			local isDucking = (plocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0
+			local weaponOffset = WeaponOffsets.getOffset(weaponDefIndex, isDucking, isFlipped)
 
-			local weaponOffset = WeaponOffsets.getFirePosition(plocal, aimEyePos, angle, weaponDefIndex)
-			-- weaponOffset can be nil, that's expected for weapons without offsets
-			if weaponOffset then
-				assert(type(weaponOffset.x) == "number", "Main: weaponOffset has invalid x")
-				assert(type(weaponOffset.y) == "number", "Main: weaponOffset has invalid y")
-				assert(type(weaponOffset.z) == "number", "Main: weaponOffset has invalid z")
-				firePos = weaponOffset
+			local function computeFirePos(testAngle)
+				local pos = info:GetFirePosition(plocal, aimEyePos, testAngle, isFlipped)
+				if not pos then
+					return nil
+				end
+				if weaponOffset then
+					pos = aimEyePos
+						+ (testAngle:Forward() * weaponOffset.x)
+						+ (testAngle:Right() * weaponOffset.y)
+						+ (testAngle:Up() * weaponOffset.z)
+				end
+				return pos
 			end
+
+			local firePos = computeFirePos(angle)
+			assert(firePos, "Main: info:GetFirePosition returned nil")
 
 			local translatedAngle = utils.math.SolveBallisticArc(firePos, lastPos, speed, gravity)
 			-- translatedAngle can be nil if no solution, that's expected
+
+			if translatedAngle then
+				firePos = computeFirePos(translatedAngle)
+				if not firePos then
+					translatedAngle = nil
+				end
+			end
+
+			if translatedAngle then
+				local finalAngle = utils.math.SolveBallisticArc(firePos, lastPos, speed, gravity)
+				if finalAngle then
+					local finalFirePos = computeFirePos(finalAngle)
+					if finalFirePos then
+						translatedAngle = finalAngle
+						firePos = finalFirePos
+					end
+				end
+			end
 
 			if translatedAngle then
 				TickProfiler.BeginSection("CM:SimProj")
@@ -630,9 +656,8 @@ local function onCreateMove(cmd)
 				-- Zero Trust: Assert SimulateProj returns
 				assert(projpath, "Main: SimulateProj returned nil projpath")
 				assert(type(fullSim) == "boolean", "Main: SimulateProj fullSim must be boolean")
-				-- hit can be nil or boolean, that's ok
-				-- projtimetable can be empty but not nil
 				assert(projtimetable, "Main: SimulateProj returned nil projtimetable")
+
 				if fullSim then
 					local distance = (entityCenter - localPos):Length()
 					local confidence =
@@ -643,7 +668,7 @@ local function onCreateMove(cmd)
 
 						-- Store ephemeral aim state for this tick
 						state.target = entity
-						state.angle = angle
+						state.angle = translatedAngle
 						state.charge = charge
 						state.charges = info.m_bCharges
 						state.secondaryfire = secondaryFire
