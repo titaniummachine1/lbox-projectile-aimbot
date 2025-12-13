@@ -32,6 +32,41 @@ local function clampNumber(value, minValue, maxValue)
 	return math.max(minValue, math.min(value, maxValue))
 end
 
+local function computeVerticalFaceIntersectionXY(shootPos, comPos, worldMins, worldMaxs)
+	assert(shootPos, "computeVerticalFaceIntersectionXY: missing shootPos")
+	assert(comPos, "computeVerticalFaceIntersectionXY: missing comPos")
+	assert(worldMins and worldMaxs, "computeVerticalFaceIntersectionXY: missing bounds")
+
+	local dx = shootPos.x - comPos.x
+	local dy = shootPos.y - comPos.y
+
+	if math.abs(dx) < 0.0001 and math.abs(dy) < 0.0001 then
+		return nil
+	end
+
+	local tx = math.huge
+	local faceX = nil
+	if math.abs(dx) >= 0.0001 then
+		faceX = (dx > 0) and worldMaxs.x or worldMins.x
+		tx = (faceX - comPos.x) / dx
+	end
+
+	local ty = math.huge
+	local faceY = nil
+	if math.abs(dy) >= 0.0001 then
+		faceY = (dy > 0) and worldMaxs.y or worldMins.y
+		ty = (faceY - comPos.y) / dy
+	end
+
+	if tx < ty then
+		local y = comPos.y + dy * tx
+		return Vector3(faceX, clampNumber(y, worldMins.y, worldMaxs.y), comPos.z), "x", faceX
+	end
+
+	local x = comPos.x + dx * ty
+	return Vector3(clampNumber(x, worldMins.x, worldMaxs.x), faceY, comPos.z), "y", faceY
+end
+
 local function binarySearchTowardTarget(canShootAtPoint, startPoint, targetPoint, hullSize)
 	assert(type(canShootAtPoint) == "function", "binarySearchTowardTarget: canShootAtPoint must be function")
 	assert(startPoint, "binarySearchTowardTarget: missing startPoint")
@@ -437,6 +472,8 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	-- Get AABB data
 	local corners = getAABBCorners(adjustedPos, mins, maxs)
 	local aabbCenter = getAABBCenter(adjustedPos, mins, maxs)
+	local comZ = getCOMHeight(adjustedPos, mins, maxs)
+	local comPos = Vector3(aabbCenter.x, aabbCenter.y, comZ)
 	local groundZ = (adjustedPos + mins).z -- bottom of AABB
 	local topZ = (adjustedPos + maxs).z
 	local worldMins = adjustedPos + mins
@@ -513,25 +550,12 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local closestFace, faceCenter = findClosestFace(corners, referenceShootPos)
 	local bl, br, tl, tr = closestFace[1], closestFace[2], closestFace[3], closestFace[4]
 
-	local faceX = nil
-	local faceY = nil
-	do
-		local c1 = corners[bl]
-		local c2 = corners[br]
-		local c3 = corners[tl]
-		if math.abs(c1.x - c2.x) < 0.01 and math.abs(c1.x - c3.x) < 0.01 then
-			faceX = c1.x
-		elseif math.abs(c1.y - c2.y) < 0.01 and math.abs(c1.y - c3.y) < 0.01 then
-			faceY = c1.y
-		end
-	end
-	assert(faceX or faceY, "multipoint.Run: failed to determine closestFace plane")
-
-	local facePointXY
-	if faceX then
-		facePointXY = Vector3(faceX, clampNumber(referenceShootPos.y, worldMins.y, worldMaxs.y), 0)
-	else
-		facePointXY = Vector3(clampNumber(referenceShootPos.x, worldMins.x, worldMaxs.x), faceY, 0)
+	local intersectPoint, intersectAxis, intersectPlaneValue =
+		computeVerticalFaceIntersectionXY(referenceShootPos, comPos, worldMins, worldMaxs)
+	if not intersectPoint then
+		intersectPoint = faceCenter
+		intersectAxis = "x"
+		intersectPlaneValue = faceCenter.x
 	end
 
 	-- Store debug state for visuals
@@ -546,8 +570,8 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local feetTargetZ = groundZ + feetHeight -- ~5 units above ground
 	local centerTargetZ = (groundZ + topZ) * 0.5 -- center of AABB
 
-	local bottomCenter = Vector3(facePointXY.x, facePointXY.y, groundZ)
-	local topCenter = Vector3(facePointXY.x, facePointXY.y, topZ)
+	local bottomCenter = Vector3(intersectPoint.x, intersectPoint.y, groundZ)
+	local topCenter = Vector3(intersectPoint.x, intersectPoint.y, topZ)
 
 	-- Phase 1: Vertical search - find best Z height
 	local bestVerticalPoint = nil
@@ -557,12 +581,21 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 		-- Try to hit feet first (~5 units above ground)
 		bestVerticalPoint, hitFeet = binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, feetTargetZ)
 
-		-- If we couldn't hit within feetFallback of ground, aim at center instead
-		if bestVerticalPoint and not hitFeet then
+		local feetFallbackTargetZ = groundZ + feetFallback
+		if (not hitFeet) and (feetFallbackTargetZ > feetTargetZ) then
+			local fallbackPoint, hitFallback =
+				binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, feetFallbackTargetZ)
+			if fallbackPoint and (not bestVerticalPoint or hitFallback) then
+				bestVerticalPoint = fallbackPoint
+				hitFeet = hitFallback
+			end
+		end
+
+		if bestVerticalPoint then
 			local distFromGround = bestVerticalPoint.z - groundZ
 			if distFromGround > feetFallback then
-				-- Can't hit feet, try center instead
-				local centerPoint, _ = binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, centerTargetZ)
+				local centerPoint = nil
+				centerPoint, _ = binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, centerTargetZ)
 				if centerPoint then
 					bestVerticalPoint = centerPoint
 				end
@@ -600,8 +633,16 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 
 	table.insert(multipoint.debugState.searchPath, bestVerticalPoint)
 
-	local finalPoint =
-		binarySearchHorizontal(canShootAtPoint, referenceShootPos, bestVerticalPoint, faceCenter, hullSize)
+	local horizontalTarget
+	if intersectAxis == "x" then
+		horizontalTarget =
+			Vector3(intersectPlaneValue, clampNumber(comPos.y, worldMins.y, worldMaxs.y), bestVerticalPoint.z)
+	else
+		horizontalTarget =
+			Vector3(clampNumber(comPos.x, worldMins.x, worldMaxs.x), intersectPlaneValue, bestVerticalPoint.z)
+	end
+
+	local finalPoint = binarySearchTowardTarget(canShootAtPoint, bestVerticalPoint, horizontalTarget, hullSize)
 
 	table.insert(multipoint.debugState.searchPath, finalPoint)
 	multipoint.debugState.bestPoint = finalPoint
