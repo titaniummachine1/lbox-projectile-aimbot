@@ -40,7 +40,7 @@ local function drawMenu()
 	local ui = G.Menu.UI
 
 	-- Tab Control
-	local tabs = {"Aimbot", "Visuals"}
+	local tabs = { "Aimbot", "Visuals" }
 	ui.SelectedTab = TimMenu.TabControl("MainTabs", tabs, ui.SelectedTab)
 	TimMenu.NextLine()
 
@@ -109,6 +109,21 @@ local function drawMenu()
 
 		cfg.TrackedTargets = TimMenu.Slider("Tracked Enemies", cfg.TrackedTargets, 1, 8, 1)
 		TimMenu.Tooltip("How many nearest enemies to keep wishdir/strafe history for")
+		TimMenu.NextLine()
+
+		cfg.PreferFeet = TimMenu.Checkbox("Prefer Feet", cfg.PreferFeet)
+		TimMenu.Tooltip("Only applies when target is on ground")
+		TimMenu.NextLine()
+
+		if cfg.PreferFeet then
+			cfg.FeetHeight = TimMenu.Slider("Feet Height", cfg.FeetHeight or 5, 0, 30, 1)
+			TimMenu.NextLine()
+
+			local minFallback = math.max(cfg.FeetHeight or 5, 0)
+			cfg.FeetFallback = TimMenu.Slider("Feet Fallback", cfg.FeetFallback or 10, minFallback, 60, 1)
+			cfg.FeetFallback = math.max(cfg.FeetFallback, cfg.FeetHeight or 5)
+			TimMenu.NextLine()
+		end
 		TimMenu.EndSector()
 	end
 
@@ -117,7 +132,7 @@ local function drawMenu()
 		TimMenu.BeginSector("Display Options")
 		vis.Enabled = TimMenu.Checkbox("Enable Visuals", vis.Enabled)
 		TimMenu.NextLine()
-		
+
 		vis.ShowProfiler = TimMenu.Checkbox("Performance Profiler", vis.ShowProfiler)
 		TimMenu.Tooltip("Shows performance and memory usage overlay (helps find memory leaks)")
 		TimMenu.NextLine()

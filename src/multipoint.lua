@@ -523,6 +523,16 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local pLocal = entities.GetLocalPlayer()
 	assert(pLocal, "multipoint.Run: entities.GetLocalPlayer() returned nil")
 
+	local isTargetOnGround = false
+	do
+		local okFlags, targetFlags = pcall(function()
+			return pTarget:GetPropInt("m_fFlags")
+		end)
+		if okFlags and type(targetFlags) == "number" and type(FL_ONGROUND) == "number" then
+			isTargetOnGround = (targetFlags & FL_ONGROUND) ~= 0
+		end
+	end
+
 	-- Get target bounds
 	local mins = pTarget:GetMins()
 	local maxs = pTarget:GetMaxs()
@@ -613,8 +623,10 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local bl, br, tl, tr = closestFace[1], closestFace[2], closestFace[3], closestFace[4]
 
 	local intersectPoint, intersectAxis, intersectPlaneValue = nil, nil, nil
+	local hasVerticalRayHit = false
 	local hitPoint, hitAxis, hitPlane, hitNormal = rayAABBClosestFaceHit(vHeadPos, comPos, worldMins, worldMaxs, true)
 	if hitPoint then
+		hasVerticalRayHit = true
 		intersectPoint = hitPoint
 		intersectAxis = hitAxis
 		intersectPlaneValue = hitPlane
@@ -638,6 +650,7 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	-- Calculate target heights
 	local feetTargetZ = groundZ + feetHeight -- ~5 units above ground
 	local centerTargetZ = (groundZ + topZ) * 0.5 -- center of AABB
+	local defaultTargetZ = clampNumber(intersectPoint.z, groundZ, topZ)
 
 	local baseX = intersectPoint.x
 	local baseY = intersectPoint.y
@@ -712,34 +725,33 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	-- Phase 1: Vertical search - find best Z height
 	local bestVerticalPoint = nil
 	local hitFeet = false
+	local preferFeetActive = preferFeet and isTargetOnGround and hasVerticalRayHit
 
-	if preferFeet then
-		-- Try to hit feet first (~5 units above ground)
-		bestVerticalPoint, hitFeet = binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, feetTargetZ)
+	if preferFeetActive then
+		local feetPoint = nil
+		feetPoint, hitFeet = binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, feetTargetZ)
+		if hitFeet and feetPoint then
+			bestVerticalPoint = feetPoint
+		end
 
 		local feetFallbackTargetZ = groundZ + feetFallback
 		if (not hitFeet) and (feetFallbackTargetZ > feetTargetZ) then
 			local fallbackPoint, hitFallback =
 				binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, feetFallbackTargetZ)
-			if fallbackPoint and (not bestVerticalPoint or hitFallback) then
+			if hitFallback and fallbackPoint then
 				bestVerticalPoint = fallbackPoint
-				hitFeet = hitFallback
+				hitFeet = true
 			end
 		end
 
-		if bestVerticalPoint then
-			local distFromGround = bestVerticalPoint.z - groundZ
-			if distFromGround > feetFallback then
-				local centerPoint = nil
-				centerPoint, _ = binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, centerTargetZ)
-				if centerPoint then
-					bestVerticalPoint = centerPoint
-				end
+		if not hitFeet then
+			local normalPoint, _ = binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, defaultTargetZ)
+			if normalPoint then
+				bestVerticalPoint = normalPoint
 			end
 		end
 	else
-		-- Not preferring feet, aim at center
-		bestVerticalPoint, _ = binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, centerTargetZ)
+		bestVerticalPoint, _ = binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, defaultTargetZ)
 	end
 
 	-- Fallback: try any visible corner on the face
