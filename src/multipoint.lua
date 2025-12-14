@@ -515,8 +515,13 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	assert(type(gravity) == "number", "multipoint.Run: gravity must be number")
 
 	-- Get config settings
-	local cfg = G.Config and G.Config.Aimbot or {}
-	local preferFeet = cfg.PreferFeet ~= false -- default true
+	local cfg = {}
+	if G and G.Menu and G.Menu.Aimbot then
+		cfg = G.Menu.Aimbot
+	elseif G and G.Config and G.Config.Aimbot then
+		cfg = G.Config.Aimbot
+	end
+	local preferFeet = (cfg.PreferFeet == nil) or (cfg.PreferFeet == true)
 	local feetHeight = cfg.FeetHeight or 5
 	local feetFallback = cfg.FeetFallback or 10
 
@@ -652,6 +657,22 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local centerTargetZ = (groundZ + topZ) * 0.5 -- center of AABB
 	local defaultTargetZ = clampNumber(intersectPoint.z, groundZ, topZ)
 
+	local preferFeetActive = preferFeet and isTargetOnGround and hasVerticalRayHit
+	if preferFeetActive then
+		local feetPoint = Vector3(intersectPoint.x, intersectPoint.y, feetTargetZ)
+		if canShootAtPoint(feetPoint) then
+			multipoint.debugState.bestPoint = feetPoint
+			table.insert(multipoint.debugState.searchPath, feetPoint)
+			return true, feetPoint
+		end
+	end
+
+	if canShootAtPoint(intersectPoint) then
+		multipoint.debugState.bestPoint = intersectPoint
+		table.insert(multipoint.debugState.searchPath, intersectPoint)
+		return true, intersectPoint
+	end
+
 	local baseX = intersectPoint.x
 	local baseY = intersectPoint.y
 	local facePlane = intersectPlaneValue
@@ -725,7 +746,7 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	-- Phase 1: Vertical search - find best Z height
 	local bestVerticalPoint = nil
 	local hitFeet = false
-	local preferFeetActive = preferFeet and isTargetOnGround and hasVerticalRayHit
+	preferFeetActive = preferFeet and isTargetOnGround and hasVerticalRayHit
 
 	if preferFeetActive then
 		local feetPoint = nil
