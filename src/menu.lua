@@ -17,6 +17,9 @@ local Menu = {}
 
 -- Local constants / utilities -----
 local AIM_METHOD_OPTIONS = { "silent +", "silent", "normal" }
+local VISUAL_PRESET_OPTIONS = { "None", "Simulation", "Simulation + Box", "Multipoint", "All", "Custom" }
+local COLOR_OPTIONS = { "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White" }
+local COLOR_HUES = { 0, 60, 120, 180, 240, 300, 360 }
 
 -- Private helpers -----
 local function getAimMethodIndex(method)
@@ -26,6 +29,82 @@ local function getAimMethodIndex(method)
 		end
 	end
 	return 1
+end
+
+local function getHueIndex(hue)
+	if type(hue) ~= "number" then
+		return 7
+	end
+	local closestIndex = 7
+	local bestDist = math.huge
+	for i = 1, #COLOR_HUES do
+		local d = math.abs((COLOR_HUES[i] or 360) - hue)
+		if d < bestDist then
+			bestDist = d
+			closestIndex = i
+		end
+	end
+	return closestIndex
+end
+
+local function getHueValue(index)
+	local v = COLOR_HUES[index]
+	if type(v) ~= "number" then
+		return 360
+	end
+	return v
+end
+
+local function applyVisualPreset(presetIndex, vis)
+	if not vis then
+		return
+	end
+
+	local preset = presetIndex or 2
+	if preset == 1 then
+		vis.DrawPlayerPath = false
+		vis.DrawProjectilePath = false
+		vis.DrawBoundingBox = false
+		vis.DrawMultipointTarget = false
+		vis.DrawQuads = false
+		return
+	end
+
+	if preset == 2 then
+		vis.DrawPlayerPath = true
+		vis.DrawProjectilePath = true
+		vis.DrawBoundingBox = false
+		vis.DrawMultipointTarget = false
+		vis.DrawQuads = false
+		return
+	end
+
+	if preset == 3 then
+		vis.DrawPlayerPath = true
+		vis.DrawProjectilePath = true
+		vis.DrawBoundingBox = true
+		vis.DrawMultipointTarget = false
+		vis.DrawQuads = false
+		return
+	end
+
+	if preset == 4 then
+		vis.DrawPlayerPath = false
+		vis.DrawProjectilePath = false
+		vis.DrawBoundingBox = false
+		vis.DrawMultipointTarget = true
+		vis.DrawQuads = false
+		return
+	end
+
+	if preset == 5 then
+		vis.DrawPlayerPath = true
+		vis.DrawProjectilePath = true
+		vis.DrawBoundingBox = true
+		vis.DrawMultipointTarget = true
+		vis.DrawQuads = true
+		return
+	end
 end
 
 local function drawMenu()
@@ -85,7 +164,6 @@ local function drawMenu()
 		cfg.AimOtherBuildings = TimMenu.Checkbox("Aim Other Buildings", cfg.AimOtherBuildings)
 		TimMenu.Tooltip("Target dispensers and teleporters")
 		TimMenu.EndSector()
-		TimMenu.NextLine()
 
 		-- Prediction Settings
 		TimMenu.BeginSector("Prediction")
@@ -111,89 +189,83 @@ local function drawMenu()
 		TimMenu.Tooltip("How many nearest enemies to keep wishdir/strafe history for")
 		TimMenu.NextLine()
 
-		cfg.PreferFeet = TimMenu.Checkbox("Prefer Feet", cfg.PreferFeet)
-		TimMenu.Tooltip("Only applies when target is on ground")
+		cfg.VisibilityCheckTargets =
+			TimMenu.Slider("Visibility Check Targets", cfg.VisibilityCheckTargets or 4, 0, 8, 1)
+		TimMenu.Tooltip("How many best targets get an extra can-hit check (no binary search)")
 		TimMenu.NextLine()
 
-		if cfg.PreferFeet then
-			cfg.FeetHeight = TimMenu.Slider("Feet Height", cfg.FeetHeight or 5, 0, 30, 1)
-			TimMenu.NextLine()
-
-			local minFallback = math.max(cfg.FeetHeight or 5, 0)
-			cfg.FeetFallback = TimMenu.Slider("Feet Fallback", cfg.FeetFallback or 10, minFallback, 60, 1)
-			cfg.FeetFallback = math.max(cfg.FeetFallback, cfg.FeetHeight or 5)
-			TimMenu.NextLine()
-		end
+		cfg.PreferFeet = TimMenu.Checkbox("Prefer Feet", cfg.PreferFeet)
+		TimMenu.Tooltip("Only applies when target is on ground")
 		TimMenu.EndSector()
+		TimMenu.NextLine()
 	end
 
 	-- Visuals Tab
 	if ui.SelectedTab == 2 then
-		TimMenu.BeginSector("Display Options")
-		vis.Enabled = TimMenu.Checkbox("Enable Visuals", vis.Enabled)
+		TimMenu.BeginSector("Draw")
+		vis.Enabled = TimMenu.Checkbox("Enable", vis.Enabled)
 		TimMenu.NextLine()
 
-		vis.ShowProfiler = TimMenu.Checkbox("Performance Profiler", vis.ShowProfiler)
-		TimMenu.Tooltip("Shows performance and memory usage overlay (helps find memory leaks)")
+		vis.DrawPreset = vis.DrawPreset or 2
+		vis.DrawPreset = TimMenu.Dropdown("Preset", vis.DrawPreset, VISUAL_PRESET_OPTIONS)
 		TimMenu.NextLine()
 
-		vis.ShowConfidence = TimMenu.Checkbox("Show Confidence Score", vis.ShowConfidence)
-		TimMenu.Tooltip("Display hit chance percentage on screen")
+		vis.MultipointDebugDuration = TimMenu.Slider("Debug Duration", vis.MultipointDebugDuration or 1.0, 0, 5, 0.1)
 		TimMenu.NextLine()
 
-		vis.DrawPlayerPath = TimMenu.Checkbox("Draw Player Path", vis.DrawPlayerPath)
-		TimMenu.Tooltip("Show predicted enemy movement path")
+		vis.ShowConfidence = TimMenu.Checkbox("Confidence", vis.ShowConfidence)
 		TimMenu.NextLine()
 
-		vis.DrawProjectilePath = TimMenu.Checkbox("Draw Projectile Path", vis.DrawProjectilePath)
-		TimMenu.Tooltip("Show predicted projectile trajectory")
+		vis.ShowProfiler = TimMenu.Checkbox("Profiler", vis.ShowProfiler)
+		TimMenu.EndSector()
+
+		TimMenu.BeginSector("Options")
+		vis.ShowAdvanced = TimMenu.Checkbox("Advanced", vis.ShowAdvanced)
 		TimMenu.NextLine()
 
-		vis.DrawBoundingBox = TimMenu.Checkbox("Draw Bounding Box", vis.DrawBoundingBox)
-		TimMenu.Tooltip("Show enemy hitbox at predicted position")
-		TimMenu.NextLine()
+		if vis.DrawPreset == 6 then
+			vis.DrawPlayerPath = TimMenu.Checkbox("Player Path", vis.DrawPlayerPath)
+			TimMenu.NextLine()
+			vis.DrawProjectilePath = TimMenu.Checkbox("Projectile Path", vis.DrawProjectilePath)
+			TimMenu.NextLine()
+			vis.DrawBoundingBox = TimMenu.Checkbox("Bounding Box", vis.DrawBoundingBox)
+			TimMenu.NextLine()
+			vis.DrawMultipointTarget = TimMenu.Checkbox("Multipoint", vis.DrawMultipointTarget)
+			TimMenu.NextLine()
+			vis.DrawQuads = TimMenu.Checkbox("Quads", vis.DrawQuads)
+			TimMenu.NextLine()
+		else
+			applyVisualPreset(vis.DrawPreset, vis)
+		end
 
-		vis.DrawMultipointTarget = TimMenu.Checkbox("Draw Multipoint Target", vis.DrawMultipointTarget)
-		TimMenu.Tooltip("Show calculated aim point")
-		TimMenu.NextLine()
+		if vis.ShowAdvanced then
+			local idx
+			idx = TimMenu.Dropdown("Player Path Color", getHueIndex(vis.Colors.PlayerPath), COLOR_OPTIONS)
+			vis.Colors.PlayerPath = getHueValue(idx)
+			TimMenu.NextLine()
+			idx = TimMenu.Dropdown("Projectile Color", getHueIndex(vis.Colors.ProjectilePath), COLOR_OPTIONS)
+			vis.Colors.ProjectilePath = getHueValue(idx)
+			TimMenu.NextLine()
+			idx = TimMenu.Dropdown("Box Color", getHueIndex(vis.Colors.BoundingBox), COLOR_OPTIONS)
+			vis.Colors.BoundingBox = getHueValue(idx)
+			TimMenu.NextLine()
+			idx = TimMenu.Dropdown("Multipoint Color", getHueIndex(vis.Colors.MultipointTarget), COLOR_OPTIONS)
+			vis.Colors.MultipointTarget = getHueValue(idx)
+			TimMenu.NextLine()
+			idx = TimMenu.Dropdown("Quads Color", getHueIndex(vis.Colors.Quads), COLOR_OPTIONS)
+			vis.Colors.Quads = getHueValue(idx)
+			TimMenu.NextLine()
 
-		vis.DrawQuads = TimMenu.Checkbox("Draw Quads", vis.DrawQuads)
-		TimMenu.Tooltip("Show 3D filled boxes (experimental)")
+			vis.Thickness.PlayerPath = TimMenu.Slider("Thick: Player", vis.Thickness.PlayerPath, 0.5, 5, 0.5)
+			TimMenu.NextLine()
+			vis.Thickness.ProjectilePath = TimMenu.Slider("Thick: Proj", vis.Thickness.ProjectilePath, 0.5, 5, 0.5)
+			TimMenu.NextLine()
+			vis.Thickness.BoundingBox = TimMenu.Slider("Thick: Box", vis.Thickness.BoundingBox, 0.5, 5, 0.5)
+			TimMenu.NextLine()
+			vis.Thickness.MultipointTarget = TimMenu.Slider("Thick: MP", vis.Thickness.MultipointTarget, 1, 10, 0.5)
+		end
 		TimMenu.EndSector()
 		TimMenu.NextLine()
-
-		-- Color settings
-		TimMenu.BeginSector("Colors (HSV)")
-		vis.Colors.PlayerPath = TimMenu.Slider("Player Path Hue", vis.Colors.PlayerPath, 0, 360, 1)
-		TimMenu.Tooltip("0=Red, 60=Yellow, 120=Green, 180=Cyan, 240=Blue, 300=Magenta, 360=White")
-		TimMenu.NextLine()
-
-		vis.Colors.ProjectilePath = TimMenu.Slider("Projectile Path Hue", vis.Colors.ProjectilePath, 0, 360, 1)
-		TimMenu.NextLine()
-
-		vis.Colors.BoundingBox = TimMenu.Slider("Bounding Box Hue", vis.Colors.BoundingBox, 0, 360, 1)
-		TimMenu.NextLine()
-
-		vis.Colors.MultipointTarget = TimMenu.Slider("Multipoint Target Hue", vis.Colors.MultipointTarget, 0, 360, 1)
-		TimMenu.NextLine()
-
-		vis.Colors.Quads = TimMenu.Slider("Quads Hue", vis.Colors.Quads, 0, 360, 1)
-		TimMenu.EndSector()
-		TimMenu.NextLine()
-
-		-- Thickness settings
-		TimMenu.BeginSector("Thickness")
-		vis.Thickness.PlayerPath = TimMenu.Slider("Player Path", vis.Thickness.PlayerPath, 0.5, 5, 0.5)
-		TimMenu.NextLine()
-
-		vis.Thickness.ProjectilePath = TimMenu.Slider("Projectile Path", vis.Thickness.ProjectilePath, 0.5, 5, 0.5)
-		TimMenu.NextLine()
-
-		vis.Thickness.BoundingBox = TimMenu.Slider("Bounding Box", vis.Thickness.BoundingBox, 0.5, 5, 0.5)
-		TimMenu.NextLine()
-
-		vis.Thickness.MultipointTarget = TimMenu.Slider("Multipoint Target", vis.Thickness.MultipointTarget, 1, 10, 0.5)
-		TimMenu.EndSector()
 	end
 
 	-- Always end the menu

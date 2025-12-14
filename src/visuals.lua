@@ -241,8 +241,8 @@ local function drawMultipointTarget(texture, pos, thickness)
 	end
 end
 
-local function drawMultipointDebug(texture, thickness)
-	local dbg = multipoint.debugState
+local function drawMultipointDebug(texture, thickness, dbgOverride)
+	local dbg = dbgOverride or multipoint.debugState
 	if not dbg or not dbg.corners then
 		return
 	end
@@ -602,13 +602,26 @@ function Visuals.draw(state)
 		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath)
 	end
 
+	local debugDuration = vis.MultipointDebugDuration or 0
+	local dbgToDraw = nil
+	if debugDuration > 0 and multipoint and multipoint.debugPersist and multipoint.debugPersist.state then
+		local now = (globals and globals.RealTime and globals.RealTime()) or 0
+		local age = now - (multipoint.debugPersist.time or 0)
+		if age >= 0 and age <= debugDuration then
+			dbgToDraw = multipoint.debugPersist.state
+		end
+	end
+
 	-- Draw multipoint target
-	if vis.DrawMultipointTarget and multipointPos then
+	if vis.DrawMultipointTarget then
 		local r, g, b, a = getColorFromHue(vis.Colors.MultipointTarget)
 		draw.Color(r, g, b, a)
-		drawMultipointTarget(texture, multipointPos, vis.Thickness.MultipointTarget)
-		-- Also draw multipoint debug visualization
-		drawMultipointDebug(texture, vis.Thickness.MultipointTarget * 0.5)
+		if multipointPos then
+			drawMultipointTarget(texture, multipointPos, vis.Thickness.MultipointTarget)
+		end
+		if dbgToDraw then
+			drawMultipointDebug(texture, vis.Thickness.MultipointTarget * 0.5, dbgToDraw)
+		end
 	end
 
 	-- Draw quads

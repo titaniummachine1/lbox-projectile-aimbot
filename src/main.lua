@@ -354,14 +354,16 @@ local function onDraw()
 
 	TickProfiler.BeginSection("Draw:Visuals")
 	-- Draw advanced visualizations from persistent player data
+	local visualState = nil
 	if bestData then
-		Visuals.draw({
+		visualState = {
 			path = bestData.path,
 			projpath = bestData.projpath,
 			multipointPos = bestData.multipointPos,
 			target = bestData.entity,
-		})
+		}
 	end
+	Visuals.draw(visualState)
 	TickProfiler.EndSection("Draw:Visuals")
 
 	TickProfiler.BeginSection("Draw:Confidence")
@@ -508,6 +510,7 @@ local function onCreateMove(cmd)
 	local RAD2DEG = 180 / math.pi
 	for _, entity in ipairs(entitylist) do
 		local entityCenter = entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5
+		local distance = (entityCenter - localPos):Length()
 		local dirToEntity = (entityCenter - aimEyePos)
 		Normalize(dirToEntity)
 		local forward = viewangle:Forward()
@@ -517,6 +520,9 @@ local function onCreateMove(cmd)
 			table.insert(sortedEntities, {
 				entity = entity,
 				fov = angle,
+				dist = distance,
+				visChecked = false,
+				canHitNow = false,
 			})
 		end
 	end
@@ -533,16 +539,60 @@ local function onCreateMove(cmd)
 		return
 	end
 
+	TickProfiler.BeginSection("CM:VisWeight")
+	local maxVisCheck = cfg.VisibilityCheckTargets or 0
+	maxVisCheck = math.max(0, math.min(maxVisCheck, #sortedEntities))
+	for i = 1, maxVisCheck do
+		local entData = sortedEntities[i]
+		local ent = entData and entData.entity
+		if ent then
+			entData.visChecked = true
+			if ent.IsPlayer and ent:IsPlayer() then
+				entData.canHitNow = multipoint.CanShootAnyCornerNow(ent, weapon, info, aimEyePos, speed, gravity)
+			else
+				entData.canHitNow = false
+			end
+		end
+	end
+
+	table.sort(sortedEntities, function(a, b)
+		local function groupScore(d)
+			if d.visChecked then
+				return d.canHitNow and 0 or 2
+			end
+			return 1
+		end
+
+		local ga = groupScore(a)
+		local gb = groupScore(b)
+		if ga ~= gb then
+			return ga < gb
+		end
+		return a.fov < b.fov
+	end)
+	TickProfiler.EndSection("CM:VisWeight")
+
 	TickProfiler.BeginSection("CM:StrafeRecord")
 	-- Fedoraware Optional: Record velocity history for strafe prediction
-	-- Update velocity history for all potential targets
+	-- Update velocity history only for the nearest N tracked players
+	local maxTracked = math.max(1, cfg.TrackedTargets or 4)
+	local historyCandidates = {}
 	for _, entData in ipairs(sortedEntities) do
 		local entity = entData.entity
-		if entity:IsPlayer() then
-			local velocity = entity:EstimateAbsVelocity()
-			if velocity then
-				StrafePredictor.recordVelocity(entity:GetIndex(), velocity, 10)
-			end
+		if entity and entity.IsPlayer and entity:IsPlayer() then
+			historyCandidates[#historyCandidates + 1] = entData
+		end
+	end
+	if #historyCandidates > 1 then
+		table.sort(historyCandidates, function(a, b)
+			return (a.dist or 0) < (b.dist or 0)
+		end)
+	end
+	for i = 1, math.min(maxTracked, #historyCandidates) do
+		local entity = historyCandidates[i].entity
+		local velocity = entity:EstimateAbsVelocity()
+		if velocity then
+			StrafePredictor.recordVelocity(entity:GetIndex(), velocity, 10)
 		end
 	end
 	TickProfiler.EndSection("CM:StrafeRecord")

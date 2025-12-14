@@ -22,11 +22,11 @@ local function serializeTable(tbl, level)
 	level = level or 0
 	local indent = string.rep("    ", level)
 	local out = indent .. "{\n"
-	
+
 	for k, v in pairs(tbl) do
 		local keyRepr = (type(k) == "string") and string.format('["%s"]', k) or string.format("[%s]", k)
 		out = out .. indent .. "    " .. keyRepr .. " = "
-		
+
 		if type(v) == "table" then
 			out = out .. serializeTable(v, level + 1) .. ",\n"
 		elseif type(v) == "string" then
@@ -35,7 +35,7 @@ local function serializeTable(tbl, level)
 			out = out .. tostring(v) .. ",\n"
 		end
 	end
-	
+
 	out = out .. indent .. "}"
 	return out
 end
@@ -45,29 +45,35 @@ local function deepCopy(orig)
 	if type(orig) ~= "table" then
 		return orig
 	end
-	
+
 	local copy = {}
 	for k, v in pairs(orig) do
 		copy[k] = deepCopy(v)
 	end
-	
+
 	return copy
 end
 
 -- Recursive key presence check -----
-local function keysMatch(template, loaded)
+local function configTypesCompatible(template, loaded)
 	for k, v in pairs(template) do
-		if loaded[k] == nil then
-			return false
-		end
-		
-		if type(v) == "table" and type(loaded[k]) == "table" then
-			if not keysMatch(v, loaded[k]) then
-				return false
+		local loadedValue = loaded[k]
+		if loadedValue ~= nil then
+			if type(v) == "table" then
+				if type(loadedValue) ~= "table" then
+					return false
+				end
+				if not configTypesCompatible(v, loadedValue) then
+					return false
+				end
+			else
+				if type(loadedValue) ~= type(v) then
+					return false
+				end
 			end
 		end
 	end
-	
+
 	return true
 end
 
@@ -136,9 +142,9 @@ function Config.loadCFG()
 
 	local ok, cfg = pcall(chunk)
 
-	-- Validate: Must be table, keys must match, SHIFT bypass for reset
+	-- Validate: Must be table, type compatibility must match, SHIFT bypass for reset
 	local shiftHeld = input.IsButtonDown(KEY_LSHIFT)
-	if not ok or type(cfg) ~= "table" or not keysMatch(DefaultConfig, cfg) or shiftHeld then
+	if not ok or type(cfg) ~= "table" or not configTypesCompatible(DefaultConfig, cfg) or shiftHeld then
 		if shiftHeld then
 			printc(255, 200, 100, 255, "[Config] SHIFT held – regenerating config...")
 		else
@@ -195,4 +201,3 @@ callbacks.Register("Unload", "ConfigAutoSaveOnUnload", configAutoSaveOnUnload)
 Config.loadCFG()
 
 return Config
-

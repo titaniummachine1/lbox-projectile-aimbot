@@ -20,20 +20,22 @@ local DefaultConfig = {
 		AimSentry = true,
 		AimOtherBuildings = false,
 		TrackedTargets = 4, -- how many enemies to keep movement history for
+		VisibilityCheckTargets = 4,
 		PreferFeet = true, -- prioritize shooting ~5 units above ground to launch enemies
-		FeetHeight = 5, -- units above ground to aim when PreferFeet is enabled
-		FeetFallback = 10, -- if can't hit within this height, aim at center instead
 	},
 
 	-- Visual settings
 	Visuals = {
 		Enabled = true,
+		DrawPreset = 2,
+		ShowAdvanced = false,
 		ShowConfidence = true,
 		ShowProfiler = false, -- Performance profiler overlay
 		DrawPlayerPath = true,
 		DrawProjectilePath = true,
 		DrawBoundingBox = true,
 		DrawMultipointTarget = true,
+		MultipointDebugDuration = 1.0,
 		DrawQuads = false,
 
 		-- Colors (HSV hue 0-360, or 360+ for white)

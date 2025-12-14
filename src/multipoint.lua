@@ -9,6 +9,8 @@ utils.math = require("utils.math")
 -- Constants
 local BINARY_SEARCH_ITERATIONS = 5
 local VISIBILITY_THRESHOLD = 0.99
+local PREFER_FEET_HEIGHT = 5
+local PREFER_FEET_FALLBACK = 10
 
 -- Debug state for visuals (exported for drawing)
 multipoint.debugState = {
@@ -23,6 +25,11 @@ multipoint.debugState = {
 	intersectNormal = nil,
 }
 
+multipoint.debugPersist = {
+	time = 0,
+	state = nil,
+}
+
 ---Normalize vector (handles zero-length)
 ---@param v Vector3
 ---@return Vector3
@@ -32,6 +39,64 @@ end
 
 local function clampNumber(value, minValue, maxValue)
 	return math.max(minValue, math.min(value, maxValue))
+end
+
+local function copyVec3(v)
+	if not v then
+		return nil
+	end
+	return Vector3(v.x, v.y, v.z)
+end
+
+local function copyDebugState(dbg)
+	if not dbg then
+		return nil
+	end
+
+	local out = {
+		corners = nil,
+		visibleCorners = nil,
+		searchPath = nil,
+		bestPoint = copyVec3(dbg.bestPoint),
+		aabbCenter = copyVec3(dbg.aabbCenter),
+		closestFace = nil,
+		faceCenter = copyVec3(dbg.faceCenter),
+		intersectPoint = copyVec3(dbg.intersectPoint),
+		intersectNormal = copyVec3(dbg.intersectNormal),
+	}
+
+	if dbg.corners then
+		out.corners = {}
+		for i = 1, 8 do
+			out.corners[i] = copyVec3(dbg.corners[i])
+		end
+	end
+
+	if dbg.visibleCorners then
+		out.visibleCorners = {}
+		for i = 1, 8 do
+			out.visibleCorners[i] = dbg.visibleCorners[i] == true
+		end
+	end
+
+	if dbg.searchPath then
+		out.searchPath = {}
+		for i = 1, #dbg.searchPath do
+			out.searchPath[i] = copyVec3(dbg.searchPath[i])
+		end
+	end
+
+	if dbg.closestFace then
+		out.closestFace = { dbg.closestFace[1], dbg.closestFace[2], dbg.closestFace[3], dbg.closestFace[4] }
+	end
+
+	return out
+end
+
+local function persistDebugState(dbg)
+	local now = (globals and globals.RealTime and globals.RealTime()) or 0
+	multipoint.debugPersist.time = now
+	multipoint.debugPersist.state = copyDebugState(dbg)
 end
 
 local function rayAABBClosestFaceHit(rayOrigin, rayTarget, worldMins, worldMaxs, verticalFacesOnly)
@@ -522,8 +587,6 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 		cfg = G.Config.Aimbot
 	end
 	local preferFeet = (cfg.PreferFeet == nil) or (cfg.PreferFeet == true)
-	local feetHeight = cfg.FeetHeight or 5
-	local feetFallback = cfg.FeetFallback or 10
 
 	local pLocal = entities.GetLocalPlayer()
 	assert(pLocal, "multipoint.Run: entities.GetLocalPlayer() returned nil")
@@ -623,6 +686,14 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 		end
 	end
 
+	local anyCornerShootable = false
+	for i = 1, 8 do
+		if visibleCorners[i] then
+			anyCornerShootable = true
+			break
+		end
+	end
+
 	-- Find closest face to shooter
 	local closestFace, faceCenter = findClosestFace(corners, referenceShootPos)
 	local bl, br, tl, tr = closestFace[1], closestFace[2], closestFace[3], closestFace[4]
@@ -653,24 +724,34 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	multipoint.debugState.searchPath = {}
 
 	-- Calculate target heights
-	local feetTargetZ = groundZ + feetHeight -- ~5 units above ground
+	local feetTargetZ = groundZ + PREFER_FEET_HEIGHT -- ~5 units above ground
 	local centerTargetZ = (groundZ + topZ) * 0.5 -- center of AABB
 	local defaultTargetZ = clampNumber(intersectPoint.z, groundZ, topZ)
 
 	local preferFeetActive = preferFeet and isTargetOnGround and hasVerticalRayHit
+	local feetPointShootable = false
 	if preferFeetActive then
 		local feetPoint = Vector3(intersectPoint.x, intersectPoint.y, feetTargetZ)
-		if canShootAtPoint(feetPoint) then
+		feetPointShootable = canShootAtPoint(feetPoint)
+		if feetPointShootable then
 			multipoint.debugState.bestPoint = feetPoint
 			table.insert(multipoint.debugState.searchPath, feetPoint)
+			persistDebugState(multipoint.debugState)
 			return true, feetPoint
 		end
 	end
 
-	if canShootAtPoint(intersectPoint) then
+	local intersectPointShootable = canShootAtPoint(intersectPoint)
+	if intersectPointShootable then
 		multipoint.debugState.bestPoint = intersectPoint
 		table.insert(multipoint.debugState.searchPath, intersectPoint)
+		persistDebugState(multipoint.debugState)
 		return true, intersectPoint
+	end
+
+	if (not anyCornerShootable) and not feetPointShootable and not intersectPointShootable then
+		multipoint.debugState.bestPoint = nil
+		return false, nil
 	end
 
 	local baseX = intersectPoint.x
@@ -755,7 +836,7 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 			bestVerticalPoint = feetPoint
 		end
 
-		local feetFallbackTargetZ = groundZ + feetFallback
+		local feetFallbackTargetZ = groundZ + PREFER_FEET_FALLBACK
 		if (not hitFeet) and (feetFallbackTargetZ > feetTargetZ) then
 			local fallbackPoint, hitFallback =
 				binarySearchVertical(canShootAtPoint, topCenter, bottomCenter, feetFallbackTargetZ)
@@ -806,8 +887,54 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 
 	table.insert(multipoint.debugState.searchPath, finalPoint)
 	multipoint.debugState.bestPoint = finalPoint
+	persistDebugState(multipoint.debugState)
 
 	return true, finalPoint
+end
+
+function multipoint.CanShootAnyCornerNow(pTarget, pWeapon, weaponInfo, vHeadPos, speed, gravity)
+	assert(pTarget, "multipoint.CanShootAnyCornerNow: missing pTarget")
+	assert(pWeapon, "multipoint.CanShootAnyCornerNow: missing pWeapon")
+	assert(weaponInfo, "multipoint.CanShootAnyCornerNow: missing weaponInfo")
+	assert(vHeadPos, "multipoint.CanShootAnyCornerNow: missing vHeadPos")
+	assert(type(speed) == "number", "multipoint.CanShootAnyCornerNow: speed must be number")
+	assert(type(gravity) == "number", "multipoint.CanShootAnyCornerNow: gravity must be number")
+
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal then
+		return false
+	end
+
+	local mins = pTarget:GetMins()
+	local maxs = pTarget:GetMaxs()
+	if not (mins and maxs) then
+		return false
+	end
+
+	local targetPos = pTarget.GetAbsOrigin and pTarget:GetAbsOrigin() or nil
+	if not targetPos then
+		return false
+	end
+
+	local corners = getAABBCorners(targetPos, mins, maxs)
+	if not corners then
+		return false
+	end
+
+	local hullMins = weaponInfo.m_vecMins or Vector3(0, 0, 0)
+	local hullMaxs = weaponInfo.m_vecMaxs or Vector3(0, 0, 0)
+	local traceMask = weaponInfo.m_iTraceMask or MASK_SHOT
+
+	local canShootAtPoint =
+		createCanShootAt(pLocal, pTarget, pWeapon, weaponInfo, vHeadPos, speed, gravity, hullMins, hullMaxs, traceMask)
+
+	for i = 1, 8 do
+		if canShootAtPoint(corners[i]) then
+			return true
+		end
+	end
+
+	return false
 end
 
 return multipoint
