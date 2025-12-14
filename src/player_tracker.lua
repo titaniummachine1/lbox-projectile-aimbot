@@ -21,7 +21,7 @@ local function createPlayerData()
 		projtimetable = nil,
 		multipointPos = nil,
 		confidence = nil,
-		
+
 		-- Metadata
 		lastUpdateTick = 0,
 		entity = nil,
@@ -32,7 +32,7 @@ local function isDataValid(data, currentTick)
 	if not data or not data.lastUpdateTick then
 		return false
 	end
-	
+
 	-- Data is valid if updated within expiry window
 	return (currentTick - data.lastUpdateTick) <= DATA_EXPIRY_TICKS
 end
@@ -44,12 +44,12 @@ end
 ---@return table playerData
 function PlayerTracker.GetOrCreate(entity)
 	assert(entity, "PlayerTracker: entity is nil")
-	
+
 	local index = entity:GetIndex()
 	if not playerData[index] then
 		playerData[index] = createPlayerData()
 	end
-	
+
 	playerData[index].entity = entity
 	return playerData[index]
 end
@@ -61,19 +61,19 @@ function PlayerTracker.Get(entity)
 	if not entity then
 		return nil
 	end
-	
+
 	local index = entity:GetIndex()
 	local data = playerData[index]
-	
+
 	if not data then
 		return nil
 	end
-	
+
 	local currentTick = globals.TickCount()
 	if not isDataValid(data, currentTick) then
 		return nil
 	end
-	
+
 	return data
 end
 
@@ -83,10 +83,10 @@ end
 function PlayerTracker.Update(entity, predictionData)
 	assert(entity, "PlayerTracker: entity is nil")
 	assert(predictionData, "PlayerTracker: predictionData is nil")
-	
+
 	local data = PlayerTracker.GetOrCreate(entity)
 	local currentTick = globals.TickCount()
-	
+
 	-- Update visual data
 	data.path = predictionData.path
 	data.projpath = predictionData.projpath
@@ -94,7 +94,7 @@ function PlayerTracker.Update(entity, predictionData)
 	data.projtimetable = predictionData.projtimetable
 	data.multipointPos = predictionData.multipointPos
 	data.confidence = predictionData.confidence
-	
+
 	-- Update metadata
 	data.lastUpdateTick = currentTick
 	data.entity = entity
@@ -108,13 +108,13 @@ function PlayerTracker.GetBestTarget(entities)
 	if not entities or #entities == 0 then
 		return nil, nil
 	end
-	
+
 	local currentTick = globals.TickCount()
 	local bestData = nil
 	local bestEntity = nil
 	local bestTick = -1
-	
-	for _, entity in ipairs(entities) do
+
+	for _, entity in pairs(entities) do
 		local data = PlayerTracker.Get(entity)
 		if data and data.lastUpdateTick > bestTick then
 			bestData = data
@@ -122,7 +122,7 @@ function PlayerTracker.GetBestTarget(entities)
 			bestTick = data.lastUpdateTick
 		end
 	end
-	
+
 	return bestData, bestEntity
 end
 
@@ -130,13 +130,13 @@ end
 ---Called automatically when player list changes
 function PlayerTracker.UpdatePlayerList()
 	local currentTick = globals.TickCount()
-	
+
 	-- Only update once per tick
 	if currentTick == lastUpdateTick then
 		return
 	end
 	lastUpdateTick = currentTick
-	
+
 	-- Build set of current player indices
 	local currentIndices = {}
 	for _, entity in pairs(entities.FindByClass("CTFPlayer")) do
@@ -144,14 +144,14 @@ function PlayerTracker.UpdatePlayerList()
 			currentIndices[entity:GetIndex()] = true
 		end
 	end
-	
+
 	-- Remove data for players who left
 	for index, _ in pairs(playerData) do
 		if not currentIndices[index] then
 			playerData[index] = nil
 		end
 	end
-	
+
 	-- Update active set
 	activePlayerIndices = currentIndices
 end
@@ -159,7 +159,7 @@ end
 ---Clear all expired data
 function PlayerTracker.CleanExpired()
 	local currentTick = globals.TickCount()
-	
+
 	for index, data in pairs(playerData) do
 		if not isDataValid(data, currentTick) then
 			playerData[index] = nil
@@ -179,16 +179,14 @@ end
 function PlayerTracker.GetAll()
 	local currentTick = globals.TickCount()
 	local valid = {}
-	
+
 	for index, data in pairs(playerData) do
 		if isDataValid(data, currentTick) then
 			valid[index] = data
 		end
 	end
-	
+
 	return valid
 end
 
 return PlayerTracker
-
-
