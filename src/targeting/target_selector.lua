@@ -20,8 +20,9 @@ function TargetSelector.selectTop(localPlayer, maxTargets, maxDistance)
 	local viewAngles = engine.GetViewAngles()
 	local enemies = {}
 
-	for _, ent in ipairs(entities.FindByClass("CTFPlayer")) do
-		if ent
+	for _, ent in pairs(entities.FindByClass("CTFPlayer")) do
+		if
+			ent
 			and ent:IsAlive()
 			and not ent:IsDormant()
 			and ent:GetTeamNumber() ~= localPlayer:GetTeamNumber()
@@ -55,4 +56,3 @@ function TargetSelector.selectTop(localPlayer, maxTargets, maxDistance)
 end
 
 return TargetSelector
-

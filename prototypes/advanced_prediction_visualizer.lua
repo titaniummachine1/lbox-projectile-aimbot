@@ -871,7 +871,7 @@ local function OnDraw()
 	assert(meIdx, "OnDraw: meIdx is nil")
 
 	-- Keep enemy tracking updated (for later extensions)
-	for _, player in ipairs(entities.FindByClass("CTFPlayer")) do
+	for _, player in pairs(entities.FindByClass("CTFPlayer")) do
 		if player and player ~= me and player:IsAlive() then
 			local idx = player:GetIndex()
 			if idx then

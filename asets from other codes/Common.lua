@@ -115,7 +115,7 @@ function Common.IsCheater(playerInfo)
 		local targetPlayer = nil
 
 		-- Find the player with the same index
-		for _, player in ipairs(G.players) do
+		for _, player in pairs(G.players) do
 			if player:GetIndex() == targetIndex then
 				targetPlayer = player
 				break

@@ -142,7 +142,7 @@ end
 function StrafePredictor.updateAll(entities, maxSamples)
 	StrafePredictor.cleanupStalePlayers()
 
-	for _, entity in ipairs(entities) do
+	for _, entity in pairs(entities) do
 		if entity:IsAlive() and not entity:IsDormant() then
 			local velocity = entity:EstimateAbsVelocity()
 			if velocity and velocity:Length2D() > 1 then
@@ -156,4 +156,3 @@ function StrafePredictor.updateAll(entities, maxSamples)
 end
 
 return StrafePredictor
-
