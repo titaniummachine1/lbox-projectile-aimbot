@@ -17,18 +17,26 @@ function Ballistics.solveBallisticArc(p0, p1, speed, gravity)
 	local dy = diff.z
 	local speed2 = speed * speed
 	local g = gravity
-	
+	if dx < 1e-8 then
+		return nil
+	end
+	if math.abs(g) < 1e-8 then
+		local yaw = (math.atan(diff.y, diff.x)) * GameConstants.RAD2DEG
+		local pitch = -math.atan(dy, dx) * GameConstants.RAD2DEG
+		return EulerAngles(pitch, yaw, 0)
+	end
+
 	local root = speed2 * speed2 - g * (g * dx * dx + 2 * dy * speed2)
 	if root < 0 then
 		return nil
 	end
-	
+
 	local sqrt_root = math.sqrt(root)
 	local angle = math.atan((speed2 - sqrt_root) / (g * dx))
-	
+
 	local yaw = (math.atan(diff.y, diff.x)) * GameConstants.RAD2DEG
 	local pitch = -angle * GameConstants.RAD2DEG
-	
+
 	return EulerAngles(pitch, yaw, 0)
 end
 
@@ -44,25 +52,30 @@ function Ballistics.solveBallisticArcBoth(p0, p1, speed, gravity)
 	if dx == 0 then
 		return nil, nil
 	end
-	
+
 	local dy = diff.z
 	local g = gravity
 	local speed2 = speed * speed
-	
+	if math.abs(g) < 1e-8 then
+		local yaw = math.atan(diff.y, diff.x) * GameConstants.RAD2DEG
+		local pitch = -math.atan(dy, dx) * GameConstants.RAD2DEG
+		return EulerAngles(pitch, yaw, 0), nil
+	end
+
 	local root = speed2 * speed2 - g * (g * dx * dx + 2 * dy * speed2)
 	if root < 0 then
 		return nil, nil
 	end
-	
+
 	local sqrt_root = math.sqrt(root)
 	local theta_low = math.atan((speed2 - sqrt_root) / (g * dx))
 	local theta_high = math.atan((speed2 + sqrt_root) / (g * dx))
-	
+
 	local yaw = math.atan(diff.y, diff.x) * GameConstants.RAD2DEG
-	
+
 	local pitch_low = -theta_low * GameConstants.RAD2DEG
 	local pitch_high = -theta_high * GameConstants.RAD2DEG
-	
+
 	local low = EulerAngles(pitch_low, yaw, 0)
 	local high = EulerAngles(pitch_high, yaw, 0)
 	return low, high
@@ -85,20 +98,25 @@ function Ballistics.getBallisticFlightTime(p0, p1, speed, gravity)
 	local dy = diff.z
 	local speed2 = speed * speed
 	local g = gravity
-	
+	if dx < 1e-8 then
+		return nil
+	end
+	if math.abs(g) < 1e-8 then
+		return diff:Length() / speed
+	end
+
 	local discriminant = speed2 * speed2 - g * (g * dx * dx + 2 * dy * speed2)
 	if discriminant < 0 then
 		return nil
 	end
-	
+
 	local sqrt_discriminant = math.sqrt(discriminant)
 	local angle = math.atan((speed2 - sqrt_discriminant) / (g * dx))
-	
+
 	local vz = speed * math.sin(angle)
 	local flight_time = (vz + math.sqrt(vz * vz + 2 * g * dy)) / g
-	
+
 	return flight_time
 end
 
 return Ballistics
-

@@ -59,8 +59,21 @@ local function IsIntersectingBB(currentPos, vecTargetPredictedPos, weaponInfo, v
 	return true -- all axis overlap
 end
 
-local function TraceProjectileHull(vStart, vEnd, mins, maxs, info, target, localTeam, currentTime)
-	return engine.TraceHull(vStart, vEnd, mins, maxs, MASK_VISIBLE | MASK_SHOT_HULL, function(ent)
+local function isZeroHull(mins, maxs)
+	if not mins or not maxs then
+		return false
+	end
+	return math.abs(mins.x) < 1e-8
+		and math.abs(mins.y) < 1e-8
+		and math.abs(mins.z) < 1e-8
+		and math.abs(maxs.x) < 1e-8
+		and math.abs(maxs.y) < 1e-8
+		and math.abs(maxs.z) < 1e-8
+end
+
+local function TraceProjectile(vStart, vEnd, mins, maxs, info, target, localTeam, currentTime)
+	local traceMask = MASK_VISIBLE | MASK_SHOT_HULL
+	local filter = function(ent)
 		if ent:GetIndex() == target:GetIndex() then
 			return true
 		end
@@ -77,7 +90,13 @@ local function TraceProjectileHull(vStart, vEnd, mins, maxs, info, target, local
 		end
 
 		return true
-	end)
+	end
+
+	if isZeroHull(mins, maxs) then
+		return engine.TraceLine(vStart, vEnd, traceMask, filter)
+	end
+
+	return engine.TraceHull(vStart, vEnd, mins, maxs, traceMask, filter)
 end
 
 ---@param target Entity
@@ -120,7 +139,7 @@ local function SimulateProjectile(target, targetPredictedPos, startPos, angle, i
 		local vStart = projectile:GetPosition()
 		env:Simulate(tickInterval)
 		local vEnd = projectile:GetPosition()
-		local trace = TraceProjectileHull(vStart, vEnd, mins, maxs, info, target, localTeam, env:GetSimulationTime())
+		local trace = TraceProjectile(vStart, vEnd, mins, maxs, info, target, localTeam, env:GetSimulationTime())
 
 		if IsIntersectingBB(vEnd, targetPredictedPos, info, target:GetMaxs(), target:GetMins()) then
 			hit = true
@@ -193,7 +212,11 @@ local function SimulateFakeProjectile(
 
 	-- Get gravity from info
 	local _, sv_gravity = client.GetConVar("sv_gravity")
-	local gravity = sv_gravity * info:GetGravity(charge)
+	local gravityScale = 0
+	if info.HasGravity and info:HasGravity(charge) then
+		gravityScale = info:GetGravity(charge) or 0
+	end
+	local gravity = (sv_gravity or 0) * gravityScale
 	local currentPos = startPos
 	local currentVel = startVelocity
 	local gravity_to_add = Vector3(0, 0, -gravity * tickInterval)
@@ -203,7 +226,7 @@ local function SimulateFakeProjectile(
 		-- Apply gravity to velocity
 		currentVel = currentVel + gravity_to_add
 		local vEnd = currentPos + currentVel * tickInterval
-		local trace = TraceProjectileHull(vStart, vEnd, mins, maxs, info, target, localTeam, time)
+		local trace = TraceProjectile(vStart, vEnd, mins, maxs, info, target, localTeam, time)
 
 		-- Add current position to path before checking collision
 		path[#path + 1] = Vector3(vEnd:Unpack())

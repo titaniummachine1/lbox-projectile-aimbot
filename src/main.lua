@@ -502,7 +502,11 @@ local function onCreateMove(cmd)
 	local charge = info.m_bCharges and weapon:GetCurrentCharge() or 0.0
 	local speed = info:GetVelocity(charge):Length2D()
 	local _, sv_gravity = client.GetConVar("sv_gravity")
-	local gravity = sv_gravity * 0.5 * info:GetGravity(charge)
+	local gravityScale = 0
+	if info.HasGravity and info:HasGravity(charge) then
+		gravityScale = info:GetGravity(charge) or 0
+	end
+	local gravity = (sv_gravity or 0) * 0.5 * gravityScale
 	local weaponID = weapon:GetWeaponID()
 
 	local function insertTopK(top, item, k, better)
@@ -713,39 +717,70 @@ local function onCreateMove(cmd)
 	TickProfiler.EndSection("CM:StrafeRecord")
 
 	TickProfiler.BeginSection("CM:PredictionLoop")
-	do
+	repeat
 		local entity = bestEntry.entity
 		assert(entity, "Main: bestEntry.entity is nil")
 		local entityCenter = entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5
 		local distance = (entityCenter - localPos):Length()
-		-- Fedoraware Critical #1: Full latency compensation (outgoing + incoming + lerp)
-		local time = Latency.getAdjustedPredictionTime(distance, speed)
+		local outgoingLatency = netchannel:GetLatency(E_Flows.FLOW_OUTGOING) or 0
+		local lerp = Latency.getLerpTime()
+		local flightTime = utils.math.EstimateTravelTime(aimEyePos, entityCenter, speed)
+		if (not flightTime) or flightTime <= 0 then
+			flightTime = distance / speed
+		end
+		flightTime = math.max(0.0, math.min(5.0, flightTime))
+		local totalTime = outgoingLatency + lerp + flightTime
 		local lazyness = cfg.MinAccuracy
 			+ (cfg.MaxAccuracy - cfg.MinAccuracy) * (math.min(distance / cfg.MaxDistance, 1.0) ^ 1.5)
 
 		local path, lastPos, timetable
-		if entity.IsPlayer and entity:IsPlayer() then
-			TickProfiler.BeginSection("CM:SimPlayer")
-			local simCtx = PredictionContext.createContext()
-			assert(simCtx and simCtx.sv_gravity and simCtx.tickinterval, "Main: createContext failed")
+		local angle = nil
+		local maxSolveIterations = 2
+		for _ = 1, maxSolveIterations do
+			if entity.IsPlayer and entity:IsPlayer() then
+				TickProfiler.BeginSection("CM:SimPlayer")
+				local simCtx = PredictionContext.createContext()
+				assert(simCtx and simCtx.sv_gravity and simCtx.tickinterval, "Main: createContext failed")
 
-			local playerCtx = PredictionContext.createPlayerContext(entity, lazyness)
-			assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
+				local playerCtx = PredictionContext.createPlayerContext(entity, lazyness)
+				assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
 
-			path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, time)
-			TickProfiler.EndSection("CM:SimPlayer")
+				path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, totalTime)
+				TickProfiler.EndSection("CM:SimPlayer")
 
-			-- Zero Trust: Assert SimulatePlayer returns
-			assert(path, "Main: SimulatePlayer returned nil path")
-			assert(lastPos, "Main: SimulatePlayer returned nil lastPos")
-			assert(#path > 0, "Main: SimulatePlayer returned empty path")
-		else
-			path = { entityCenter }
-			lastPos = entityCenter
-			timetable = { 0 }
+				assert(path, "Main: SimulatePlayer returned nil path")
+				assert(lastPos, "Main: SimulatePlayer returned nil lastPos")
+				assert(#path > 0, "Main: SimulatePlayer returned empty path")
+			else
+				path = { entityCenter }
+				lastPos = entityCenter
+				timetable = { 0 }
+			end
+
+			TickProfiler.BeginSection("CM:Ballistics")
+			angle = utils.math.SolveBallisticArc(aimEyePos, lastPos, speed, gravity)
+			TickProfiler.EndSection("CM:Ballistics")
+			if not angle then
+				break
+			end
+
+			local solvedFlight = utils.math.GetBallisticFlightTime(aimEyePos, lastPos, speed, gravity)
+			if (not solvedFlight) or solvedFlight <= 0 then
+				solvedFlight = utils.math.EstimateTravelTime(aimEyePos, lastPos, speed)
+			end
+			if (not solvedFlight) or solvedFlight <= 0 then
+				break
+			end
+
+			flightTime = math.max(0.0, math.min(5.0, solvedFlight))
+			totalTime = outgoingLatency + lerp + flightTime
 		end
 
-		local drop = gravity * time * time
+		if not angle then
+			break
+		end
+
+		local drop = gravity * flightTime * flightTime
 
 		-- TODO: Deep integration - Apply strafe prediction to each simulation tick
 		-- Currently only recording history; deeper integration requires modifying PlayerTick.simulateTick
@@ -770,11 +805,20 @@ local function onCreateMove(cmd)
 		end
 
 		TickProfiler.BeginSection("CM:Ballistics")
-		local angle = utils.math.SolveBallisticArc(aimEyePos, lastPos, speed, gravity)
+		angle = utils.math.SolveBallisticArc(aimEyePos, lastPos, speed, gravity)
 		TickProfiler.EndSection("CM:Ballistics")
+		if not angle then
+			break
+		end
 
-		-- Zero Trust: Assert ballistics solution
-		-- angle can be nil if no solution exists, skip this target
+		local solvedFlight = utils.math.GetBallisticFlightTime(aimEyePos, lastPos, speed, gravity)
+		if (not solvedFlight) or solvedFlight <= 0 then
+			solvedFlight = utils.math.EstimateTravelTime(aimEyePos, lastPos, speed)
+		end
+		if solvedFlight and solvedFlight > 0 then
+			flightTime = math.max(0.0, math.min(5.0, solvedFlight))
+			totalTime = outgoingLatency + lerp + flightTime
+		end
 
 		if angle then
 			--- check visibility
@@ -828,8 +872,18 @@ local function onCreateMove(cmd)
 
 			if translatedAngle then
 				TickProfiler.BeginSection("CM:SimProj")
-				local projpath, hit, fullSim, projtimetable =
-					SimulateProj(entity, lastPos, firePos, translatedAngle, info, plocal:GetTeamNumber(), time, charge)
+				local tickInterval = globals.TickInterval() or 0.015
+				local projSimTime = flightTime + (tickInterval * 2)
+				local projpath, hit, fullSim, projtimetable = SimulateProj(
+					entity,
+					lastPos,
+					firePos,
+					translatedAngle,
+					info,
+					plocal:GetTeamNumber(),
+					projSimTime,
+					charge
+				)
 				TickProfiler.EndSection("CM:SimProj")
 
 				-- Zero Trust: Assert SimulateProj returns
@@ -840,7 +894,7 @@ local function onCreateMove(cmd)
 				if fullSim then
 					local distance = (entityCenter - localPos):Length()
 					local confidence =
-						CalculateHitchance(entity, projpath, hit, distance, speed, gravity, time, cfg.MaxDistance)
+						CalculateHitchance(entity, projpath, hit, distance, speed, gravity, totalTime, cfg.MaxDistance)
 					if confidence >= cfg.MinConfidence then
 						local secondaryFire = doSecondaryFiretbl[weaponID]
 						local noSilent = noSilentTbl[weaponID]
@@ -868,7 +922,7 @@ local function onCreateMove(cmd)
 				end
 			end
 		end
-	end
+	until true
 	TickProfiler.EndSection("CM:PredictionLoop")
 
 	-- If no angle calculated, nothing to do
