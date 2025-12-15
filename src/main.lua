@@ -503,8 +503,11 @@ local function onCreateMove(cmd)
 	end
 	local viewangle = engine.GetViewAngles()
 
-	local function autoFlipViewmodelsIfNeeded()
+	local function autoFlipViewmodelsIfNeeded(targetPos)
 		if not cfg.AutoFlipViewmodels then
+			return
+		end
+		if not targetPos then
 			return
 		end
 
@@ -512,6 +515,14 @@ local function onCreateMove(cmd)
 		if not weaponDefIndex then
 			return
 		end
+
+		local dirToTarget = targetPos - aimEyePos
+		local dirLen = dirToTarget:Length()
+		if (not dirLen) or dirLen < 0.001 then
+			return
+		end
+		local dirNorm = Vector3(dirToTarget.x, dirToTarget.y, dirToTarget.z)
+		Normalize(dirNorm)
 
 		local isDucking = false
 		do
@@ -523,17 +534,14 @@ local function onCreateMove(cmd)
 			end
 		end
 
-		local forward = viewangle:Forward()
-		local right = viewangle:Right()
-		local up = viewangle:Up()
-
 		local function computeMuzzlePos(isFlipped)
 			local offset = WeaponOffsets.getOffset(weaponDefIndex, isDucking, isFlipped)
 			if not offset then
-				return eyePos
+				return aimEyePos
 			end
-			local offsetPos = eyePos + (forward * offset.x) + (right * offset.y) + (up * offset.z)
-			local trace = engine.TraceHull(eyePos, offsetPos, -Vector3(8, 8, 8), Vector3(8, 8, 8), MASK_SHOT_HULL)
+			local rotatedOffset = utils.math.RotateOffsetAlongDirection(offset, dirToTarget)
+			local offsetPos = aimEyePos + rotatedOffset
+			local trace = engine.TraceHull(aimEyePos, offsetPos, -Vector3(8, 8, 8), Vector3(8, 8, 8), MASK_SHOT_HULL)
 			if not trace or trace.startsolid then
 				return nil
 			end
@@ -544,7 +552,7 @@ local function onCreateMove(cmd)
 			if not muzzlePos then
 				return 0
 			end
-			local endPos = muzzlePos + (forward * 200)
+			local endPos = muzzlePos + (dirNorm * 200)
 			local trace = engine.TraceLine(muzzlePos, endPos, MASK_SHOT_HULL)
 			if not trace or trace.startsolid or trace.allsolid then
 				return 0
@@ -569,8 +577,6 @@ local function onCreateMove(cmd)
 			lastAutoFlipViewmodels = desired
 		end
 	end
-
-	autoFlipViewmodelsIfNeeded()
 
 	local charge = info.m_bCharges and weapon:GetCurrentCharge() or 0.0
 	local speed = info:GetVelocity(charge):Length2D()
@@ -974,6 +980,7 @@ local function onCreateMove(cmd)
 		local path, lastPos, timetable
 		local angle = nil
 		local maxSolveIterations = 2
+		local flipDecided = false
 		for _ = 1, maxSolveIterations do
 			if entity.IsPlayer and entity:IsPlayer() then
 				TickProfiler.BeginSection("CM:SimPlayer")
@@ -993,6 +1000,10 @@ local function onCreateMove(cmd)
 				path = { entityCenter }
 				lastPos = entityCenter
 				timetable = { 0 }
+			end
+			if (not flipDecided) and lastPos then
+				autoFlipViewmodelsIfNeeded(lastPos)
+				flipDecided = true
 			end
 
 			TickProfiler.BeginSection("CM:Ballistics")
