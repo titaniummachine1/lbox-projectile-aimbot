@@ -27,8 +27,6 @@ local DefaultConfig = {
 	-- Visual settings
 	Visuals = {
 		Enabled = true,
-		DrawPreset = 2,
-		ShowAdvanced = false,
 		ShowConfidence = true,
 		ShowProfiler = false, -- Performance profiler overlay
 		DrawPlayerPath = true,
@@ -45,6 +43,14 @@ local DefaultConfig = {
 			BoundingBox = 120, -- Green
 			MultipointTarget = 0, -- Red
 			Quads = 240, -- Blue
+		},
+
+		ColorsRGBA = {
+			PlayerPath = { 0, 255, 255, 255 },
+			ProjectilePath = { 255, 255, 0, 255 },
+			BoundingBox = { 0, 255, 0, 255 },
+			MultipointTarget = { 255, 0, 0, 255 },
+			Quads = { 0, 0, 255, 25 },
 		},
 
 		-- Line/element thickness

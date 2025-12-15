@@ -505,8 +505,132 @@ local function onCreateMove(cmd)
 	local gravity = sv_gravity * 0.5 * info:GetGravity(charge)
 	local weaponID = weapon:GetWeaponID()
 
+	local function insertTopK(top, item, k, better)
+		local n = #top
+		if k <= 0 then
+			return
+		end
+		if n < k then
+			top[n + 1] = item
+			local i = n + 1
+			while i > 1 and better(top[i], top[i - 1]) do
+				top[i], top[i - 1] = top[i - 1], top[i]
+				i = i - 1
+			end
+			return
+		end
+		if not better(item, top[n]) then
+			return
+		end
+		top[n] = item
+		local i = n
+		while i > 1 and better(top[i], top[i - 1]) do
+			top[i], top[i - 1] = top[i - 1], top[i]
+			i = i - 1
+		end
+	end
+
+	local localIndex = plocal:GetIndex()
+	assert(localIndex, "Main: plocal:GetIndex() returned nil")
+
+	local function traceHitsTarget(target, endPos)
+		if not (target and endPos) then
+			return false
+		end
+		local targetIndex = target.GetIndex and target:GetIndex() or nil
+		if not targetIndex then
+			return false
+		end
+		local function shouldHitEntity(ent, contentsMask)
+			if not ent then
+				return false
+			end
+			local idx = ent.GetIndex and ent:GetIndex() or nil
+			if idx == localIndex then
+				return false
+			end
+			if idx == targetIndex then
+				return true
+			end
+			return false
+		end
+		local trace = engine.TraceLine(aimEyePos, endPos, MASK_SHOT, shouldHitEntity)
+		if not trace then
+			return false
+		end
+		if trace.fraction > 0.99 then
+			return true
+		end
+		local hitEnt = trace.entity
+		if hitEnt and hitEnt.GetIndex and hitEnt:GetIndex() == targetIndex then
+			return true
+		end
+		return false
+	end
+
+	local function getComPos(target)
+		local origin = target.GetAbsOrigin and target:GetAbsOrigin() or nil
+		if not origin then
+			return nil
+		end
+		local mins = target.GetMins and target:GetMins() or nil
+		local maxs = target.GetMaxs and target:GetMaxs() or nil
+		if not (mins and maxs) then
+			return nil
+		end
+		return origin + (mins + maxs) * 0.5
+	end
+
+	local function canSeeTargetCom(target)
+		local comPos = getComPos(target)
+		if not comPos then
+			return false
+		end
+		return traceHitsTarget(target, comPos)
+	end
+
+	local function canSeeAnyCorner(target)
+		local origin = target.GetAbsOrigin and target:GetAbsOrigin() or nil
+		if not origin then
+			return false
+		end
+		local mins = target.GetMins and target:GetMins() or nil
+		local maxs = target.GetMaxs and target:GetMaxs() or nil
+		if not (mins and maxs) then
+			return false
+		end
+		local worldMins = origin + mins
+		local worldMaxs = origin + maxs
+		local corners = {
+			Vector3(worldMins.x, worldMins.y, worldMins.z),
+			Vector3(worldMins.x, worldMaxs.y, worldMins.z),
+			Vector3(worldMaxs.x, worldMaxs.y, worldMins.z),
+			Vector3(worldMaxs.x, worldMins.y, worldMins.z),
+			Vector3(worldMins.x, worldMins.y, worldMaxs.z),
+			Vector3(worldMins.x, worldMaxs.y, worldMaxs.z),
+			Vector3(worldMaxs.x, worldMaxs.y, worldMaxs.z),
+			Vector3(worldMaxs.x, worldMins.y, worldMaxs.z),
+		}
+		for i = 1, 8 do
+			if traceHitsTarget(target, corners[i]) then
+				return true
+			end
+		end
+		return false
+	end
+
+	local function baseBetter(a, b)
+		if a.fov == b.fov then
+			return a.dist < b.dist
+		end
+		return a.fov < b.fov
+	end
+
 	TickProfiler.BeginSection("CM:FOVSort")
-	local sortedEntities = {}
+	local candidates = {}
+	local topCornerCandidates = {}
+	local maxCornerCheck = cfg.VisibilityCheckTargets or 0
+	maxCornerCheck = math.max(0, math.min(maxCornerCheck, 32))
 	local RAD2DEG = 180 / math.pi
 	for _, entity in ipairs(entitylist) do
 		local entityCenter = entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5
@@ -517,78 +641,69 @@ local function onCreateMove(cmd)
 		local angle = math.acos(forward:Dot(dirToEntity)) * RAD2DEG
 
 		if angle <= cfg.AimFOV then
-			table.insert(sortedEntities, {
+			local entry = {
 				entity = entity,
 				fov = angle,
 				dist = distance,
-				visChecked = false,
-				canHitNow = false,
-			})
+				visible = false,
+			}
+			if entity.IsPlayer and entity:IsPlayer() then
+				entry.visible = canSeeTargetCom(entity)
+			else
+				entry.visible = traceHitsTarget(entity, entityCenter)
+			end
+			candidates[#candidates + 1] = entry
+			insertTopK(topCornerCandidates, entry, maxCornerCheck, baseBetter)
 		end
 	end
-
-	--- sort by fov (lowest to highest)
-	table.sort(sortedEntities, function(a, b)
-		return a.fov < b.fov
-	end)
 	TickProfiler.EndSection("CM:FOVSort")
 
 	-- Guard clause: Check if we have targets in FOV
-	if #sortedEntities == 0 then
+	if #candidates == 0 then
 		TickProfiler.EndSection("CM:Total")
 		return
 	end
 
 	TickProfiler.BeginSection("CM:VisWeight")
-	local maxVisCheck = cfg.VisibilityCheckTargets or 0
-	maxVisCheck = math.max(0, math.min(maxVisCheck, #sortedEntities))
-	for i = 1, maxVisCheck do
-		local entData = sortedEntities[i]
-		local ent = entData and entData.entity
-		if ent then
-			entData.visChecked = true
-			if ent.IsPlayer and ent:IsPlayer() then
-				entData.canHitNow = multipoint.CanShootAnyCornerNow(ent, weapon, info, aimEyePos, speed, gravity)
-			else
-				entData.canHitNow = false
+	for i = 1, #topCornerCandidates do
+		local entry = topCornerCandidates[i]
+		local ent = entry and entry.entity
+		if ent and ent.IsPlayer and ent:IsPlayer() and not entry.visible then
+			entry.visible = canSeeAnyCorner(ent)
+		end
+	end
+	TickProfiler.EndSection("CM:VisWeight")
+
+	local bestEntry = nil
+	for i = 1, #candidates do
+		local entry = candidates[i]
+		if entry.visible then
+			if (not bestEntry) or baseBetter(entry, bestEntry) then
+				bestEntry = entry
 			end
 		end
 	end
 
-	table.sort(sortedEntities, function(a, b)
-		local function groupScore(d)
-			if d.visChecked then
-				return d.canHitNow and 0 or 2
-			end
-			return 1
-		end
-
-		local ga = groupScore(a)
-		local gb = groupScore(b)
-		if ga ~= gb then
-			return ga < gb
-		end
-		return a.fov < b.fov
-	end)
-	TickProfiler.EndSection("CM:VisWeight")
+	if not bestEntry then
+		TickProfiler.EndSection("CM:Total")
+		return
+	end
 
 	TickProfiler.BeginSection("CM:StrafeRecord")
 	-- Fedoraware Optional: Record velocity history for strafe prediction
 	-- Update velocity history only for the nearest N tracked players
 	local maxTracked = math.max(1, cfg.TrackedTargets or 4)
 	local historyCandidates = {}
-	for _, entData in ipairs(sortedEntities) do
-		local entity = entData.entity
+	for i = 1, #topCornerCandidates do
+		local entData = topCornerCandidates[i]
+		local entity = entData and entData.entity
 		if entity and entity.IsPlayer and entity:IsPlayer() then
-			historyCandidates[#historyCandidates + 1] = entData
+			insertTopK(historyCandidates, entData, maxTracked, function(a, b)
+				return (a.dist or 0) < (b.dist or 0)
+			end)
 		end
 	end
-	if #historyCandidates > 1 then
-		table.sort(historyCandidates, function(a, b)
-			return (a.dist or 0) < (b.dist or 0)
-		end)
-	end
-	for i = 1, math.min(maxTracked, #historyCandidates) do
+	for i = 1, #historyCandidates do
 		local entity = historyCandidates[i].entity
 		local velocity = entity:EstimateAbsVelocity()
 		if velocity then
@@ -598,8 +713,9 @@ local function onCreateMove(cmd)
 	TickProfiler.EndSection("CM:StrafeRecord")
 
 	TickProfiler.BeginSection("CM:PredictionLoop")
-	for _, entData in ipairs(sortedEntities) do
-		local entity = entData.entity
+	do
+		local entity = bestEntry.entity
+		assert(entity, "Main: bestEntry.entity is nil")
 		local entityCenter = entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5
 		local distance = (entityCenter - localPos):Length()
 		-- Fedoraware Critical #1: Full latency compensation (outgoing + incoming + lerp)
@@ -607,20 +723,27 @@ local function onCreateMove(cmd)
 		local lazyness = cfg.MinAccuracy
 			+ (cfg.MaxAccuracy - cfg.MinAccuracy) * (math.min(distance / cfg.MaxDistance, 1.0) ^ 1.5)
 
-		TickProfiler.BeginSection("CM:SimPlayer")
-		local simCtx = PredictionContext.createContext()
-		assert(simCtx and simCtx.sv_gravity and simCtx.tickinterval, "Main: createContext failed")
+		local path, lastPos, timetable
+		if entity.IsPlayer and entity:IsPlayer() then
+			TickProfiler.BeginSection("CM:SimPlayer")
+			local simCtx = PredictionContext.createContext()
+			assert(simCtx and simCtx.sv_gravity and simCtx.tickinterval, "Main: createContext failed")
 
-		local playerCtx = PredictionContext.createPlayerContext(entity, lazyness)
-		assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
+			local playerCtx = PredictionContext.createPlayerContext(entity, lazyness)
+			assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
 
-		local path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, time)
-		TickProfiler.EndSection("CM:SimPlayer")
+			path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, time)
+			TickProfiler.EndSection("CM:SimPlayer")
 
-		-- Zero Trust: Assert SimulatePlayer returns
-		assert(path, "Main: SimulatePlayer returned nil path")
-		assert(lastPos, "Main: SimulatePlayer returned nil lastPos")
-		assert(#path > 0, "Main: SimulatePlayer returned empty path")
+			-- Zero Trust: Assert SimulatePlayer returns
+			assert(path, "Main: SimulatePlayer returned nil path")
+			assert(lastPos, "Main: SimulatePlayer returned nil lastPos")
+			assert(#path > 0, "Main: SimulatePlayer returned empty path")
+		else
+			path = { entityCenter }
+			lastPos = entityCenter
+			timetable = { 0 }
+		end
 
 		local drop = gravity * time * time
 
@@ -628,10 +751,13 @@ local function onCreateMove(cmd)
 		-- Currently only recording history; deeper integration requires modifying PlayerTick.simulateTick
 		-- to accept and use StrafePredictor.predictStrafeDirection per tick
 
-		TickProfiler.BeginSection("CM:Multipoint")
-		local multipointHitbox, multipointPos =
-			multipoint.Run(entity, weapon, info, aimEyePos, lastPos, drop, speed, gravity)
-		TickProfiler.EndSection("CM:Multipoint")
+		local multipointHitbox, multipointPos = nil, nil
+		if entity.IsPlayer and entity:IsPlayer() then
+			TickProfiler.BeginSection("CM:Multipoint")
+			multipointHitbox, multipointPos =
+				multipoint.Run(entity, weapon, info, aimEyePos, lastPos, drop, speed, gravity)
+			TickProfiler.EndSection("CM:Multipoint")
+		end
 
 		-- Zero Trust: Assert multipoint returns (multipointPos can be nil, that's ok)
 		-- multipointHitbox can be nil if no multipoint selected, that's intentional
@@ -738,7 +864,6 @@ local function onCreateMove(cmd)
 						})
 
 						-- Found valid target, apply aim
-						break
 					end
 				end
 			end

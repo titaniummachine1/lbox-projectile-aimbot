@@ -538,6 +538,42 @@ local function getColorFromHue(hue)
 	end
 end
 
+local function getColor(vis, key, fallbackHue, fallbackAlpha)
+	if vis and vis.ColorsRGBA then
+		local rgba = vis.ColorsRGBA[key]
+		if type(rgba) == "table" then
+			local r = tonumber(rgba[1])
+			local g = tonumber(rgba[2])
+			local b = tonumber(rgba[3])
+			local a = tonumber(rgba[4])
+			if r and g and b then
+				if not a then
+					a = fallbackAlpha or 255
+				end
+				return r, g, b, a
+			end
+		end
+	end
+
+	if vis and vis.Colors and type(vis.Colors[key]) == "number" then
+		local r, g, b, a = getColorFromHue(vis.Colors[key])
+		if fallbackAlpha and type(fallbackAlpha) == "number" then
+			a = fallbackAlpha
+		end
+		return r, g, b, a
+	end
+
+	if type(fallbackHue) == "number" then
+		local r, g, b, a = getColorFromHue(fallbackHue)
+		if fallbackAlpha and type(fallbackAlpha) == "number" then
+			a = fallbackAlpha
+		end
+		return r, g, b, a
+	end
+
+	return 255, 255, 255, fallbackAlpha or 255
+end
+
 -- Public API ----
 function Visuals.draw(state)
 	assert(G.Menu, "Visuals: G.Menu is nil")
@@ -576,14 +612,14 @@ function Visuals.draw(state)
 
 	-- Draw player path
 	if vis.DrawPlayerPath and playerPath and #playerPath > 0 then
-		local r, g, b, a = getColorFromHue(vis.Colors.PlayerPath)
+		local r, g, b, a = getColor(vis, "PlayerPath", 180)
 		draw.Color(r, g, b, a)
 		drawPlayerPath(texture, playerPath, vis.Thickness.PlayerPath)
 	end
 
 	-- Draw bounding box
 	if vis.DrawBoundingBox and targetPos and targetEntity and eyePos then
-		local r, g, b, a = getColorFromHue(vis.Colors.BoundingBox)
+		local r, g, b, a = getColor(vis, "BoundingBox", 120)
 		draw.Color(r, g, b, a)
 		drawPlayerHitbox(
 			texture,
@@ -597,7 +633,7 @@ function Visuals.draw(state)
 
 	-- Draw projectile path
 	if vis.DrawProjectilePath and projPath and #projPath > 0 then
-		local r, g, b, a = getColorFromHue(vis.Colors.ProjectilePath)
+		local r, g, b, a = getColor(vis, "ProjectilePath", 60)
 		draw.Color(r, g, b, a)
 		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath)
 	end
@@ -614,7 +650,7 @@ function Visuals.draw(state)
 
 	-- Draw multipoint target
 	if vis.DrawMultipointTarget then
-		local r, g, b, a = getColorFromHue(vis.Colors.MultipointTarget)
+		local r, g, b, a = getColor(vis, "MultipointTarget", 0)
 		draw.Color(r, g, b, a)
 		if multipointPos then
 			drawMultipointTarget(texture, multipointPos, vis.Thickness.MultipointTarget)
@@ -626,18 +662,8 @@ function Visuals.draw(state)
 
 	-- Draw quads
 	if vis.DrawQuads and targetPos and targetEntity and eyePos then
-		local baseColor
-		if vis.Colors.Quads >= 360 then
-			baseColor = { r = 255, g = 255, b = 255, a = 25 }
-		else
-			local r, g, b = hsvToRgb(vis.Colors.Quads, 0.5, 1)
-			baseColor = {
-				r = (r * 255) // 1,
-				g = (g * 255) // 1,
-				b = (b * 255) // 1,
-				a = 25,
-			}
-		end
+		local r, g, b, a = getColor(vis, "Quads", 240, 25)
+		local baseColor = { r = r, g = g, b = b, a = a }
 
 		drawQuads(texture, targetPos, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, baseColor)
 	end
@@ -645,7 +671,7 @@ function Visuals.draw(state)
 	-- Draw impact/last projectile point for quick visibility when path is short
 	if vis.DrawProjectilePath and projPath and #projPath >= 1 then
 		local impactPos = projPath[#projPath]
-		local r, g, b, a = getColorFromHue(vis.Colors.ProjectilePath)
+		local r, g, b, a = getColor(vis, "ProjectilePath", 60)
 		draw.Color(r, g, b, a)
 		drawImpactDot(texture, impactPos, vis.Thickness.ProjectilePath * 2)
 	end
