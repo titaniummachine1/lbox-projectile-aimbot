@@ -111,11 +111,6 @@ local function drawMenu()
 		TimMenu.Tooltip("How many nearest enemies to keep wishdir/strafe history for")
 		TimMenu.NextLine()
 
-		cfg.VisibilityCheckTargets =
-			TimMenu.Slider("Visibility Check Targets", cfg.VisibilityCheckTargets or 4, 0, 8, 1)
-		TimMenu.Tooltip("How many best targets get an extra can-hit check (no binary search)")
-		TimMenu.NextLine()
-
 		cfg.PreferFeet = TimMenu.Checkbox("Prefer Feet", cfg.PreferFeet)
 		TimMenu.Tooltip("Only applies when target is on ground")
 		TimMenu.EndSector()

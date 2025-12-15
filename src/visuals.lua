@@ -253,17 +253,11 @@ local function drawMultipointDebug(texture, thickness, dbgOverride)
 	-- Draw all 8 corners with visibility status
 	for i = 1, 8 do
 		local corner = dbg.corners[i]
-		if corner then
+		local isVisible = dbg.visibleCorners and dbg.visibleCorners[i] == true
+		if corner and dbg.visibleCorners and not isVisible then
 			local screen = client.WorldToScreen(corner)
 			if screen then
-				local isVisible = dbg.visibleCorners and dbg.visibleCorners[i]
-				if isVisible then
-					-- Green for visible corners
-					draw.Color(100, 255, 100, 255)
-				else
-					-- Red for blocked corners
-					draw.Color(255, 100, 100, 180)
-				end
+				draw.Color(255, 100, 100, 180)
 				draw.FilledRect(
 					math.floor(screen[1] - cornerSize),
 					math.floor(screen[2] - cornerSize),
@@ -649,7 +643,7 @@ function Visuals.draw(state)
 	end
 
 	-- Draw multipoint target
-	if vis.DrawMultipointTarget then
+	if vis.DrawBoundingBox and vis.DrawMultipointTarget then
 		local r, g, b, a = getColor(vis, "MultipointTarget", 0)
 		draw.Color(r, g, b, a)
 		if multipointPos then

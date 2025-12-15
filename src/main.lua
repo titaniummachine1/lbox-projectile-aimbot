@@ -44,6 +44,8 @@ local state = {
 local previousKeyState = false
 local toggleActive = false
 
+local trackedTargetIndices = {}
+
 -- Input button flags
 local IN_ATTACK = 1
 local IN_ATTACK2 = 2048
@@ -537,6 +539,60 @@ local function onCreateMove(cmd)
 	local localIndex = plocal:GetIndex()
 	assert(localIndex, "Main: plocal:GetIndex() returned nil")
 
+	local function quickselectPartition(arr, left, right, pivotIndex, better)
+		local pivotValue = arr[pivotIndex]
+		arr[pivotIndex], arr[right] = arr[right], arr[pivotIndex]
+		local storeIndex = left
+		for i = left, right - 1 do
+			if better(arr[i], pivotValue) then
+				arr[storeIndex], arr[i] = arr[i], arr[storeIndex]
+				storeIndex = storeIndex + 1
+			end
+		end
+		arr[right], arr[storeIndex] = arr[storeIndex], arr[right]
+		return storeIndex
+	end
+
+	local function quickselect(arr, left, right, k, better)
+		while left < right do
+			local pivotIndex = math.floor((left + right) * 0.5)
+			pivotIndex = quickselectPartition(arr, left, right, pivotIndex, better)
+			if k == pivotIndex then
+				return
+			end
+			if k < pivotIndex then
+				right = pivotIndex - 1
+			else
+				left = pivotIndex + 1
+			end
+		end
+	end
+
+	local function selectTopKQuick(arr, k, better)
+		assert(arr, "selectTopKQuick: arr is nil")
+		k = tonumber(k) or 0
+		k = math.floor(k)
+		if k <= 0 then
+			return {}
+		end
+		if #arr <= k then
+			local out = {}
+			for i = 1, #arr do
+				out[i] = arr[i]
+			end
+			table.sort(out, better)
+			return out
+		end
+
+		quickselect(arr, 1, #arr, k, better)
+		local out = {}
+		for i = 1, k do
+			out[i] = arr[i]
+		end
+		table.sort(out, better)
+		return out
+	end
+
 	local function traceHitsTarget(target, endPos)
 		if not (target and endPos) then
 			return false
@@ -623,6 +679,19 @@ local function onCreateMove(cmd)
 		return false
 	end
 
+	local trackedCount = math.max(1, cfg.TrackedTargets or 4)
+	local trackedCornerVisible = {}
+	TickProfiler.BeginSection("CM:TrackedVis")
+	for _, entity in ipairs(entitylist) do
+		if entity and entity.IsPlayer and entity:IsPlayer() then
+			local idx = entity:GetIndex()
+			if trackedTargetIndices[idx] then
+				trackedCornerVisible[idx] = canSeeAnyCorner(entity)
+			end
+		end
+	end
+	TickProfiler.EndSection("CM:TrackedVis")
+
 	local function baseBetter(a, b)
 		if a.fov == b.fov then
 			return a.dist < b.dist
@@ -632,10 +701,11 @@ local function onCreateMove(cmd)
 
 	TickProfiler.BeginSection("CM:FOVSort")
 	local candidates = {}
-	local topCornerCandidates = {}
-	local maxCornerCheck = cfg.VisibilityCheckTargets or 0
-	maxCornerCheck = math.max(0, math.min(maxCornerCheck, 32))
 	local RAD2DEG = 180 / math.pi
+	local maxDist = cfg.MaxDistance or DEFAULT_MAX_DISTANCE
+	maxDist = math.max(1, maxDist)
+	local maxFov = cfg.AimFOV or 15
+	maxFov = math.max(1, maxFov)
 	for _, entity in ipairs(entitylist) do
 		local entityCenter = entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5
 		local distance = (entityCenter - localPos):Length()
@@ -644,20 +714,18 @@ local function onCreateMove(cmd)
 		local forward = viewangle:Forward()
 		local angle = math.acos(forward:Dot(dirToEntity)) * RAD2DEG
 
-		if angle <= cfg.AimFOV then
+		if angle <= maxFov then
+			local fovScore = angle / maxFov
+			local distScore = distance / maxDist
 			local entry = {
 				entity = entity,
 				fov = angle,
 				dist = distance,
+				score = (fovScore * 2.0) + distScore,
 				visible = false,
+				isTracked = false,
 			}
-			if entity.IsPlayer and entity:IsPlayer() then
-				entry.visible = canSeeTargetCom(entity)
-			else
-				entry.visible = traceHitsTarget(entity, entityCenter)
-			end
 			candidates[#candidates + 1] = entry
-			insertTopK(topCornerCandidates, entry, maxCornerCheck, baseBetter)
 		end
 	end
 	TickProfiler.EndSection("CM:FOVSort")
@@ -668,21 +736,120 @@ local function onCreateMove(cmd)
 		return
 	end
 
-	TickProfiler.BeginSection("CM:VisWeight")
-	for i = 1, #topCornerCandidates do
-		local entry = topCornerCandidates[i]
+	local topKCount = trackedCount * 2
+	if topKCount > 32 then
+		topKCount = 32
+	end
+	topKCount = math.min(topKCount, #candidates)
+
+	local function scoreBetter(a, b)
+		return (a.score or 0) < (b.score or 0)
+	end
+
+	TickProfiler.BeginSection("CM:Quickselect")
+	local topK = selectTopKQuick(candidates, topKCount, scoreBetter)
+	TickProfiler.EndSection("CM:Quickselect")
+
+	local trackedEntities = {}
+	local trackedInTopK = 0
+	for i = 1, #topK do
+		local entry = topK[i]
 		local ent = entry and entry.entity
-		if ent and ent.IsPlayer and ent:IsPlayer() and not entry.visible then
-			entry.visible = canSeeAnyCorner(ent)
+		if ent and ent.GetIndex and trackedTargetIndices[ent:GetIndex()] then
+			entry.isTracked = true
+			trackedInTopK = trackedInTopK + 1
+			trackedEntities[#trackedEntities + 1] = ent
 		end
 	end
-	TickProfiler.EndSection("CM:VisWeight")
+	if trackedInTopK < trackedCount then
+		for i = 1, #topK do
+			local entry = topK[i]
+			if not entry.isTracked then
+				entry.isTracked = true
+				trackedEntities[#trackedEntities + 1] = entry.entity
+				trackedInTopK = trackedInTopK + 1
+				if trackedInTopK >= trackedCount then
+					break
+				end
+			end
+		end
+	end
+
+	TickProfiler.BeginSection("CM:Visibility")
+	for i = 1, #topK do
+		local entry = topK[i]
+		local ent = entry and entry.entity
+		if not ent then
+			entry.visible = false
+		elseif ent.IsPlayer and ent:IsPlayer() then
+			if entry.isTracked then
+				local idx = ent:GetIndex()
+				local cornerVisible = trackedCornerVisible[idx]
+				if cornerVisible == nil then
+					cornerVisible = canSeeAnyCorner(ent)
+					trackedCornerVisible[idx] = cornerVisible
+				end
+				entry.visible = cornerVisible
+				if cornerVisible then
+					entry.score = (entry.score or 0) - 0.25
+				else
+					entry.score = (entry.score or 0) + 1.0
+				end
+			else
+				local comVisible = canSeeTargetCom(ent)
+				entry.visible = comVisible
+				if comVisible then
+					entry.score = (entry.score or 0) - 0.1
+				end
+			end
+		else
+			local entityCenter = ent:GetAbsOrigin() + (ent:GetMins() + ent:GetMaxs()) * 0.5
+			local isVisible = traceHitsTarget(ent, entityCenter)
+			entry.visible = isVisible
+			if isVisible then
+				entry.score = (entry.score or 0) - 0.1
+			end
+		end
+	end
+	TickProfiler.EndSection("CM:Visibility")
+
+	local nextTracked = {}
+	local bestVisible = {}
+	local bestHidden = {}
+	for i = 1, #topK do
+		local entry = topK[i]
+		if entry.visible then
+			insertTopK(bestVisible, entry, trackedCount, scoreBetter)
+		else
+			insertTopK(bestHidden, entry, trackedCount, scoreBetter)
+		end
+	end
+	for i = 1, #bestVisible do
+		if #nextTracked >= trackedCount then
+			break
+		end
+		nextTracked[#nextTracked + 1] = bestVisible[i].entity
+	end
+	for i = 1, #bestHidden do
+		if #nextTracked >= trackedCount then
+			break
+		end
+		nextTracked[#nextTracked + 1] = bestHidden[i].entity
+	end
+
+	trackedTargetIndices = {}
+	for i = 1, #nextTracked do
+		local ent = nextTracked[i]
+		if ent and ent.GetIndex then
+			trackedTargetIndices[ent:GetIndex()] = true
+		end
+	end
 
 	local bestEntry = nil
-	for i = 1, #candidates do
-		local entry = candidates[i]
+	for i = 1, #topK do
+		local entry = topK[i]
 		if entry.visible then
-			if (not bestEntry) or baseBetter(entry, bestEntry) then
+			if (not bestEntry) or scoreBetter(entry, bestEntry) then
 				bestEntry = entry
 			end
 		end
@@ -694,24 +861,24 @@ local function onCreateMove(cmd)
 	end
 
 	TickProfiler.BeginSection("CM:StrafeRecord")
-	-- Fedoraware Optional: Record velocity history for strafe prediction
-	-- Update velocity history only for the nearest N tracked players
-	local maxTracked = math.max(1, cfg.TrackedTargets or 4)
-	local historyCandidates = {}
-	for i = 1, #topCornerCandidates do
-		local entData = topCornerCandidates[i]
-		local entity = entData and entData.entity
+	local keepHistory = {}
+	for i = 1, #nextTracked do
+		local entity = nextTracked[i]
 		if entity and entity.IsPlayer and entity:IsPlayer() then
-			insertTopK(historyCandidates, entData, maxTracked, function(a, b)
-				return (a.dist or 0) < (b.dist or 0)
-			end)
+			local idx = entity:GetIndex()
+			keepHistory[idx] = true
+			local velocity = entity:EstimateAbsVelocity()
+			if velocity then
+				StrafePredictor.recordVelocity(idx, velocity, 10)
+			end
 		end
 	end
-	for i = 1, #historyCandidates do
-		local entity = historyCandidates[i].entity
-		local velocity = entity:EstimateAbsVelocity()
-		if velocity then
-			StrafePredictor.recordVelocity(entity:GetIndex(), velocity, 10)
+	for _, player in pairs(entities.FindByClass("CTFPlayer")) do
+		if player and player:IsValid() then
+			local idx = player:GetIndex()
+			if not keepHistory[idx] then
+				StrafePredictor.clearHistory(idx)
+			end
 		end
 	end
 	TickProfiler.EndSection("CM:StrafeRecord")

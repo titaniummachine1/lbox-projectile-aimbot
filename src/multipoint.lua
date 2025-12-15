@@ -470,6 +470,13 @@ local function binarySearchVertical(canShootAtPoint, topPoint, bottomPoint, targ
 		return nil, false
 	end
 
+	if bottomVisible and topVisible then
+		if math.abs(bottomPoint.z - targetZ) <= math.abs(topPoint.z - targetZ) then
+			return bottomPoint, false
+		end
+		return topPoint, false
+	end
+
 	-- Binary search from visible end towards target
 	local best = nil
 	local low, high
@@ -525,8 +532,14 @@ local function binarySearchHorizontal(canShootAtPoint, viewPos, startPoint, face
 	-- Target is the center line of the face at our Z height
 	local targetXY = Vector3(faceCenter.x, faceCenter.y, startPoint.z)
 
+	local startVisible = canShootAtPoint(startPoint)
+	local targetVisible = canShootAtPoint(targetXY)
+	if not startVisible and not targetVisible then
+		return startPoint
+	end
+
 	-- Check if we can shoot directly at center line
-	if canShootAtPoint(targetXY) then
+	if targetVisible then
 		-- Move slightly away from center by hull size for safety
 		if hullSize > 0 then
 			local dir = normalize(targetXY - viewPos)
