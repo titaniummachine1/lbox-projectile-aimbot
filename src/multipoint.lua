@@ -8,7 +8,7 @@ utils.math = require("utils.math")
 
 -- Constants
 local BINARY_SEARCH_ITERATIONS = 5
-local VISIBILITY_THRESHOLD = 0.99
+local VISIBILITY_THRESHOLD = 0.999
 local PREFER_FEET_HEIGHT = 5
 local PREFER_FEET_FALLBACK = 10
 
@@ -357,6 +357,9 @@ local function createCanShootAt(
 		end
 
 		if not trace then
+			return false
+		end
+		if trace.startsolid or trace.allsolid then
 			return false
 		end
 

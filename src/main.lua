@@ -46,6 +46,8 @@ local toggleActive = false
 
 local trackedTargetIndices = {}
 
+local lastAutoFlipViewmodels = nil
+
 -- Input button flags
 local IN_ATTACK = 1
 local IN_ATTACK2 = 2048
@@ -501,6 +503,75 @@ local function onCreateMove(cmd)
 	end
 	local viewangle = engine.GetViewAngles()
 
+	local function autoFlipViewmodelsIfNeeded()
+		if not cfg.AutoFlipViewmodels then
+			return
+		end
+
+		local weaponDefIndex = weapon:GetPropInt("m_iItemDefinitionIndex")
+		if not weaponDefIndex then
+			return
+		end
+
+		local isDucking = false
+		do
+			local okFlags, flags = pcall(function()
+				return plocal:GetPropInt("m_fFlags")
+			end)
+			if okFlags and type(flags) == "number" and type(FL_DUCKING) == "number" then
+				isDucking = (flags & FL_DUCKING) ~= 0
+			end
+		end
+
+		local forward = viewangle:Forward()
+		local right = viewangle:Right()
+		local up = viewangle:Up()
+
+		local function computeMuzzlePos(isFlipped)
+			local offset = WeaponOffsets.getOffset(weaponDefIndex, isDucking, isFlipped)
+			if not offset then
+				return eyePos
+			end
+			local offsetPos = eyePos + (forward * offset.x) + (right * offset.y) + (up * offset.z)
+			local trace = engine.TraceHull(eyePos, offsetPos, -Vector3(8, 8, 8), Vector3(8, 8, 8), MASK_SHOT_HULL)
+			if not trace or trace.startsolid then
+				return nil
+			end
+			return trace.endpos
+		end
+
+		local function measureClearance(muzzlePos)
+			if not muzzlePos then
+				return 0
+			end
+			local endPos = muzzlePos + (forward * 200)
+			local trace = engine.TraceLine(muzzlePos, endPos, MASK_SHOT_HULL)
+			if not trace or trace.startsolid or trace.allsolid then
+				return 0
+			end
+			return (trace.fraction or 0)
+		end
+
+		local muzzle0 = computeMuzzlePos(false)
+		local muzzle1 = computeMuzzlePos(true)
+		if not muzzle0 and not muzzle1 then
+			return
+		end
+
+		local frac0 = measureClearance(muzzle0)
+		local frac1 = measureClearance(muzzle1)
+		local desired = (frac1 > frac0) and 1 or 0
+
+		if lastAutoFlipViewmodels ~= desired then
+			client.RemoveConVarProtection("cl_flipviewmodels")
+			client.Command("cl_flipviewmodels " .. tostring(desired), true)
+			client.SetConVar("cl_flipviewmodels", desired)
+			lastAutoFlipViewmodels = desired
+		end
+	end
+
+	autoFlipViewmodelsIfNeeded()
+
 	local charge = info.m_bCharges and weapon:GetCurrentCharge() or 0.0
 	local speed = info:GetVelocity(charge):Length2D()
 	local _, sv_gravity = client.GetConVar("sv_gravity")
@@ -618,7 +689,7 @@ local function onCreateMove(cmd)
 		if not trace then
 			return false
 		end
-		if trace.fraction > 0.99 then
+		if trace.fraction >= 0.999 then
 			return true
 		end
 		local hitEnt = trace.entity

@@ -21,6 +21,7 @@ local DefaultConfig = {
 		AimOtherBuildings = false,
 		TrackedTargets = 4, -- how many enemies to keep movement history for
 		PreferFeet = true, -- prioritize shooting ~5 units above ground to launch enemies
+		AutoFlipViewmodels = false,
 	},
 
 	-- Visual settings

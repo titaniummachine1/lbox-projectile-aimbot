@@ -113,6 +113,10 @@ local function drawMenu()
 
 		cfg.PreferFeet = TimMenu.Checkbox("Prefer Feet", cfg.PreferFeet)
 		TimMenu.Tooltip("Only applies when target is on ground")
+		TimMenu.NextLine()
+
+		cfg.AutoFlipViewmodels = TimMenu.Checkbox("Auto Flip Viewmodels", cfg.AutoFlipViewmodels)
+		TimMenu.Tooltip("Sets cl_flipviewmodels based on which side has clearer 200u forward trace")
 		TimMenu.EndSector()
 		TimMenu.NextLine()
 	end
