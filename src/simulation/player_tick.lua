@@ -273,8 +273,12 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 	assert(playerCtx, "PlayerTick: playerCtx is nil")
 	assert(simCtx, "PlayerTick: simCtx is nil")
 
-	local tickinterval = simCtx.tickinterval * (playerCtx.lazyness or 1)
-	local wishdir = playerCtx.velocity / math.max(playerCtx.velocity:Length(), 0.001)
+	local tickinterval = simCtx.tickinterval
+	local wishdir = Vector3(0, 0, 0)
+	local horizLen = playerCtx.velocity:Length2D()
+	if horizLen > 0.001 then
+		wishdir = Vector3(playerCtx.velocity.x / horizLen, playerCtx.velocity.y / horizLen, 0)
+	end
 
 	local is_on_ground = checkIsOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.index)
 
@@ -293,7 +297,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 			1,
 			playerCtx.entity
 		)
-		playerCtx.velocity.z = playerCtx.velocity.z - GameConstants.DEFAULT_GRAVITY * tickinterval
+		playerCtx.velocity.z = playerCtx.velocity.z - simCtx.sv_gravity * tickinterval
 	end
 
 	playerCtx.origin = tryPlayerMove(
@@ -325,7 +329,10 @@ function PlayerTick.simulatePath(playerCtx, simCtx, time_seconds)
 	local path = {}
 	local timetable = {}
 	local clock = 0.0
-	local tickinterval = simCtx.tickinterval * (playerCtx.lazyness or 1)
+	local tickinterval = simCtx.tickinterval
+	local skip = math.max(1, math.floor(playerCtx.lazyness or 1))
+	local tickCount = 0
+	local lastOrigin = nil
 
 	-- Early exit for stationary targets
 	if playerCtx.velocity:Length() <= 0.01 then
@@ -335,12 +342,24 @@ function PlayerTick.simulatePath(playerCtx, simCtx, time_seconds)
 
 	while clock < time_seconds do
 		local newOrigin = PlayerTick.simulateTick(playerCtx, simCtx)
-		path[#path + 1] = newOrigin
-		timetable[#timetable + 1] = simCtx.curtime + clock
+		lastOrigin = newOrigin
+		tickCount = tickCount + 1
+		if (tickCount % skip) == 0 then
+			path[#path + 1] = newOrigin
+			timetable[#timetable + 1] = simCtx.curtime + clock
+		end
 		clock = clock + tickinterval
 	end
 
-	return path, path[#path], timetable
+	if not lastOrigin then
+		lastOrigin = Vector3(playerCtx.origin:Unpack())
+	end
+	if #path == 0 then
+		path[1] = Vector3(lastOrigin:Unpack())
+		timetable[1] = simCtx.curtime
+	end
+
+	return path, lastOrigin, timetable
 end
 
 return PlayerTick

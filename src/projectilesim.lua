@@ -140,6 +140,13 @@ local function SimulateProjectile(target, targetPredictedPos, startPos, angle, i
 		env:Simulate(tickInterval)
 		local vEnd = projectile:GetPosition()
 		local trace = TraceProjectile(vStart, vEnd, mins, maxs, info, target, localTeam, env:GetSimulationTime())
+		if trace and trace.fraction < 1.0 and trace.entity and trace.entity.GetIndex then
+			if trace.entity:GetIndex() == target:GetIndex() then
+				hit = true
+				simulatedFull = true
+				break
+			end
+		end
 
 		if IsIntersectingBB(vEnd, targetPredictedPos, info, target:GetMaxs(), target:GetMins()) then
 			hit = true
@@ -213,7 +220,7 @@ local function SimulateFakeProjectile(
 	-- Get gravity from info
 	local _, sv_gravity = client.GetConVar("sv_gravity")
 	local gravityScale = 0
-	if info.HasGravity and info:HasGravity(charge) then
+	if info.HasGravity and info:HasGravity() then
 		gravityScale = info:GetGravity(charge) or 0
 	end
 	local gravity = (sv_gravity or 0) * gravityScale
@@ -227,6 +234,13 @@ local function SimulateFakeProjectile(
 		currentVel = currentVel + gravity_to_add
 		local vEnd = currentPos + currentVel * tickInterval
 		local trace = TraceProjectile(vStart, vEnd, mins, maxs, info, target, localTeam, time)
+		if trace and trace.fraction < 1.0 and trace.entity and trace.entity.GetIndex then
+			if trace.entity:GetIndex() == target:GetIndex() then
+				hit = true
+				simulatedFull = true
+				break
+			end
+		end
 
 		-- Add current position to path before checking collision
 		path[#path + 1] = Vector3(vEnd:Unpack())

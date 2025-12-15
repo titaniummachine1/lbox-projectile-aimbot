@@ -503,7 +503,7 @@ local function onCreateMove(cmd)
 	local speed = info:GetVelocity(charge):Length2D()
 	local _, sv_gravity = client.GetConVar("sv_gravity")
 	local gravityScale = 0
-	if info.HasGravity and info:HasGravity(charge) then
+	if info.HasGravity and info:HasGravity() then
 		gravityScale = info:GetGravity(charge) or 0
 	end
 	local gravity = (sv_gravity or 0) * 0.5 * gravityScale
@@ -802,22 +802,6 @@ local function onCreateMove(cmd)
 			assert(type(multipointPos.z) == "number", "Main: multipointPos has invalid z")
 			lastPos = multipointPos
 			state.multipointPos = multipointPos
-		end
-
-		TickProfiler.BeginSection("CM:Ballistics")
-		angle = utils.math.SolveBallisticArc(aimEyePos, lastPos, speed, gravity)
-		TickProfiler.EndSection("CM:Ballistics")
-		if not angle then
-			break
-		end
-
-		local solvedFlight = utils.math.GetBallisticFlightTime(aimEyePos, lastPos, speed, gravity)
-		if (not solvedFlight) or solvedFlight <= 0 then
-			solvedFlight = utils.math.EstimateTravelTime(aimEyePos, lastPos, speed)
-		end
-		if solvedFlight and solvedFlight > 0 then
-			flightTime = math.max(0.0, math.min(5.0, solvedFlight))
-			totalTime = outgoingLatency + lerp + flightTime
 		end
 
 		if angle then
