@@ -986,6 +986,9 @@ local function onCreateMove(cmd)
 		local lazyness = 1
 
 		local path, lastPos, timetable
+		local coastOrigin = nil
+		local coastVelocity = nil
+		local coastStartTime = nil
 		local ensureSimulatedToTotal = function(_) end
 		local ensureRocketCandidates = function(_) end
 		local rocketIndices = nil
@@ -1025,10 +1028,16 @@ local function onCreateMove(cmd)
 			end
 
 			local function stepSim()
+				if clock > 0.0 then
+					return
+				end
 				lastPos = PlayerTick.simulateTick(playerCtx, simCtx)
 				clock = clock + tickinterval
 				path[#path + 1] = lastPos
 				timetable[#timetable + 1] = simStartTime + clock
+				coastOrigin = lastPos
+				coastVelocity = Vector3(playerCtx.velocity:Unpack())
+				coastStartTime = simStartTime + clock
 				recordRocketCandidate()
 			end
 
@@ -1037,21 +1046,15 @@ local function onCreateMove(cmd)
 					return
 				end
 				local goalCount = math.max(0, math.floor(count))
-				while (#rocketIndices < goalCount) and ((clock + 1e-6) < maxTotalTime) do
+				if (#rocketIndices < goalCount) and ((clock + 1e-6) < maxTotalTime) then
 					stepSim()
-					if clock >= maxTotalTime then
-						break
-					end
 				end
 			end
 
 			ensureSimulatedToTotal = function(total)
 				local goal = math.max(0.0, math.min(maxTotalTime, total))
-				while (clock + 1e-6) < goal do
+				if (clock + 1e-6) < goal then
 					stepSim()
-					if clock >= maxTotalTime then
-						break
-					end
 				end
 			end
 
@@ -1071,6 +1074,10 @@ local function onCreateMove(cmd)
 				return lastPos
 			end
 			local timeAbs = simStartTime + total
+			if coastOrigin and coastVelocity and coastStartTime and timeAbs > coastStartTime then
+				local dt = timeAbs - coastStartTime
+				return coastOrigin + (coastVelocity * dt)
+			end
 			for i = #timetable, 1, -1 do
 				local t = timetable[i]
 				if t and t <= timeAbs then
@@ -1169,6 +1176,7 @@ local function onCreateMove(cmd)
 
 		local predictedOrigin = lastPos
 		local drop = 0.5 * gravity * flightTime * flightTime
+		local predictedOriginVis = predictedOrigin + Vector3(0, 0, drop)
 
 		-- TODO: Deep integration - Apply strafe prediction to each simulation tick
 		-- Currently only recording history; deeper integration requires modifying PlayerTick.simulateTick
@@ -1198,7 +1206,7 @@ local function onCreateMove(cmd)
 			PlayerTracker.Update(entity, {
 				path = path,
 				timetable = timetable,
-				predictedOrigin = predictedOrigin,
+				predictedOrigin = predictedOriginVis,
 				aimPos = lastPos,
 				multipointPos = multipointPos,
 				shotTime = shotTime,
