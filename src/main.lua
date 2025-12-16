@@ -585,7 +585,7 @@ local function onCreateMove(cmd)
 	if info.HasGravity and info:HasGravity() then
 		gravityScale = info:GetGravity(charge) or 0
 	end
-	local gravity = (sv_gravity or 0) * 0.5 * gravityScale
+	local gravity = (sv_gravity or 0) * gravityScale
 	local weaponID = weapon:GetWeaponID()
 
 	local function insertTopK(top, item, k, better)
@@ -1029,7 +1029,7 @@ local function onCreateMove(cmd)
 			break
 		end
 
-		local drop = gravity * flightTime * flightTime
+		local drop = 0.5 * gravity * flightTime * flightTime
 
 		-- TODO: Deep integration - Apply strafe prediction to each simulation tick
 		-- Currently only recording history; deeper integration requires modifying PlayerTick.simulateTick

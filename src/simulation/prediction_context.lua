@@ -132,7 +132,7 @@ function PredictionContext.createProjectileContext(info, startPos, angle, charge
 		gravityMod = info:GetGravity(charge) or 0
 	end
 
-	local gravity = sv_gravity * 0.5 * gravityMod
+	local gravity = sv_gravity * gravityMod
 
 	local velocityVector = info:GetVelocity(charge)
 	assert(velocityVector, "createProjectileContext: info:GetVelocity() returned nil")
