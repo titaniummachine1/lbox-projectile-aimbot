@@ -92,17 +92,6 @@ local function drawMenu()
 		cfg.MaxDistance = TimMenu.Slider("Max Distance", cfg.MaxDistance, 500, 6000, 50)
 		TimMenu.NextLine()
 
-		cfg.MinAccuracy = TimMenu.Slider("Min Lazyness", cfg.MinAccuracy, 1, 12, 1)
-		TimMenu.Tooltip("Ticks to skip at close range (lower = more accurate, slower)")
-		TimMenu.NextLine()
-
-		local maxAccuracyMinimum = math.max(cfg.MinAccuracy, 2)
-		cfg.MaxAccuracy = TimMenu.Slider("Max Lazyness", cfg.MaxAccuracy, maxAccuracyMinimum, 12, 1)
-		cfg.MaxAccuracy = math.max(cfg.MaxAccuracy, cfg.MinAccuracy)
-		cfg.MaxAccuracy = math.min(cfg.MaxAccuracy, 12)
-		TimMenu.Tooltip("Ticks to skip at max range (higher = less accurate, faster)")
-		TimMenu.NextLine()
-
 		cfg.MinConfidence = TimMenu.Slider("Min Confidence %", cfg.MinConfidence, 0, 100, 1)
 		TimMenu.Tooltip("Minimum hit chance required to shoot")
 		TimMenu.NextLine()

@@ -975,8 +975,7 @@ local function onCreateMove(cmd)
 		end
 		flightTime = math.max(0.0, math.min(maxFlightTime, flightTime))
 		local totalTime = outgoingLatency + lerp + flightTime
-		local lazyness = cfg.MinAccuracy
-			+ (cfg.MaxAccuracy - cfg.MinAccuracy) * (math.min(distance / cfg.MaxDistance, 1.0) ^ 1.5)
+		local lazyness = 1
 
 		local path, lastPos, timetable
 		local angle = nil
