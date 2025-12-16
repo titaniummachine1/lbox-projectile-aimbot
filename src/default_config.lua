@@ -28,12 +28,14 @@ local DefaultConfig = {
 	-- Visual settings
 	Visuals = {
 		Enabled = true,
+		FadeOutDuration = 1.0,
 		ShowConfidence = true,
 		ShowProfiler = false, -- Performance profiler overlay
 		DrawPlayerPath = true,
 		DrawProjectilePath = true,
 		DrawBoundingBox = true,
 		DrawMultipointTarget = true,
+		ShowMultipointDebug = false,
 		MultipointDebugDuration = 1.0,
 		DrawQuads = false,
 
