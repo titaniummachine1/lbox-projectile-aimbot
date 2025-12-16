@@ -8,6 +8,7 @@ local Visuals = {}
 -- Local constants / utilities -----
 local WHITE_PIXEL_RGBA = string.char(255, 255, 255, 255)
 local whiteTexture = nil
+local PLAYER_PATH_GAP_SQ = 80 * 80
 
 local function getWhiteTexture()
 	if whiteTexture then
@@ -148,16 +149,25 @@ local function drawPlayerPath(texture, playerPath, thickness)
 		return
 	end
 
-	local last = client.WorldToScreen(playerPath[1])
+	local prevWorld = playerPath[1]
+	local last = client.WorldToScreen(prevWorld)
 	if not last then
 		return
 	end
 
 	for i = 2, #playerPath do
-		local current = client.WorldToScreen(playerPath[i])
-		if current and last then
-			drawLine(texture, last, current, thickness)
+		local curWorld = playerPath[i]
+		local current = curWorld and client.WorldToScreen(curWorld)
+		if curWorld and prevWorld and current and last then
+			local dx = curWorld.x - prevWorld.x
+			local dy = curWorld.y - prevWorld.y
+			local dz = curWorld.z - prevWorld.z
+			local distSq = (dx * dx) + (dy * dy) + (dz * dz)
+			if distSq <= PLAYER_PATH_GAP_SQ then
+				drawLine(texture, last, current, thickness)
+			end
 		end
+		prevWorld = curWorld
 		last = current
 	end
 end
@@ -248,18 +258,19 @@ local function filterPathByTime(path, timetable, nowTime, maxAbsTime)
 		end
 	end
 
-	if firstKeep and lastKeep then
-		local startIdx = math.max(1, firstKeep - 1)
-		local out = {}
-		for i = startIdx, lastKeep do
-			out[#out + 1] = path[i]
-		end
-		if #out >= 2 then
-			return out
-		end
+	if not (firstKeep and lastKeep) then
+		return nil
 	end
 
-	return path
+	local startIdx = math.max(1, firstKeep - 1)
+	local out = {}
+	for i = startIdx, lastKeep do
+		out[#out + 1] = path[i]
+	end
+	if #out >= 2 then
+		return out
+	end
+	return nil
 end
 
 local function drawMultipointTarget(texture, pos, thickness)
@@ -652,13 +663,22 @@ function Visuals.draw(state)
 		local r, g, b, a = getColor(vis, "PlayerPath", 180)
 		draw.Color(r, g, b, a)
 		if currentOrigin then
+			local lastWorld = currentOrigin
 			local last = client.WorldToScreen(currentOrigin)
 			if last then
 				for i = 1, #playerPath do
-					local current = client.WorldToScreen(playerPath[i])
-					if current and last then
-						drawLine(texture, last, current, vis.Thickness.PlayerPath)
+					local curWorld = playerPath[i]
+					local current = curWorld and client.WorldToScreen(curWorld)
+					if curWorld and lastWorld and current and last then
+						local dx = curWorld.x - lastWorld.x
+						local dy = curWorld.y - lastWorld.y
+						local dz = curWorld.z - lastWorld.z
+						local distSq = (dx * dx) + (dy * dy) + (dz * dz)
+						if distSq <= PLAYER_PATH_GAP_SQ then
+							drawLine(texture, last, current, vis.Thickness.PlayerPath)
+						end
 					end
+					lastWorld = curWorld
 					last = current
 				end
 			else
