@@ -221,9 +221,17 @@ local function filterPathByTime(path, timetable, nowTime)
 	end
 
 	local out = {}
+	local minKeep = nowTime - 0.1
+	local maxKeep = nil
+	if G and G.Menu and G.Menu.Aimbot then
+		local maxSimTime = G.Menu.Aimbot.MaxSimTime
+		if type(maxSimTime) == "number" then
+			maxKeep = nowTime + math.max(0.1, math.min(6.0, maxSimTime))
+		end
+	end
 	for i = 1, #timetable do
 		local t = timetable[i]
-		if t and t >= nowTime then
+		if t and t >= minKeep and (not maxKeep or t <= maxKeep) then
 			out[#out + 1] = path[i]
 		end
 	end
@@ -641,7 +649,7 @@ function Visuals.draw(state)
 	end
 
 	-- Draw bounding box
-	local boxOrigin = currentOrigin or targetPos
+	local boxOrigin = predictedOrigin or currentOrigin or targetPos
 	if vis.DrawBoundingBox and boxOrigin and targetEntity and eyePos then
 		local r, g, b, a = getColor(vis, "BoundingBox", 120)
 		draw.Color(r, g, b, a)
@@ -676,7 +684,7 @@ function Visuals.draw(state)
 	if vis.DrawMultipointTarget then
 		local r, g, b, a = getColor(vis, "MultipointTarget", 0)
 		draw.Color(r, g, b, a)
-		local markPos = multipointPos or aimPos
+		local markPos = aimPos or multipointPos
 		if markPos then
 			drawMultipointTarget(texture, markPos, vis.Thickness.MultipointTarget)
 		end

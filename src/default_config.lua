@@ -14,6 +14,7 @@ local DefaultConfig = {
 		AimFOV = 15,
 		AimMethod = "silent +", -- "silent +", "silent", "normal"
 		MaxDistance = 3000,
+		MaxSimTime = 3.0,
 		MinAccuracy = 2,
 		MaxAccuracy = 12,
 		MinConfidence = 40,

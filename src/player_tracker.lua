@@ -90,14 +90,30 @@ function PlayerTracker.Update(entity, predictionData)
 	local currentTick = globals.TickCount()
 
 	-- Update visual data
-	data.path = predictionData.path
-	data.projpath = predictionData.projpath
-	data.timetable = predictionData.timetable
-	data.projtimetable = predictionData.projtimetable
-	data.predictedOrigin = predictionData.predictedOrigin
-	data.aimPos = predictionData.aimPos
-	data.multipointPos = predictionData.multipointPos
-	data.confidence = predictionData.confidence
+	if predictionData.path ~= nil then
+		data.path = predictionData.path
+	end
+	if predictionData.projpath ~= nil then
+		data.projpath = predictionData.projpath
+	end
+	if predictionData.timetable ~= nil then
+		data.timetable = predictionData.timetable
+	end
+	if predictionData.projtimetable ~= nil then
+		data.projtimetable = predictionData.projtimetable
+	end
+	if predictionData.predictedOrigin ~= nil then
+		data.predictedOrigin = predictionData.predictedOrigin
+	end
+	if predictionData.aimPos ~= nil then
+		data.aimPos = predictionData.aimPos
+	end
+	if predictionData.multipointPos ~= nil then
+		data.multipointPos = predictionData.multipointPos
+	end
+	if predictionData.confidence ~= nil then
+		data.confidence = predictionData.confidence
+	end
 
 	-- Update metadata
 	data.lastUpdateTick = currentTick

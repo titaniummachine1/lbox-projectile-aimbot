@@ -92,6 +92,10 @@ local function drawMenu()
 		cfg.MaxDistance = TimMenu.Slider("Max Distance", cfg.MaxDistance, 500, 6000, 50)
 		TimMenu.NextLine()
 
+		cfg.MaxSimTime = TimMenu.Slider("Max Sim Time", cfg.MaxSimTime or 3.0, 0.5, 6.0, 0.1)
+		TimMenu.Tooltip("Caps player prediction + projectile sim horizon (seconds)")
+		TimMenu.NextLine()
+
 		cfg.MinConfidence = TimMenu.Slider("Min Confidence %", cfg.MinConfidence, 0, 100, 1)
 		TimMenu.Tooltip("Minimum hit chance required to shoot")
 		TimMenu.NextLine()

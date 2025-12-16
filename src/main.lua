@@ -972,7 +972,11 @@ local function onCreateMove(cmd)
 		local distance = (entityCenter - localPos):Length()
 		local outgoingLatency = netchannel:GetLatency(E_Flows.FLOW_OUTGOING) or 0
 		local lerp = Latency.getLerpTime()
-		local maxFlightTime = 5.0
+		local maxFlightTime = cfg.MaxSimTime or 3.0
+		if type(maxFlightTime) ~= "number" then
+			maxFlightTime = 3.0
+		end
+		maxFlightTime = math.max(0.5, math.min(6.0, maxFlightTime))
 		local flightTime = utils.math.EstimateTravelTime(aimEyePos, entityCenter, speed)
 		if (not flightTime) or flightTime <= 0 then
 			flightTime = distance / speed
@@ -996,7 +1000,7 @@ local function onCreateMove(cmd)
 			assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
 
 			local maxTotalTime = outgoingLatency + lerp + maxFlightTime
-			maxTotalTime = math.max(0.0, math.min(6.0, maxTotalTime))
+			maxTotalTime = math.max(0.0, maxTotalTime)
 			path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, maxTotalTime)
 			TickProfiler.EndSection("CM:SimPlayer")
 
@@ -1143,6 +1147,17 @@ local function onCreateMove(cmd)
 			state.multipointPos = multipointPos
 		end
 
+		local visCfg = (G and G.Menu and G.Menu.Visuals) or nil
+		if visCfg and visCfg.Enabled then
+			PlayerTracker.Update(entity, {
+				path = path,
+				timetable = timetable,
+				predictedOrigin = predictedOrigin,
+				aimPos = lastPos,
+				multipointPos = multipointPos,
+			})
+		end
+
 		if angle then
 			--- check visibility
 			local isFlipped = weapon:IsViewModelFlipped()
@@ -1196,7 +1211,7 @@ local function onCreateMove(cmd)
 			if translatedAngle then
 				TickProfiler.BeginSection("CM:SimProj")
 				local tickInterval = globals.TickInterval() or 0.015
-				local projSimTime = flightTime + (tickInterval * 2)
+				local projSimTime = math.min((maxFlightTime + (tickInterval * 2)), (flightTime + (tickInterval * 2)))
 				local projpath, hit, fullSim, projtimetable = SimulateProj(
 					entity,
 					predictedOrigin,

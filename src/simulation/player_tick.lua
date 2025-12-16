@@ -365,23 +365,23 @@ function PlayerTick.simulatePath(playerCtx, simCtx, time_seconds)
 		return path, path[1], { simCtx.curtime }
 	end
 
+	path[1] = Vector3(playerCtx.origin:Unpack())
+	timetable[1] = simCtx.curtime
+	lastOrigin = path[1]
+
 	while clock < time_seconds do
 		local newOrigin = PlayerTick.simulateTick(playerCtx, simCtx)
 		lastOrigin = newOrigin
 		tickCount = tickCount + 1
+		clock = clock + tickinterval
 		if (tickCount % skip) == 0 then
 			path[#path + 1] = newOrigin
 			timetable[#timetable + 1] = simCtx.curtime + clock
 		end
-		clock = clock + tickinterval
 	end
 
 	if not lastOrigin then
 		lastOrigin = Vector3(playerCtx.origin:Unpack())
-	end
-	if #path == 0 then
-		path[1] = Vector3(lastOrigin:Unpack())
-		timetable[1] = simCtx.curtime
 	end
 
 	return path, lastOrigin, timetable
