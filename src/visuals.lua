@@ -215,7 +215,7 @@ local function lastVec(tbl)
 	return tbl[#tbl]
 end
 
-local function filterPathByTime(path, timetable, nowTime)
+local function filterPathByTime(path, timetable, nowTime, maxAbsTime)
 	if not path or #path < 2 or not timetable or #timetable ~= #path then
 		return path
 	end
@@ -223,10 +223,18 @@ local function filterPathByTime(path, timetable, nowTime)
 	local out = {}
 	local minKeep = nowTime - 0.1
 	local maxKeep = nil
+	if type(maxAbsTime) == "number" then
+		maxKeep = maxAbsTime
+	end
 	if G and G.Menu and G.Menu.Aimbot then
 		local maxSimTime = G.Menu.Aimbot.MaxSimTime
 		if type(maxSimTime) == "number" then
-			maxKeep = nowTime + math.max(0.1, math.min(6.0, maxSimTime))
+			local horizon = nowTime + math.max(0.1, math.min(6.0, maxSimTime))
+			if maxKeep then
+				maxKeep = math.min(maxKeep, horizon)
+			else
+				maxKeep = horizon
+			end
 		end
 	end
 	for i = 1, #timetable do
@@ -236,7 +244,7 @@ local function filterPathByTime(path, timetable, nowTime)
 		end
 	end
 
-	if #out >= 2 then
+	if #out >= 1 then
 		return out
 	end
 	return path
@@ -618,10 +626,11 @@ function Visuals.draw(state)
 	local predictedOrigin = state and state.predictedOrigin
 	local aimPos = state and state.aimPos
 	local multipointPos = state and state.multipointPos
+	local shotTime = state and state.shotTime
 	local targetEntity = state and state.target
 	-- Determine a best-effort target position for rendering boxes/quads even if paths are missing
 	local curTime = (globals and globals.CurTime and globals.CurTime()) or 0
-	playerPath = filterPathByTime(playerPath, playerTime, curTime)
+	playerPath = filterPathByTime(playerPath, playerTime, curTime, shotTime)
 	projPath = filterPathByTime(projPath, projTime, curTime)
 	local currentOrigin = (targetEntity and targetEntity.GetAbsOrigin and targetEntity:GetAbsOrigin()) or nil
 	local targetPos = predictedOrigin or lastVec(playerPath) or currentOrigin

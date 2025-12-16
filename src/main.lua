@@ -986,6 +986,9 @@ local function onCreateMove(cmd)
 		local lazyness = 1
 
 		local path, lastPos, timetable
+		local ensureSimulatedToTotal = function(_) end
+		local ensureRocketCandidates = function(_) end
+		local rocketIndices = nil
 		local angle = nil
 		local flipDecided = false
 		local simStartTime = globals.CurTime()
@@ -999,9 +1002,59 @@ local function onCreateMove(cmd)
 			local playerCtx = PredictionContext.createPlayerContext(entity, lazyness)
 			assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
 
-			local maxTotalTime = outgoingLatency + lerp + maxFlightTime
-			maxTotalTime = math.max(0.0, maxTotalTime)
-			path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, maxTotalTime)
+			local maxTotalTime = math.max(0.0, outgoingLatency + lerp + maxFlightTime)
+			local tickinterval = simCtx.tickinterval
+			local clock = 0.0
+			rocketIndices = {}
+			path = { Vector3(playerCtx.origin:Unpack()) }
+			timetable = { simStartTime }
+			lastPos = path[1]
+
+			local function recordRocketCandidate()
+				if #rocketIndices >= 3 then
+					return
+				end
+				local flightCandidate = clock - outgoingLatency - lerp
+				if flightCandidate < 0 or flightCandidate > maxFlightTime then
+					return
+				end
+				local dx = (lastPos - aimEyePos):Length2D()
+				if (speed * flightCandidate) >= dx then
+					rocketIndices[#rocketIndices + 1] = #path
+				end
+			end
+
+			local function stepSim()
+				lastPos = PlayerTick.simulateTick(playerCtx, simCtx)
+				clock = clock + tickinterval
+				path[#path + 1] = lastPos
+				timetable[#timetable + 1] = simStartTime + clock
+				recordRocketCandidate()
+			end
+
+			ensureRocketCandidates = function(count)
+				if type(count) ~= "number" then
+					return
+				end
+				local goalCount = math.max(0, math.floor(count))
+				while (#rocketIndices < goalCount) and ((clock + 1e-6) < maxTotalTime) do
+					stepSim()
+					if clock >= maxTotalTime then
+						break
+					end
+				end
+			end
+
+			ensureSimulatedToTotal = function(total)
+				local goal = math.max(0.0, math.min(maxTotalTime, total))
+				while (clock + 1e-6) < goal do
+					stepSim()
+					if clock >= maxTotalTime then
+						break
+					end
+				end
+			end
+
 			TickProfiler.EndSection("CM:SimPlayer")
 
 			assert(path, "Main: SimulatePlayer returned nil path")
@@ -1027,23 +1080,10 @@ local function onCreateMove(cmd)
 			return path[1] or lastPos
 		end
 
-		local rocketIdx = nil
-		if isPlayer and timetable and path then
-			for i = 1, #path do
-				local t = timetable[i]
-				if t then
-					local totalCandidate = t - simStartTime
-					local flightCandidate = totalCandidate - outgoingLatency - lerp
-					if flightCandidate >= 0 and flightCandidate <= maxFlightTime then
-						local dx = (path[i] - aimEyePos):Length2D()
-						if (speed * flightCandidate) >= dx then
-							rocketIdx = i
-							break
-						end
-					end
-				end
-			end
+		if isPlayer and rocketIndices then
+			ensureRocketCandidates(1)
 		end
+		local rocketIdx = (rocketIndices and rocketIndices[1]) or nil
 
 		if rocketIdx then
 			local totalCandidate = (timetable[rocketIdx] - simStartTime)
@@ -1060,8 +1100,12 @@ local function onCreateMove(cmd)
 		local maxPathIdx = (timetable and #timetable) or 1
 		for attempt = 1, 3 do
 			local attemptFlight = flightTime
-			if rocketIdx then
-				local useIdx = math.min(maxPathIdx, rocketIdx + (attempt - 1))
+			if isPlayer and rocketIndices then
+				ensureRocketCandidates(attempt)
+			end
+			if rocketIndices and #rocketIndices > 0 then
+				local useRocket = rocketIndices[math.min(#rocketIndices, attempt)]
+				local useIdx = math.max(1, math.min(maxPathIdx, useRocket))
 				local totalCandidate = (timetable[useIdx] - simStartTime)
 				attemptFlight = totalCandidate - outgoingLatency - lerp
 			end
@@ -1074,6 +1118,7 @@ local function onCreateMove(cmd)
 			local curAngle = nil
 
 			for _ = 1, 2 do
+				ensureSimulatedToTotal(curTotal)
 				curPos = isPlayer and posAtTotalTime(curTotal) or entityCenter
 				if (not flipDecided) and curPos then
 					autoFlipViewmodelsIfNeeded(curPos)
@@ -1149,12 +1194,14 @@ local function onCreateMove(cmd)
 
 		local visCfg = (G and G.Menu and G.Menu.Visuals) or nil
 		if visCfg and visCfg.Enabled then
+			local shotTime = simStartTime + totalTime
 			PlayerTracker.Update(entity, {
 				path = path,
 				timetable = timetable,
 				predictedOrigin = predictedOrigin,
 				aimPos = lastPos,
 				multipointPos = multipointPos,
+				shotTime = shotTime,
 			})
 		end
 
@@ -1246,6 +1293,7 @@ local function onCreateMove(cmd)
 						state.silent = not noSilent
 
 						-- Store persistent visual data in player tracker
+						local shotTime = simStartTime + totalTime
 						PlayerTracker.Update(entity, {
 							path = path,
 							projpath = projpath,
@@ -1254,6 +1302,7 @@ local function onCreateMove(cmd)
 							predictedOrigin = predictedOrigin,
 							aimPos = lastPos,
 							multipointPos = multipointPos,
+							shotTime = shotTime,
 							confidence = confidence,
 						})
 

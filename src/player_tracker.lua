@@ -22,6 +22,7 @@ local function createPlayerData()
 		predictedOrigin = nil,
 		aimPos = nil,
 		multipointPos = nil,
+		shotTime = nil,
 		confidence = nil,
 
 		-- Metadata
@@ -110,6 +111,9 @@ function PlayerTracker.Update(entity, predictionData)
 	end
 	if predictionData.multipointPos ~= nil then
 		data.multipointPos = predictionData.multipointPos
+	end
+	if predictionData.shotTime ~= nil then
+		data.shotTime = predictionData.shotTime
 	end
 	if predictionData.confidence ~= nil then
 		data.confidence = predictionData.confidence
