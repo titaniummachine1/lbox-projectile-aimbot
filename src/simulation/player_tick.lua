@@ -272,15 +272,40 @@ end
 function PlayerTick.simulateTick(playerCtx, simCtx)
 	assert(playerCtx, "PlayerTick: playerCtx is nil")
 	assert(simCtx, "PlayerTick: simCtx is nil")
+	assert(
+		playerCtx.velocity and playerCtx.origin and playerCtx.mins and playerCtx.maxs,
+		"PlayerTick: invalid playerCtx"
+	)
+	assert(playerCtx.entity and playerCtx.index and playerCtx.maxspeed, "PlayerTick: invalid playerCtx")
+	assert(simCtx.tickinterval and simCtx.sv_gravity, "PlayerTick: invalid simCtx")
+	assert(
+		simCtx.sv_friction and simCtx.sv_stopspeed and simCtx.sv_accelerate and simCtx.sv_airaccelerate,
+		"PlayerTick: invalid simCtx"
+	)
 
 	local tickinterval = simCtx.tickinterval
-	local wishdir = Vector3(0, 0, 0)
+	local rawWishdir = Vector3(0, 0, 0)
 	local horizLen = playerCtx.velocity:Length2D()
 	if horizLen > 0.001 then
-		wishdir = Vector3(playerCtx.velocity.x / horizLen, playerCtx.velocity.y / horizLen, 0)
+		rawWishdir = Vector3(playerCtx.velocity.x / horizLen, playerCtx.velocity.y / horizLen, 0)
 	end
 
 	local is_on_ground = checkIsOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.index)
+	local wishdir = rawWishdir
+	if is_on_ground then
+		if horizLen > 0.001 then
+			playerCtx.wishdir = rawWishdir
+		else
+			playerCtx.wishdir = Vector3(0, 0, 0)
+		end
+	else
+		local cachedWishdir = playerCtx.wishdir
+		if cachedWishdir and cachedWishdir:Length2D() > 0.001 then
+			wishdir = cachedWishdir
+		elseif horizLen > 0.001 then
+			playerCtx.wishdir = rawWishdir
+		end
+	end
 
 	friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
 
