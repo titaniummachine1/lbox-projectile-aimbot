@@ -220,7 +220,6 @@ local function filterPathByTime(path, timetable, nowTime, maxAbsTime)
 		return path
 	end
 
-	local out = {}
 	local minKeep = nowTime - 0.1
 	local maxKeep = nil
 	if type(maxAbsTime) == "number" then
@@ -237,16 +236,29 @@ local function filterPathByTime(path, timetable, nowTime, maxAbsTime)
 			end
 		end
 	end
+	local firstKeep = nil
+	local lastKeep = nil
 	for i = 1, #timetable do
 		local t = timetable[i]
 		if t and t >= minKeep and (not maxKeep or t <= maxKeep) then
-			out[#out + 1] = path[i]
+			if not firstKeep then
+				firstKeep = i
+			end
+			lastKeep = i
 		end
 	end
 
-	if #out >= 1 then
-		return out
+	if firstKeep and lastKeep then
+		local startIdx = math.max(1, firstKeep - 1)
+		local out = {}
+		for i = startIdx, lastKeep do
+			out[#out + 1] = path[i]
+		end
+		if #out >= 2 then
+			return out
+		end
 	end
+
 	return path
 end
 
@@ -636,7 +648,7 @@ function Visuals.draw(state)
 	local targetPos = predictedOrigin or lastVec(playerPath) or currentOrigin
 
 	-- Draw player path
-	if vis.DrawPlayerPath and playerPath and #playerPath > 0 then
+	if vis.DrawPlayerPath and playerPath and #playerPath > 1 then
 		local r, g, b, a = getColor(vis, "PlayerPath", 180)
 		draw.Color(r, g, b, a)
 		if currentOrigin then
