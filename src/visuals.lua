@@ -215,6 +215,25 @@ local function lastVec(tbl)
 	return tbl[#tbl]
 end
 
+local function filterPathByTime(path, timetable, nowTime)
+	if not path or #path < 2 or not timetable or #timetable ~= #path then
+		return path
+	end
+
+	local out = {}
+	for i = 1, #timetable do
+		local t = timetable[i]
+		if t and t >= nowTime then
+			out[#out + 1] = path[i]
+		end
+	end
+
+	if #out >= 2 then
+		return out
+	end
+	return path
+end
+
 local function drawMultipointTarget(texture, pos, thickness)
 	if not pos then
 		return
@@ -383,22 +402,10 @@ local function drawPlayerHitbox(texture, playerPos, targetMinHull, targetMaxHull
 		{ 4, 8, "right", "back" },
 	}
 
-	local faces = buildBoxFaces(worldMins, worldMaxs)
-	local facesVisible = {}
-	for _, face in ipairs(faces) do
-		facesVisible[face.id] = isFaceVisible(face.normal, face.center, eyePos)
-	end
-
 	for _, edge in ipairs(edges) do
 		local a = projected[edge[1]]
 		local b = projected[edge[2]]
-		local faceA = edge[3]
-		local faceB = edge[4]
-
-		local visibleA = facesVisible[faceA]
-		local visibleB = facesVisible[faceB]
-
-		if a and b and (visibleA or visibleB) then
+		if a and b then
 			drawLine(texture, a, b, thickness)
 		end
 	end
@@ -598,26 +605,49 @@ function Visuals.draw(state)
 	-- Get target info from state
 	local playerPath = state and state.path
 	local projPath = state and state.projpath
+	local playerTime = state and state.timetable
+	local projTime = state and state.projtimetable
+	local predictedOrigin = state and state.predictedOrigin
+	local aimPos = state and state.aimPos
 	local multipointPos = state and state.multipointPos
 	local targetEntity = state and state.target
 	-- Determine a best-effort target position for rendering boxes/quads even if paths are missing
-	local targetPos = lastVec(playerPath)
-		or (targetEntity and targetEntity.GetAbsOrigin and targetEntity:GetAbsOrigin() or nil)
+	local curTime = (globals and globals.CurTime and globals.CurTime()) or 0
+	playerPath = filterPathByTime(playerPath, playerTime, curTime)
+	projPath = filterPathByTime(projPath, projTime, curTime)
+	local currentOrigin = (targetEntity and targetEntity.GetAbsOrigin and targetEntity:GetAbsOrigin()) or nil
+	local targetPos = predictedOrigin or lastVec(playerPath) or currentOrigin
 
 	-- Draw player path
 	if vis.DrawPlayerPath and playerPath and #playerPath > 0 then
 		local r, g, b, a = getColor(vis, "PlayerPath", 180)
 		draw.Color(r, g, b, a)
-		drawPlayerPath(texture, playerPath, vis.Thickness.PlayerPath)
+		if currentOrigin then
+			local last = client.WorldToScreen(currentOrigin)
+			if last then
+				for i = 1, #playerPath do
+					local current = client.WorldToScreen(playerPath[i])
+					if current and last then
+						drawLine(texture, last, current, vis.Thickness.PlayerPath)
+					end
+					last = current
+				end
+			else
+				drawPlayerPath(texture, playerPath, vis.Thickness.PlayerPath)
+			end
+		else
+			drawPlayerPath(texture, playerPath, vis.Thickness.PlayerPath)
+		end
 	end
 
 	-- Draw bounding box
-	if vis.DrawBoundingBox and targetPos and targetEntity and eyePos then
+	local boxOrigin = currentOrigin or targetPos
+	if vis.DrawBoundingBox and boxOrigin and targetEntity and eyePos then
 		local r, g, b, a = getColor(vis, "BoundingBox", 120)
 		draw.Color(r, g, b, a)
 		drawPlayerHitbox(
 			texture,
-			targetPos,
+			boxOrigin,
 			targetEntity:GetMins(),
 			targetEntity:GetMaxs(),
 			eyePos,
@@ -643,11 +673,12 @@ function Visuals.draw(state)
 	end
 
 	-- Draw multipoint target
-	if vis.DrawBoundingBox and vis.DrawMultipointTarget then
+	if vis.DrawMultipointTarget then
 		local r, g, b, a = getColor(vis, "MultipointTarget", 0)
 		draw.Color(r, g, b, a)
-		if multipointPos then
-			drawMultipointTarget(texture, multipointPos, vis.Thickness.MultipointTarget)
+		local markPos = multipointPos or aimPos
+		if markPos then
+			drawMultipointTarget(texture, markPos, vis.Thickness.MultipointTarget)
 		end
 		if dbgToDraw then
 			drawMultipointDebug(texture, vis.Thickness.MultipointTarget * 0.5, dbgToDraw)
@@ -655,11 +686,11 @@ function Visuals.draw(state)
 	end
 
 	-- Draw quads
-	if vis.DrawQuads and targetPos and targetEntity and eyePos then
+	if vis.DrawQuads and boxOrigin and targetEntity and eyePos then
 		local r, g, b, a = getColor(vis, "Quads", 240, 25)
 		local baseColor = { r = r, g = g, b = b, a = a }
 
-		drawQuads(texture, targetPos, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, baseColor)
+		drawQuads(texture, boxOrigin, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, baseColor)
 	end
 
 	-- Draw impact/last projectile point for quick visibility when path is short

@@ -363,6 +363,10 @@ local function onDraw()
 		visualState = {
 			path = bestData.path,
 			projpath = bestData.projpath,
+			timetable = bestData.timetable,
+			projtimetable = bestData.projtimetable,
+			predictedOrigin = bestData.predictedOrigin,
+			aimPos = bestData.aimPos,
 			multipointPos = bestData.multipointPos,
 			target = bestData.entity,
 		}
@@ -1114,6 +1118,7 @@ local function onCreateMove(cmd)
 			break
 		end
 
+		local predictedOrigin = lastPos
 		local drop = 0.5 * gravity * flightTime * flightTime
 
 		-- TODO: Deep integration - Apply strafe prediction to each simulation tick
@@ -1194,7 +1199,7 @@ local function onCreateMove(cmd)
 				local projSimTime = flightTime + (tickInterval * 2)
 				local projpath, hit, fullSim, projtimetable = SimulateProj(
 					entity,
-					lastPos,
+					predictedOrigin,
 					firePos,
 					translatedAngle,
 					info,
@@ -1231,6 +1236,8 @@ local function onCreateMove(cmd)
 							projpath = projpath,
 							timetable = timetable,
 							projtimetable = projtimetable,
+							predictedOrigin = predictedOrigin,
+							aimPos = lastPos,
 							multipointPos = multipointPos,
 							confidence = confidence,
 						})

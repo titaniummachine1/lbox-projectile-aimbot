@@ -19,6 +19,8 @@ local function createPlayerData()
 		projpath = nil,
 		timetable = nil,
 		projtimetable = nil,
+		predictedOrigin = nil,
+		aimPos = nil,
 		multipointPos = nil,
 		confidence = nil,
 
@@ -92,6 +94,8 @@ function PlayerTracker.Update(entity, predictionData)
 	data.projpath = predictionData.projpath
 	data.timetable = predictionData.timetable
 	data.projtimetable = predictionData.projtimetable
+	data.predictedOrigin = predictionData.predictedOrigin
+	data.aimPos = predictionData.aimPos
 	data.multipointPos = predictionData.multipointPos
 	data.confidence = predictionData.confidence
 
