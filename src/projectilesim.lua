@@ -286,6 +286,8 @@ local function Run(target, targetPredictedPos, startPos, angle, info, localTeam,
 	assert(localTeam, "projectilesim: localTeam is nil")
 	assert(time_seconds, "projectilesim: time_seconds is nil")
 
+	time_seconds = math.max(0.0, math.min(5.0, time_seconds))
+
 	local projpath = {}
 	local hit = nil
 	local timetable = {}

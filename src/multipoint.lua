@@ -250,23 +250,10 @@ local function getAABBCorners(targetPos, mins, maxs)
 end
 
 ---Check if a point can be shot at (visibility + projectile path clear)
-local function createCanShootAt(
-	pLocal,
-	pTarget,
-	pWeapon,
-	weaponInfo,
-	viewPos,
-	speed,
-	gravity,
-	hullMins,
-	hullMaxs,
-	traceMask
-)
+local function createCanShootAt(pLocal, pTarget, firePos, speed, gravity, hullMins, hullMaxs, traceMask)
 	assert(pLocal, "createCanShootAt: missing pLocal")
 	assert(pTarget, "createCanShootAt: missing pTarget")
-	assert(pWeapon, "createCanShootAt: missing pWeapon")
-	assert(weaponInfo, "createCanShootAt: missing weaponInfo")
-	assert(viewPos, "createCanShootAt: missing viewPos")
+	assert(firePos, "createCanShootAt: missing firePos")
 	assert(type(speed) == "number", "createCanShootAt: speed must be number")
 	assert(type(gravity) == "number", "createCanShootAt: gravity must be number")
 	assert(hullMins, "createCanShootAt: missing hullMins")
@@ -277,13 +264,6 @@ local function createCanShootAt(
 	assert(pLocalIndex, "createCanShootAt: pLocal:GetIndex() returned nil")
 	local pTargetIndex = pTarget:GetIndex()
 	assert(pTargetIndex, "createCanShootAt: pTarget:GetIndex() returned nil")
-
-	local weaponDefIndex = pWeapon:GetPropInt("m_iItemDefinitionIndex")
-	assert(weaponDefIndex, "createCanShootAt: pWeapon:GetPropInt('m_iItemDefinitionIndex') returned nil")
-
-	local isFlipped = pWeapon.IsViewModelFlipped and pWeapon:IsViewModelFlipped() or false
-	local isDucking = (pLocal:GetPropInt("m_fFlags") & FL_DUCKING) ~= 0
-	local weaponOffset = WeaponOffsets.getOffset(weaponDefIndex, isDucking, isFlipped)
 
 	local function shouldHitEntity(ent, contentsMask)
 		if not ent then
@@ -304,49 +284,9 @@ local function createCanShootAt(
 	return function(targetPoint)
 		assert(targetPoint, "canShootAt: missing targetPoint")
 
-		local aimAngle = utils.math.SolveBallisticArc(viewPos, targetPoint, speed, gravity)
+		local aimAngle = utils.math.SolveBallisticArc(firePos, targetPoint, speed, gravity)
 		if not aimAngle then
 			return false
-		end
-
-		local function computeFirePos(testAngle)
-			if weaponOffset then
-				local offsetPos = viewPos
-					+ (testAngle:Forward() * weaponOffset.x)
-					+ (testAngle:Right() * weaponOffset.y)
-					+ (testAngle:Up() * weaponOffset.z)
-				local resultTrace =
-					engine.TraceHull(viewPos, offsetPos, -Vector3(8, 8, 8), Vector3(8, 8, 8), MASK_SHOT_HULL)
-				if not resultTrace or resultTrace.startsolid then
-					return nil
-				end
-				return resultTrace.endpos
-			end
-
-			return weaponInfo:GetFirePosition(pLocal, viewPos, testAngle, isFlipped)
-		end
-
-		local firePos = computeFirePos(aimAngle)
-		if not firePos then
-			return false
-		end
-
-		local translatedAngle = utils.math.SolveBallisticArc(firePos, targetPoint, speed, gravity)
-		if not translatedAngle then
-			return false
-		end
-
-		firePos = computeFirePos(translatedAngle)
-		if not firePos then
-			return false
-		end
-
-		local finalAngle = utils.math.SolveBallisticArc(firePos, targetPoint, speed, gravity)
-		if finalAngle then
-			local finalFirePos = computeFirePos(finalAngle)
-			if finalFirePos then
-				firePos = finalFirePos
-			end
 		end
 
 		local trace
@@ -640,8 +580,6 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local hullMaxs = weaponInfo.m_vecMaxs or Vector3(0, 0, 0)
 	local traceMask = weaponInfo.m_iTraceMask or MASK_SHOT
 	local hullSize = math.max(hullMaxs.x, hullMaxs.y, hullMaxs.z)
-	local canShootAtPoint =
-		createCanShootAt(pLocal, pTarget, pWeapon, weaponInfo, vHeadPos, speed, gravity, hullMins, hullMaxs, traceMask)
 
 	local referenceShootPos = vHeadPos
 	local centerAimAngle = utils.math.SolveBallisticArc(vHeadPos, aabbCenter, speed, gravity)
@@ -688,6 +626,9 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 			referenceShootPos = referenceFirePos
 		end
 	end
+
+	local canShootAtPoint =
+		createCanShootAt(pLocal, pTarget, referenceShootPos, speed, gravity, hullMins, hullMaxs, traceMask)
 
 	-- Find furthest corner to exclude
 	local furthestIdx = findFurthestCorner(corners, referenceShootPos)
@@ -941,8 +882,7 @@ function multipoint.CanShootAnyCornerNow(pTarget, pWeapon, weaponInfo, vHeadPos,
 	local hullMaxs = weaponInfo.m_vecMaxs or Vector3(0, 0, 0)
 	local traceMask = weaponInfo.m_iTraceMask or MASK_SHOT
 
-	local canShootAtPoint =
-		createCanShootAt(pLocal, pTarget, pWeapon, weaponInfo, vHeadPos, speed, gravity, hullMins, hullMaxs, traceMask)
+	local canShootAtPoint = createCanShootAt(pLocal, pTarget, vHeadPos, speed, gravity, hullMins, hullMaxs, traceMask)
 
 	for i = 1, 8 do
 		if canShootAtPoint(corners[i]) then

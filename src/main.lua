@@ -968,61 +968,147 @@ local function onCreateMove(cmd)
 		local distance = (entityCenter - localPos):Length()
 		local outgoingLatency = netchannel:GetLatency(E_Flows.FLOW_OUTGOING) or 0
 		local lerp = Latency.getLerpTime()
+		local maxFlightTime = 5.0
 		local flightTime = utils.math.EstimateTravelTime(aimEyePos, entityCenter, speed)
 		if (not flightTime) or flightTime <= 0 then
 			flightTime = distance / speed
 		end
-		flightTime = math.max(0.0, math.min(5.0, flightTime))
+		flightTime = math.max(0.0, math.min(maxFlightTime, flightTime))
 		local totalTime = outgoingLatency + lerp + flightTime
 		local lazyness = cfg.MinAccuracy
 			+ (cfg.MaxAccuracy - cfg.MinAccuracy) * (math.min(distance / cfg.MaxDistance, 1.0) ^ 1.5)
 
 		local path, lastPos, timetable
 		local angle = nil
-		local maxSolveIterations = 2
 		local flipDecided = false
-		for _ = 1, maxSolveIterations do
-			if entity.IsPlayer and entity:IsPlayer() then
-				TickProfiler.BeginSection("CM:SimPlayer")
-				local simCtx = PredictionContext.createContext()
-				assert(simCtx and simCtx.sv_gravity and simCtx.tickinterval, "Main: createContext failed")
+		local simStartTime = globals.CurTime()
+		local isPlayer = entity.IsPlayer and entity:IsPlayer()
+		if isPlayer then
+			TickProfiler.BeginSection("CM:SimPlayer")
+			local simCtx = PredictionContext.createContext()
+			assert(simCtx and simCtx.sv_gravity and simCtx.tickinterval, "Main: createContext failed")
+			simStartTime = simCtx.curtime
 
-				local playerCtx = PredictionContext.createPlayerContext(entity, lazyness)
-				assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
+			local playerCtx = PredictionContext.createPlayerContext(entity, lazyness)
+			assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
 
-				path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, totalTime)
-				TickProfiler.EndSection("CM:SimPlayer")
+			local maxTotalTime = outgoingLatency + lerp + maxFlightTime
+			maxTotalTime = math.max(0.0, math.min(6.0, maxTotalTime))
+			path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, maxTotalTime)
+			TickProfiler.EndSection("CM:SimPlayer")
 
-				assert(path, "Main: SimulatePlayer returned nil path")
-				assert(lastPos, "Main: SimulatePlayer returned nil lastPos")
-				assert(#path > 0, "Main: SimulatePlayer returned empty path")
-			else
-				path = { entityCenter }
-				lastPos = entityCenter
-				timetable = { 0 }
+			assert(path, "Main: SimulatePlayer returned nil path")
+			assert(lastPos, "Main: SimulatePlayer returned nil lastPos")
+			assert(#path > 0, "Main: SimulatePlayer returned empty path")
+		else
+			path = { entityCenter }
+			lastPos = entityCenter
+			timetable = { simStartTime }
+		end
+
+		local function posAtTotalTime(total)
+			if not (path and timetable) then
+				return lastPos
 			end
-			if (not flipDecided) and lastPos then
-				autoFlipViewmodelsIfNeeded(lastPos)
-				flipDecided = true
+			local timeAbs = simStartTime + total
+			for i = #timetable, 1, -1 do
+				local t = timetable[i]
+				if t and t <= timeAbs then
+					return path[i]
+				end
 			end
+			return path[1] or lastPos
+		end
 
-			TickProfiler.BeginSection("CM:Ballistics")
-			angle = utils.math.SolveBallisticArc(aimEyePos, lastPos, speed, gravity)
-			TickProfiler.EndSection("CM:Ballistics")
-			if not angle then
-				break
+		local rocketIdx = nil
+		if isPlayer and timetable and path then
+			for i = 1, #path do
+				local t = timetable[i]
+				if t then
+					local totalCandidate = t - simStartTime
+					local flightCandidate = totalCandidate - outgoingLatency - lerp
+					if flightCandidate >= 0 and flightCandidate <= maxFlightTime then
+						local dx = (path[i] - aimEyePos):Length2D()
+						if (speed * flightCandidate) >= dx then
+							rocketIdx = i
+							break
+						end
+					end
+				end
 			end
+		end
 
-			local solvedFlight = utils.math.GetBallisticFlightTime(aimEyePos, lastPos, speed, gravity)
-			if (not solvedFlight) or solvedFlight <= 0 then
-				solvedFlight = utils.math.EstimateTravelTime(aimEyePos, lastPos, speed)
-			end
-			if (not solvedFlight) or solvedFlight <= 0 then
-				break
-			end
-
-			flightTime = math.max(0.0, math.min(5.0, solvedFlight))
+		if rocketIdx then
+			local totalCandidate = (timetable[rocketIdx] - simStartTime)
+			local flightCandidate = totalCandidate - outgoingLatency - lerp
+			flightTime = math.max(0.0, math.min(maxFlightTime, flightCandidate))
 			totalTime = outgoingLatency + lerp + flightTime
+		end
+
+		local bestFlightTime = flightTime
+		local bestTotalTime = totalTime
+		local bestPos = lastPos
+		local bestAngle = nil
+
+		local maxPathIdx = (timetable and #timetable) or 1
+		for attempt = 1, 3 do
+			local attemptFlight = flightTime
+			if rocketIdx then
+				local useIdx = math.min(maxPathIdx, rocketIdx + (attempt - 1))
+				local totalCandidate = (timetable[useIdx] - simStartTime)
+				attemptFlight = totalCandidate - outgoingLatency - lerp
+			end
+			attemptFlight = math.max(0.0, math.min(maxFlightTime, attemptFlight))
+			local attemptTotal = outgoingLatency + lerp + attemptFlight
+
+			local curFlight = attemptFlight
+			local curTotal = attemptTotal
+			local curPos = nil
+			local curAngle = nil
+
+			for _ = 1, 2 do
+				curPos = isPlayer and posAtTotalTime(curTotal) or entityCenter
+				if (not flipDecided) and curPos then
+					autoFlipViewmodelsIfNeeded(curPos)
+					flipDecided = true
+				end
+
+				TickProfiler.BeginSection("CM:Ballistics")
+				curAngle = utils.math.SolveBallisticArc(aimEyePos, curPos, speed, gravity)
+				TickProfiler.EndSection("CM:Ballistics")
+				if not curAngle then
+					break
+				end
+
+				local solvedFlight = utils.math.GetBallisticFlightTime(aimEyePos, curPos, speed, gravity)
+				if (not solvedFlight) or solvedFlight <= 0 then
+					solvedFlight = utils.math.EstimateTravelTime(aimEyePos, curPos, speed)
+				end
+				if (not solvedFlight) or solvedFlight <= 0 then
+					curAngle = nil
+					break
+				end
+
+				curFlight = math.max(0.0, math.min(maxFlightTime, solvedFlight))
+				curTotal = outgoingLatency + lerp + curFlight
+			end
+
+			if curAngle then
+				bestFlightTime = curFlight
+				bestTotalTime = curTotal
+				bestPos = curPos
+				bestAngle = curAngle
+				break
+			end
+		end
+
+		if bestAngle then
+			flightTime = bestFlightTime
+			totalTime = bestTotalTime
+			lastPos = bestPos
+			angle = bestAngle
+		else
+			angle = nil
 		end
 
 		if not angle then
