@@ -284,19 +284,13 @@ local function drawMultipointTarget(texture, pos, thickness)
 	end
 
 	local tex = texture or getWhiteTexture()
-	local s = thickness
-	local verts = {
-		{ screen[1] - s, screen[2] - s, 0, 0 },
-		{ screen[1] + s, screen[2] - s, 1, 0 },
-		{ screen[1] + s, screen[2] + s, 1, 1 },
-		{ screen[1] - s, screen[2] + s, 0, 1 },
-	}
+	local s = math.max(4, (thickness or 1) * 2)
+	local t = math.max(1, (thickness or 1) * 0.75)
+	local x = screen[1]
+	local y = screen[2]
 
-	if tex then
-		draw.TexturedPolygon(tex, verts, false)
-	else
-		draw.FilledRect(screen[1] - s, screen[2] - s, screen[1] + s, screen[2] + s)
-	end
+	drawLine(tex, { x - s, y }, { x + s, y }, t)
+	drawLine(tex, { x, y - s }, { x, y + s }, t)
 end
 
 local function drawMultipointDebug(texture, thickness, dbgOverride)
@@ -625,6 +619,25 @@ function Visuals.draw(state)
 		return
 	end
 
+	local alphaMul = 1.0
+	local fadeOut = vis.FadeOutDuration
+	if type(fadeOut) ~= "number" then
+		fadeOut = 0
+	end
+	if fadeOut > 0 then
+		local now = (globals and globals.RealTime and globals.RealTime()) or 0
+		local lastUpdate = state and state.lastUpdateTime
+		if type(lastUpdate) == "number" and lastUpdate > 0 then
+			local age = now - lastUpdate
+			if age > 0 then
+				alphaMul = math.max(0.0, math.min(1.0, 1.0 - (age / fadeOut)))
+			end
+		end
+	end
+	if alphaMul <= 0 then
+		return
+	end
+
 	-- Create texture if needed (fallback to no-op if creation fails)
 	local texture = getWhiteTexture()
 
@@ -661,6 +674,7 @@ function Visuals.draw(state)
 	-- Draw player path
 	if vis.DrawPlayerPath and playerPath and #playerPath > 1 then
 		local r, g, b, a = getColor(vis, "PlayerPath", 180)
+		a = math.floor(a * alphaMul)
 		draw.Color(r, g, b, a)
 		if currentOrigin then
 			local lastWorld = currentOrigin
@@ -693,6 +707,7 @@ function Visuals.draw(state)
 	local boxOrigin = predictedOrigin or currentOrigin or targetPos
 	if vis.DrawBoundingBox and boxOrigin and targetEntity and eyePos then
 		local r, g, b, a = getColor(vis, "BoundingBox", 120)
+		a = math.floor(a * alphaMul)
 		draw.Color(r, g, b, a)
 		drawPlayerHitbox(
 			texture,
@@ -707,11 +722,12 @@ function Visuals.draw(state)
 	-- Draw projectile path
 	if vis.DrawProjectilePath and projPath and #projPath > 0 then
 		local r, g, b, a = getColor(vis, "ProjectilePath", 60)
+		a = math.floor(a * alphaMul)
 		draw.Color(r, g, b, a)
 		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath)
 	end
 
-	local debugDuration = vis.MultipointDebugDuration or 0
+	local debugDuration = (vis.ShowMultipointDebug and (vis.MultipointDebugDuration or 0)) or 0
 	local dbgToDraw = nil
 	if debugDuration > 0 and multipoint and multipoint.debugPersist and multipoint.debugPersist.state then
 		local now = (globals and globals.RealTime and globals.RealTime()) or 0
@@ -724,6 +740,7 @@ function Visuals.draw(state)
 	-- Draw multipoint target
 	if vis.DrawMultipointTarget then
 		local r, g, b, a = getColor(vis, "MultipointTarget", 0)
+		a = math.floor(a * alphaMul)
 		draw.Color(r, g, b, a)
 		local markPos = aimPos or multipointPos
 		if markPos then
@@ -737,6 +754,7 @@ function Visuals.draw(state)
 	-- Draw quads
 	if vis.DrawQuads and boxOrigin and targetEntity and eyePos then
 		local r, g, b, a = getColor(vis, "Quads", 240, 25)
+		a = math.floor(a * alphaMul)
 		local baseColor = { r = r, g = g, b = b, a = a }
 
 		drawQuads(texture, boxOrigin, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, baseColor)
@@ -746,6 +764,7 @@ function Visuals.draw(state)
 	if vis.DrawProjectilePath and projPath and #projPath >= 1 then
 		local impactPos = projPath[#projPath]
 		local r, g, b, a = getColor(vis, "ProjectilePath", 60)
+		a = math.floor(a * alphaMul)
 		draw.Color(r, g, b, a)
 		drawImpactDot(texture, impactPos, vis.Thickness.ProjectilePath * 2)
 	end

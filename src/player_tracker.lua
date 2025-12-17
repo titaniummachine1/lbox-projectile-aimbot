@@ -27,6 +27,7 @@ local function createPlayerData()
 
 		-- Metadata
 		lastUpdateTick = 0,
+		lastUpdateTime = 0,
 		entity = nil,
 	}
 end
@@ -89,6 +90,7 @@ function PlayerTracker.Update(entity, predictionData)
 
 	local data = PlayerTracker.GetOrCreate(entity)
 	local currentTick = globals.TickCount()
+	local now = (globals and globals.RealTime and globals.RealTime()) or 0
 
 	-- Update visual data
 	if predictionData.path ~= nil then
@@ -121,6 +123,7 @@ function PlayerTracker.Update(entity, predictionData)
 
 	-- Update metadata
 	data.lastUpdateTick = currentTick
+	data.lastUpdateTime = now
 	data.entity = entity
 end
 

@@ -129,16 +129,19 @@ local function drawMenu()
 		vis.ShowProfiler = TimMenu.Checkbox("Profiler", vis.ShowProfiler)
 		TimMenu.NextLine()
 
-		vis.DrawPlayerPath = TimMenu.Checkbox("Player Path", vis.DrawPlayerPath)
-		TimMenu.NextLine()
-
-		vis.DrawProjectilePath = TimMenu.Checkbox("Projectile Path", vis.DrawProjectilePath)
-		TimMenu.NextLine()
-
-		vis.DrawBoundingBox = TimMenu.Checkbox("Bounding Box", vis.DrawBoundingBox)
-		TimMenu.NextLine()
-
-		vis.DrawMultipointTarget = TimMenu.Checkbox("Multipoint", vis.DrawMultipointTarget)
+		local selectedElements = {
+			vis.DrawPlayerPath and true or false,
+			vis.DrawProjectilePath and true or false,
+			vis.DrawBoundingBox and true or false,
+			vis.DrawMultipointTarget and true or false,
+			vis.DrawQuads and true or false,
+		}
+		selectedElements = TimMenu.Combo("Elements", selectedElements, VISUAL_ELEMENT_OPTIONS)
+		vis.DrawPlayerPath = selectedElements[1] and true or false
+		vis.DrawProjectilePath = selectedElements[2] and true or false
+		vis.DrawBoundingBox = selectedElements[3] and true or false
+		vis.DrawMultipointTarget = selectedElements[4] and true or false
+		vis.DrawQuads = selectedElements[5] and true or false
 		TimMenu.NextLine()
 
 		vis.ShowMultipointDebug = TimMenu.Checkbox("Multipoint Debug", vis.ShowMultipointDebug)
@@ -147,8 +150,6 @@ local function drawMenu()
 			vis.MultipointDebugDuration = TimMenu.Slider("Debug Fade", vis.MultipointDebugDuration or 1.0, 0, 5, 0.1)
 			TimMenu.NextLine()
 		end
-
-		vis.DrawQuads = TimMenu.Checkbox("Quads", vis.DrawQuads)
 		TimMenu.EndSector()
 
 		TimMenu.BeginSector("Colors")

@@ -368,6 +368,7 @@ local function onDraw()
 			predictedOrigin = bestData.predictedOrigin,
 			aimPos = bestData.aimPos,
 			multipointPos = bestData.multipointPos,
+			lastUpdateTime = bestData.lastUpdateTime,
 			target = bestData.entity,
 		}
 	end

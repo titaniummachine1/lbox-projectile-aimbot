@@ -543,6 +543,8 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 		cfg = G.Config.Aimbot
 	end
 	local preferFeet = (cfg.PreferFeet == nil) or (cfg.PreferFeet == true)
+	local visCfg = (G and G.Menu and G.Menu.Visuals) or nil
+	local shouldDebug = visCfg and visCfg.ShowMultipointDebug == true
 
 	local pLocal = entities.GetLocalPlayer()
 	assert(pLocal, "multipoint.Run: entities.GetLocalPlayer() returned nil")
@@ -670,15 +672,16 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 		intersectPlaneValue = faceCenter.x
 	end
 
-	-- Store debug state for visuals
-	multipoint.debugState.corners = corners
-	multipoint.debugState.visibleCorners = visibleCorners
-	multipoint.debugState.aabbCenter = aabbCenter
-	multipoint.debugState.closestFace = closestFace
-	multipoint.debugState.faceCenter = faceCenter
-	multipoint.debugState.intersectPoint = intersectPoint
-	multipoint.debugState.intersectNormal = hitNormal
-	multipoint.debugState.searchPath = {}
+	if shouldDebug then
+		multipoint.debugState.corners = corners
+		multipoint.debugState.visibleCorners = visibleCorners
+		multipoint.debugState.aabbCenter = aabbCenter
+		multipoint.debugState.closestFace = closestFace
+		multipoint.debugState.faceCenter = faceCenter
+		multipoint.debugState.intersectPoint = intersectPoint
+		multipoint.debugState.intersectNormal = hitNormal
+		multipoint.debugState.searchPath = {}
+	end
 
 	-- Calculate target heights
 	local feetTargetZ = groundZ + PREFER_FEET_HEIGHT -- ~5 units above ground
@@ -691,23 +694,29 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 		local feetPoint = Vector3(intersectPoint.x, intersectPoint.y, feetTargetZ)
 		feetPointShootable = canShootAtPoint(feetPoint)
 		if feetPointShootable then
-			multipoint.debugState.bestPoint = feetPoint
-			table.insert(multipoint.debugState.searchPath, feetPoint)
-			persistDebugState(multipoint.debugState)
+			if shouldDebug then
+				multipoint.debugState.bestPoint = feetPoint
+				table.insert(multipoint.debugState.searchPath, feetPoint)
+				persistDebugState(multipoint.debugState)
+			end
 			return true, feetPoint
 		end
 	end
 
 	local intersectPointShootable = canShootAtPoint(intersectPoint)
 	if intersectPointShootable then
-		multipoint.debugState.bestPoint = intersectPoint
-		table.insert(multipoint.debugState.searchPath, intersectPoint)
-		persistDebugState(multipoint.debugState)
+		if shouldDebug then
+			multipoint.debugState.bestPoint = intersectPoint
+			table.insert(multipoint.debugState.searchPath, intersectPoint)
+			persistDebugState(multipoint.debugState)
+		end
 		return true, intersectPoint
 	end
 
 	if (not anyCornerShootable) and not feetPointShootable and not intersectPointShootable then
-		multipoint.debugState.bestPoint = nil
+		if shouldDebug then
+			multipoint.debugState.bestPoint = nil
+		end
 		return false, nil
 	end
 
@@ -834,17 +843,23 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	end
 
 	if not bestVerticalPoint then
-		multipoint.debugState.bestPoint = nil
+		if shouldDebug then
+			multipoint.debugState.bestPoint = nil
+		end
 		return false, nil
 	end
 
-	table.insert(multipoint.debugState.searchPath, bestVerticalPoint)
+	if shouldDebug then
+		table.insert(multipoint.debugState.searchPath, bestVerticalPoint)
+	end
 
 	local finalPoint = bestVerticalPoint
 
-	table.insert(multipoint.debugState.searchPath, finalPoint)
-	multipoint.debugState.bestPoint = finalPoint
-	persistDebugState(multipoint.debugState)
+	if shouldDebug then
+		table.insert(multipoint.debugState.searchPath, finalPoint)
+		multipoint.debugState.bestPoint = finalPoint
+		persistDebugState(multipoint.debugState)
+	end
 
 	return true, finalPoint
 end
