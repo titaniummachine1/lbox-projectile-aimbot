@@ -168,8 +168,11 @@ local function drawMenu()
 		vis.ColorsRGBA.PlayerPath =
 			TimMenu.ColorPicker("Player Path", vis.ColorsRGBA.PlayerPath or { 0, 255, 255, 255 })
 		TimMenu.NextLine()
-		vis.ColorsRGBA.ProjectilePath =
-			TimMenu.ColorPicker("Projectile Path", vis.ColorsRGBA.ProjectilePath or { 255, 255, 0, 255 })
+		vis.ColorsRGBA.ProjectilePathStart =
+			TimMenu.ColorPicker("Projectile Path Start", vis.ColorsRGBA.ProjectilePathStart or { 0, 255, 0, 255 })
+		TimMenu.NextLine()
+		vis.ColorsRGBA.ProjectilePathEnd =
+			TimMenu.ColorPicker("Projectile Path End", vis.ColorsRGBA.ProjectilePathEnd or { 255, 255, 0, 255 })
 		TimMenu.NextLine()
 		vis.ColorsRGBA.BoundingBox =
 			TimMenu.ColorPicker("Bounding Box", vis.ColorsRGBA.BoundingBox or { 0, 255, 0, 255 })

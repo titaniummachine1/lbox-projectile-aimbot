@@ -158,32 +158,36 @@ function ViewmodelManager.autoFlipIfNeeded(targetEntity, predictedPos, aimEyePos
 	local dirToTarget = predictedPos - aimEyePos
 	local corners = getAABBCorners(predictedPos, targetMins, targetMaxs)
 
-	-- Check current viewmodel state
+	-- Check default (non-flipped) viewmodel first
 	local currentFlipped = weapon:IsViewModelFlipped()
-	local currentFirePos = ViewmodelManager.computeFirePos(weaponDefIndex, isDucking, false, aimEyePos, dirToTarget)
-	local currentScore = currentFirePos and countShootableCorners(currentFirePos, corners, targetIndex, speed, gravity, hullMins, hullMaxs, traceMask, localIndex) or 0
 
-	-- If current state hits 6+ corners, don't bother checking flipped
-	if currentScore >= 6 then
-		return
-	end
+	local defaultFirePos = ViewmodelManager.computeFirePos(weaponDefIndex, isDucking, false, aimEyePos, dirToTarget)
+	local defaultScore = defaultFirePos and countShootableCorners(defaultFirePos, corners, targetIndex, speed, gravity, hullMins, hullMaxs, traceMask, localIndex) or 0
 
-	-- If current state hits <= 4 corners, check if flipped would be better
-	if currentScore <= 4 then
-		local flippedFirePos = ViewmodelManager.computeFirePos(weaponDefIndex, isDucking, true, aimEyePos, dirToTarget)
-		local flippedScore = flippedFirePos and countShootableCorners(flippedFirePos, corners, targetIndex, speed, gravity, hullMins, hullMaxs, traceMask, localIndex) or 0
-
-
-		-- Flip if flipped has more hits
-		if flippedScore > currentScore and not currentFlipped then
-			client.RemoveConVarProtection("cl_flipviewmodels")
-			client.SetConVar("cl_flipviewmodels", 1)
-			client.Command("cl_flipviewmodels 1", true)
-		elseif flippedScore <= currentScore and currentFlipped then
+	-- If default has 6+ corners, use it and don't check flipped
+	if defaultScore >= 6 then
+		if currentFlipped ~= false then
 			client.RemoveConVarProtection("cl_flipviewmodels")
 			client.SetConVar("cl_flipviewmodels", 0)
 			client.Command("cl_flipviewmodels 0", true)
 		end
+		autoFlipDecided = true
+		return
+	end
+
+	-- If default has <6 corners, check flipped and choose the better one
+	local flippedFirePos = ViewmodelManager.computeFirePos(weaponDefIndex, isDucking, true, aimEyePos, dirToTarget)
+	local flippedScore = flippedFirePos and countShootableCorners(flippedFirePos, corners, targetIndex, speed, gravity, hullMins, hullMaxs, traceMask, localIndex) or 0
+
+	-- Prefer default when scores are equal, only flip if flipped is strictly better
+	local shouldFlip = flippedScore > defaultScore
+	local desired = shouldFlip and 1 or 0
+
+	-- Only change if different from current state
+	if shouldFlip ~= currentFlipped then
+		client.RemoveConVarProtection("cl_flipviewmodels")
+		client.SetConVar("cl_flipviewmodels", desired)
+		client.Command("cl_flipviewmodels " .. tostring(desired), true)
 	end
 end
 

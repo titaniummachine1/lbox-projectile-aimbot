@@ -172,21 +172,36 @@ local function drawPlayerPath(texture, playerPath, thickness)
 	end
 end
 
-local function drawProjPath(texture, projPath, thickness)
+local function drawProjPath(texture, projPath, thickness, startColor, endColor)
 	if not projPath or #projPath < 2 then
 		return
 	end
 
+	local pathLength = #projPath
 	local first = projPath[1]
 	local last = first and client.WorldToScreen(first)
 	if not last then
 		return
 	end
 
-	for i = 2, #projPath do
+	for i = 2, pathLength do
 		local entry = projPath[i]
 		local current = entry and client.WorldToScreen(entry)
 		if current and last then
+			-- Calculate gradient color based on position along path
+			local t = (i - 2) / (pathLength - 2) -- Position from 0 to 1 along the path
+			local r = math.floor(startColor[1] + (endColor[1] - startColor[1]) * t + 0.5)
+			local g = math.floor(startColor[2] + (endColor[2] - startColor[2]) * t + 0.5)
+			local b = math.floor(startColor[3] + (endColor[3] - startColor[3]) * t + 0.5)
+			local a = math.floor(startColor[4] + (endColor[4] - startColor[4]) * t + 0.5)
+
+			-- Ensure values are within valid range
+			r = math.max(0, math.min(255, r))
+			g = math.max(0, math.min(255, g))
+			b = math.max(0, math.min(255, b))
+			a = math.max(0, math.min(255, a))
+
+			draw.Color(r, g, b, a)
 			drawLine(texture, last, current, thickness)
 		end
 		last = current
@@ -721,10 +736,23 @@ function Visuals.draw(state)
 
 	-- Draw projectile path
 	if vis.DrawProjectilePath and projPath and #projPath > 0 then
-		local r, g, b, a = getColor(vis, "ProjectilePath", 60)
-		a = math.floor(a * alphaMul)
-		draw.Color(r, g, b, a)
-		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath)
+		local startR, startG, startB, startA = getColor(vis, "ProjectilePathStart", 60)
+		local endR, endG, endB, endA = getColor(vis, "ProjectilePathEnd", 60)
+		startA = math.floor(startA * alphaMul)
+		endA = math.floor(endA * alphaMul)
+		local startColor = {
+			math.floor(startR + 0.5),
+			math.floor(startG + 0.5),
+			math.floor(startB + 0.5),
+			startA
+		}
+		local endColor = {
+			math.floor(endR + 0.5),
+			math.floor(endG + 0.5),
+			math.floor(endB + 0.5),
+			endA
+		}
+		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath, startColor, endColor)
 	end
 
 	local debugDuration = (vis.ShowMultipointDebug and (vis.MultipointDebugDuration or 0)) or 0
