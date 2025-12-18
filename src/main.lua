@@ -864,7 +864,9 @@ local function onCreateMove(cmd)
 		if not ent then
 			entry.visible = false
 		elseif ent.IsPlayer and ent:IsPlayer() then
-			if entry.isTracked then
+			-- "for top n it does the canshoot check" -> top n is trackedCount
+			local isTopN = i <= trackedCount
+			if isTopN then
 				local idx = ent:GetIndex()
 				local cornerVisible = trackedCornerVisible[idx]
 				if cornerVisible == nil then
@@ -873,15 +875,14 @@ local function onCreateMove(cmd)
 				end
 				entry.visible = cornerVisible
 				if cornerVisible then
-					entry.score = (entry.score or 0) - 0.25
-				else
-					entry.score = (entry.score or 0) + 1.0
+					entry.score = (entry.score or 0) - 10.0 -- Visibility weight
 				end
 			else
+				-- "rest of n2 are done with simple visibility check to COM"
 				local comVisible = canSeeTargetCom(ent)
 				entry.visible = comVisible
 				if comVisible then
-					entry.score = (entry.score or 0) - 0.1
+					entry.score = (entry.score or 0) - 10.0 -- Visibility weight
 				end
 			end
 		else
@@ -889,11 +890,14 @@ local function onCreateMove(cmd)
 			local isVisible = traceHitsTarget(ent, entityCenter)
 			entry.visible = isVisible
 			if isVisible then
-				entry.score = (entry.score or 0) - 0.1
+				entry.score = (entry.score or 0) - 10.0 -- Visibility weight
 			end
 		end
 	end
 	TickProfiler.EndSection("CM:Visibility")
+
+	-- Third pass: Re-sort topK with visibility weights
+	table.sort(topK, scoreBetter)
 
 	local nextTracked = {}
 	local bestVisible = {}
@@ -928,9 +932,16 @@ local function onCreateMove(cmd)
 	end
 
 	local bestEntry = nil
+	local aimMode = cfg.AimMode or 0 -- 0=Legit, 1=Blatant
 	for i = 1, #topK do
 		local entry = topK[i]
-		if entry.visible then
+		if aimMode == 0 then -- Legit: Only visible targets
+			if entry.visible then
+				if (not bestEntry) or scoreBetter(entry, bestEntry) then
+					bestEntry = entry
+				end
+			end
+		else -- Blatant: Any target (visible preferred by score)
 			if (not bestEntry) or scoreBetter(entry, bestEntry) then
 				bestEntry = entry
 			end
@@ -1325,6 +1336,12 @@ local function onCreateMove(cmd)
 
 	-- If no angle calculated, nothing to do
 	if not state.angle then
+		TickProfiler.EndSection("CM:Total")
+		return
+	end
+
+	-- Draw Only mode: skip shooting, just update visuals
+	if cfg.DrawOnly then
 		TickProfiler.EndSection("CM:Total")
 		return
 	end

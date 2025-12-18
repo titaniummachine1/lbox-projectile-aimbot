@@ -13,6 +13,8 @@ local DefaultConfig = {
 		OnAttack = false, -- Activate when cmd has attack input (combines with mode)
 		AimFOV = 15,
 		AimMethod = "silent +", -- "silent +", "silent", "normal"
+		AimMode = 0, -- 0=Legit, 1=Blatant
+		DrawOnly = false, -- Visualize targeting without shooting
 		MaxDistance = 3000,
 		MaxSimTime = 3.0,
 		MinAccuracy = 2,

@@ -390,13 +390,10 @@ local function findClosestFace(corners, shootPos)
 end
 
 ---Binary search vertically to find shootable point, prioritizing feet or center
----@param shootPos Vector3
+---@param canShootAtPoint function
 ---@param topPoint Vector3
 ---@param bottomPoint Vector3
 ---@param targetZ number target Z height to aim for (feet or center)
----@param hullMins Vector3
----@param hullMaxs Vector3
----@param traceMask number
 ---@return Vector3? bestPoint
 ---@return boolean hitTarget true if we hit the targetZ height
 local function binarySearchVertical(canShootAtPoint, topPoint, bottomPoint, targetZ)
@@ -406,68 +403,49 @@ local function binarySearchVertical(canShootAtPoint, topPoint, bottomPoint, targ
 		return targetPoint, true
 	end
 
-	local bottomVisible = canShootAtPoint(bottomPoint)
-	local topVisible = canShootAtPoint(topPoint)
+	-- Find ANY visible point on the vertical line
+	local startPoint = nil
+	if canShootAtPoint(bottomPoint) then
+		startPoint = bottomPoint
+	elseif canShootAtPoint(topPoint) then
+		startPoint = topPoint
+	else
+		-- Sample more points to find any visible part of the player
+		for z = bottomPoint.z + 5, topPoint.z - 5, 8 do
+			local p = Vector3(bottomPoint.x, bottomPoint.y, z)
+			if canShootAtPoint(p) then
+				startPoint = p
+				break
+			end
+		end
+	end
 
-	if not bottomVisible and not topVisible then
+	if not startPoint then
 		return nil, false
 	end
 
-	if bottomVisible and topVisible then
-		if math.abs(bottomPoint.z - targetZ) <= math.abs(topPoint.z - targetZ) then
-			return bottomPoint, false
-		end
-		return topPoint, false
-	end
-
-	-- Binary search from visible end towards target
-	local best = nil
-	local low, high
-
-	if bottomVisible then
-		-- Search from bottom up towards target
-		low = bottomPoint
-		high = topPoint
-		best = bottomPoint
-	else
-		-- Search from top down towards target
-		low = bottomPoint
-		high = topPoint
-		best = topPoint
-	end
+	-- Binary search from the visible point towards the target Z height
+	local near = startPoint
+	local far = targetPoint
 
 	for _ = 1, BINARY_SEARCH_ITERATIONS do
-		local mid = (high + low) * 0.5
-
+		local mid = (near + far) * 0.5
 		if canShootAtPoint(mid) then
-			best = mid
-			-- Move toward target Z
-			if mid.z > targetZ then
-				high = mid -- Go lower
-			else
-				low = mid -- Go higher
-			end
+			near = mid
 		else
-			-- Move away from obstruction
-			if bottomVisible then
-				high = mid
-			else
-				low = mid
-			end
+			far = mid
 		end
 	end
 
-	local hitTarget = best and math.abs(best.z - targetZ) < 10
-	return best, hitTarget
+	local hitTarget = near and math.abs(near.z - targetZ) < 5
+	return near, hitTarget
 end
 
 ---Binary search horizontally towards center line of face
----@param shootPos Vector3
+---@param canShootAtPoint function
+---@param viewPos Vector3
 ---@param startPoint Vector3 point on the edge we found
 ---@param faceCenter Vector3 center of the face (target)
----@param hullMins Vector3
----@param hullMaxs Vector3
----@param traceMask number
 ---@param hullSize number projectile hull radius
 ---@return Vector3 bestPoint
 local function binarySearchHorizontal(canShootAtPoint, viewPos, startPoint, faceCenter, hullSize)
@@ -733,11 +711,12 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	end
 
 	local function isVerticalLineViable(coord)
-		local bottom = makeFacePoint(coord, groundZ)
-		local feet = makeFacePoint(coord, feetTargetZ)
-		local center = makeFacePoint(coord, centerTargetZ)
-		local top = makeFacePoint(coord, topZ)
-		return canShootAtPoint(bottom) or canShootAtPoint(feet) or canShootAtPoint(center) or canShootAtPoint(top)
+		for z = groundZ, topZ, 8 do
+			if canShootAtPoint(makeFacePoint(coord, z)) then
+				return true
+			end
+		end
+		return canShootAtPoint(makeFacePoint(coord, topZ))
 	end
 
 	local function tryFindClosestViableCoordToTarget(targetCoord, minCoord, maxCoord)

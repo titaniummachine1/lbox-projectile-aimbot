@@ -17,6 +17,7 @@ local Menu = {}
 
 -- Local constants / utilities -----
 local AIM_METHOD_OPTIONS = { "silent +", "silent", "normal" }
+local AIM_MODE_OPTIONS = { "Legit", "Blatant" }
 local VISUAL_ELEMENT_OPTIONS = { "Player Path", "Projectile Path", "Bounding Box", "Multipoint", "Quads" }
 
 -- Private helpers -----
@@ -72,6 +73,16 @@ local function drawMenu()
 
 		cfg.AimFOV = TimMenu.Slider("Aim FOV", cfg.AimFOV, 1, 180, 1)
 		TimMenu.Tooltip("Field of view in degrees for target selection")
+		TimMenu.NextLine()
+
+		local aimModeIndex = (cfg.AimMode or 0) + 1
+		aimModeIndex = TimMenu.Dropdown("Aim Mode", aimModeIndex, AIM_MODE_OPTIONS)
+		cfg.AimMode = aimModeIndex - 1
+		TimMenu.Tooltip("Legit=Visible only, Blatant=Shoot predictions regardless of visibility")
+		TimMenu.NextLine()
+
+		cfg.DrawOnly = TimMenu.Checkbox("Draw Only", cfg.DrawOnly or false)
+		TimMenu.Tooltip("Visualize targeting without shooting (for debugging)")
 		TimMenu.NextLine()
 
 		local aimMethodIndex = getAimMethodIndex(cfg.AimMethod)
