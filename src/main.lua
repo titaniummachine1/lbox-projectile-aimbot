@@ -508,11 +508,94 @@ local function onCreateMove(cmd)
 	end
 	local viewangle = engine.GetViewAngles()
 
-	local function autoFlipViewmodelsIfNeeded(targetPos)
+	-- Auto flip viewmodels will be handled after we have target + projectile info
+	local autoFlipDecided = false
+
+	local charge = info.m_bCharges and weapon:GetCurrentCharge() or 0.0
+	local speed = info:GetVelocity(charge):Length2D()
+	local _, sv_gravity = client.GetConVar("sv_gravity")
+	local gravityScale = 0
+	if info.HasGravity and info:HasGravity() then
+		gravityScale = info:GetGravity(charge) or 0
+	end
+	local gravity = (sv_gravity or 0) * gravityScale
+	local weaponID = weapon:GetWeaponID()
+
+	-- Projectile hull for traces
+	local hullMins = info.m_vecMins or Vector3(0, 0, 0)
+	local hullMaxs = info.m_vecMaxs or Vector3(0, 0, 0)
+	local traceMask = info.m_iTraceMask or MASK_SHOT
+	local hasHull = (hullMins:Length() > 0.01 or hullMaxs:Length() > 0.01)
+
+	---Get 8 corners of player AABB in world space
+	local function getAABBCorners(targetPos, mins, maxs)
+		local worldMins = targetPos + mins
+		local worldMaxs = targetPos + maxs
+		return {
+			Vector3(worldMins.x, worldMins.y, worldMins.z),
+			Vector3(worldMins.x, worldMaxs.y, worldMins.z),
+			Vector3(worldMaxs.x, worldMaxs.y, worldMins.z),
+			Vector3(worldMaxs.x, worldMins.y, worldMins.z),
+			Vector3(worldMins.x, worldMins.y, worldMaxs.z),
+			Vector3(worldMins.x, worldMaxs.y, worldMaxs.z),
+			Vector3(worldMaxs.x, worldMaxs.y, worldMaxs.z),
+			Vector3(worldMaxs.x, worldMins.y, worldMaxs.z),
+		}
+	end
+
+	---Count how many corners can be shot from a given fire position
+	local function countShootableCorners(firePos, corners, targetIndex)
+		if not firePos then
+			return 0
+		end
+
+		local function shouldHitEntity(ent, contentsMask)
+			if not ent then
+				return false
+			end
+			local idx = ent.GetIndex and ent:GetIndex() or nil
+			if idx == localIndex then
+				return false
+			end
+			if idx == targetIndex then
+				return true
+			end
+			return false
+		end
+
+		local count = 0
+		for i = 1, 8 do
+			local corner = corners[i]
+			local aimAngle = utils.math.SolveBallisticArc(firePos, corner, speed, gravity)
+			if aimAngle then
+				local trace
+				if hasHull then
+					trace = engine.TraceHull(firePos, corner, hullMins, hullMaxs, traceMask, shouldHitEntity)
+				else
+					trace = engine.TraceLine(firePos, corner, traceMask, shouldHitEntity)
+				end
+
+				if trace and not trace.startsolid and not trace.allsolid then
+					if trace.fraction > 0.999 then
+						count = count + 1
+					elseif trace.entity and trace.entity.GetIndex and trace.entity:GetIndex() == targetIndex then
+						count = count + 1
+					end
+				end
+			end
+		end
+		return count
+	end
+
+	---Auto flip viewmodels based on multipoint corner visibility
+	local function autoFlipViewmodelsIfNeeded(targetEntity, predictedPos)
+		if autoFlipDecided then
+			return
+		end
 		if not cfg.AutoFlipViewmodels then
 			return
 		end
-		if not targetPos then
+		if not targetEntity or not predictedPos then
 			return
 		end
 
@@ -521,13 +604,18 @@ local function onCreateMove(cmd)
 			return
 		end
 
-		local dirToTarget = targetPos - aimEyePos
-		local dirLen = dirToTarget:Length()
-		if (not dirLen) or dirLen < 0.001 then
+		local targetMins = targetEntity:GetMins()
+		local targetMaxs = targetEntity:GetMaxs()
+		if not (targetMins and targetMaxs) then
 			return
 		end
-		local dirNorm = Vector3(dirToTarget.x, dirToTarget.y, dirToTarget.z)
-		Normalize(dirNorm)
+
+		local targetIndex = targetEntity:GetIndex()
+		if not targetIndex then
+			return
+		end
+
+		local corners = getAABBCorners(predictedPos, targetMins, targetMaxs)
 
 		local isDucking = false
 		do
@@ -539,7 +627,8 @@ local function onCreateMove(cmd)
 			end
 		end
 
-		local function computeMuzzlePos(isFlipped)
+		local dirToTarget = predictedPos - aimEyePos
+		local function computeFirePos(isFlipped)
 			local offset = WeaponOffsets.getOffset(weaponDefIndex, isDucking, isFlipped)
 			if not offset then
 				return aimEyePos
@@ -553,45 +642,35 @@ local function onCreateMove(cmd)
 			return trace.endpos
 		end
 
-		local function measureClearance(muzzlePos)
-			if not muzzlePos then
-				return 0
-			end
-			local endPos = muzzlePos + (dirNorm * 200)
-			local trace = engine.TraceLine(muzzlePos, endPos, MASK_SHOT_HULL)
-			if not trace or trace.startsolid or trace.allsolid then
-				return 0
-			end
-			return (trace.fraction or 0)
-		end
+		-- Check current viewmodel state first
+		local currentFlipped = weapon:IsViewModelFlipped()
+		local currentFirePos = computeFirePos(currentFlipped)
+		local currentScore = countShootableCorners(currentFirePos, corners, targetIndex)
 
-		local muzzle0 = computeMuzzlePos(false)
-		local muzzle1 = computeMuzzlePos(true)
-		if not muzzle0 and not muzzle1 then
+		-- If current state can hit 6+ corners, it's good enough - don't check other
+		if currentScore >= 6 then
+			autoFlipDecided = true
 			return
 		end
 
-		local frac0 = measureClearance(muzzle0)
-		local frac1 = measureClearance(muzzle1)
-		local desired = (frac1 > frac0) and 1 or 0
+		-- If current state hits <5 corners, check if flipped would be better
+		if currentScore < 5 then
+			local flippedFirePos = computeFirePos(not currentFlipped)
+			local flippedScore = countShootableCorners(flippedFirePos, corners, targetIndex)
 
-		if lastAutoFlipViewmodels ~= desired then
-			client.RemoveConVarProtection("cl_flipviewmodels")
-			client.Command("cl_flipviewmodels " .. tostring(desired), true)
-			client.SetConVar("cl_flipviewmodels", desired)
-			lastAutoFlipViewmodels = desired
+			if flippedScore > currentScore then
+				local desired = currentFlipped and 0 or 1
+				if lastAutoFlipViewmodels ~= desired then
+					client.RemoveConVarProtection("cl_flipviewmodels")
+					client.Command("cl_flipviewmodels " .. tostring(desired), true)
+					client.SetConVar("cl_flipviewmodels", desired)
+					lastAutoFlipViewmodels = desired
+				end
+			end
 		end
-	end
 
-	local charge = info.m_bCharges and weapon:GetCurrentCharge() or 0.0
-	local speed = info:GetVelocity(charge):Length2D()
-	local _, sv_gravity = client.GetConVar("sv_gravity")
-	local gravityScale = 0
-	if info.HasGravity and info:HasGravity() then
-		gravityScale = info:GetGravity(charge) or 0
+		autoFlipDecided = true
 	end
-	local gravity = (sv_gravity or 0) * gravityScale
-	local weaponID = weapon:GetWeaponID()
 
 	local function insertTopK(top, item, k, better)
 		local n = #top
@@ -1005,7 +1084,6 @@ local function onCreateMove(cmd)
 		local ensureRocketCandidates = function(_) end
 		local rocketIndices = nil
 		local angle = nil
-		local flipDecided = false
 		local simStartTime = globals.CurTime()
 		local isPlayer = entity.IsPlayer and entity:IsPlayer()
 		if isPlayer then
@@ -1139,9 +1217,8 @@ local function onCreateMove(cmd)
 			for _ = 1, 2 do
 				ensureSimulatedToTotal(curTotal)
 				curPos = isPlayer and posAtTotalTime(curTotal) or entityCenter
-				if (not flipDecided) and curPos then
-					autoFlipViewmodelsIfNeeded(curPos)
-					flipDecided = true
+				if (not autoFlipDecided) and curPos then
+					autoFlipViewmodelsIfNeeded(entity, curPos)
 				end
 
 				TickProfiler.BeginSection("CM:Ballistics")
