@@ -141,7 +141,7 @@ end
 ---@param sv_friction number
 ---@param sv_stopspeed number
 local function friction(velocity, is_on_ground, frametime, sv_friction, sv_stopspeed)
-	local speed = velocity:Length()
+	local speed = velocity:LengthSqr()
 	if speed < 0.01 then
 		return
 	end
@@ -155,9 +155,6 @@ local function friction(velocity, is_on_ground, frametime, sv_friction, sv_stops
 	end
 
 	local newspeed = speed - drop
-	if newspeed < 0 then
-		newspeed = 0
-	end
 	if newspeed ~= speed then
 		newspeed = newspeed / speed
 		velocity.x = velocity.x * newspeed
@@ -326,10 +323,6 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 
 	local is_on_ground = checkIsOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.index)
 
-	if is_on_ground and playerCtx.velocity.z < 0 then
-		playerCtx.velocity.z = 0
-	end
-
 	friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
 
 	if is_on_ground then
@@ -342,7 +335,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 			playerCtx.maxspeed,
 			simCtx.sv_airaccelerate,
 			tickinterval,
-			1,
+			0,
 			playerCtx.entity
 		)
 		playerCtx.velocity.z = playerCtx.velocity.z - simCtx.sv_gravity * tickinterval
@@ -378,8 +371,6 @@ function PlayerTick.simulatePath(playerCtx, simCtx, time_seconds)
 	local timetable = {}
 	local clock = 0.0
 	local tickinterval = simCtx.tickinterval
-	local skip = math.max(1, math.floor(playerCtx.lazyness or 1))
-	local tickCount = 0
 	local lastOrigin = nil
 
 	-- Early exit for stationary targets
@@ -395,12 +386,9 @@ function PlayerTick.simulatePath(playerCtx, simCtx, time_seconds)
 	while clock < time_seconds do
 		local newOrigin = PlayerTick.simulateTick(playerCtx, simCtx)
 		lastOrigin = newOrigin
-		tickCount = tickCount + 1
 		clock = clock + tickinterval
-		if (tickCount % skip) == 0 then
-			path[#path + 1] = newOrigin
-			timetable[#timetable + 1] = simCtx.curtime + clock
-		end
+		path[#path + 1] = newOrigin
+		timetable[#timetable + 1] = simCtx.curtime + clock
 	end
 
 	if not lastOrigin then
