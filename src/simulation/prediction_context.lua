@@ -59,7 +59,94 @@ end
 ---@field maxspeed number
 ---@field index integer
 ---@field stepheight number
+---@field yaw number Current eye yaw angle in degrees
+---@field yawDeltaPerTick number Strafe angle change per tick in degrees
+---@field relativeWishDir Vector3 Wishdir relative to yaw (forward/side basis)
 local PlayerContext = {}
+
+local DEG2RAD = math.pi / 180
+local RAD2DEG = 180 / math.pi
+
+---Normalize angle to [-180, 180]
+local function normalizeAngle(angle)
+	angle = (angle + 180) % 360 - 180
+	return angle
+end
+
+---Get entity eye yaw angle
+local function getEntityEyeYaw(entity)
+	local eyeYaw = entity:GetPropFloat("m_angEyeAngles[1]")
+	if type(eyeYaw) == "number" then
+		return eyeYaw
+	end
+	if entity.GetPropVector and type(entity.GetPropVector) == "function" then
+		local eyeVec = entity:GetPropVector("tfnonlocaldata", "m_angEyeAngles")
+		if eyeVec and type(eyeVec.y) == "number" then
+			return eyeVec.y
+		end
+	end
+	return nil
+end
+
+---Calculate yaw delta per tick from velocity changes (EMA smoothed)
+---@param entity Entity
+---@param lastVelocityYaw number?
+---@param lastYawDelta number?
+---@return number newVelocityYaw
+---@return number yawDeltaPerTick
+local function calculateYawDelta(entity, lastVelocityYaw, lastYawDelta)
+	local vel = entity:EstimateAbsVelocity()
+	if not vel then
+		return lastVelocityYaw or 0, lastYawDelta or 0
+	end
+
+	local speed2D = math.sqrt(vel.x * vel.x + vel.y * vel.y)
+	if speed2D < 10 then
+		local velYaw = math.atan(vel.y, vel.x) * RAD2DEG
+		return velYaw, lastYawDelta or 0
+	end
+
+	local velYaw = math.atan(vel.y, vel.x) * RAD2DEG
+
+	if type(lastVelocityYaw) == "number" then
+		local angleDelta = normalizeAngle(velYaw - lastVelocityYaw)
+		local prev = lastYawDelta or 0
+		local newDelta = prev * 0.8 + angleDelta * 0.2
+		return velYaw, newDelta
+	end
+
+	return velYaw, 0
+end
+
+---Calculate relative wishdir from velocity and yaw
+---@param velocity Vector3
+---@param yaw number
+---@return Vector3 relativeWishDir
+local function calculateRelativeWishDir(velocity, yaw)
+	local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
+	if horizLen < 0.001 then
+		return Vector3(1, 0, 0)
+	end
+
+	local yawRad = yaw * DEG2RAD
+	local cosYaw = math.cos(yawRad)
+	local sinYaw = math.sin(yawRad)
+
+	local forward = Vector3(cosYaw, sinYaw, 0)
+	local right = Vector3(sinYaw, -cosYaw, 0)
+
+	local velNorm = Vector3(velocity.x / horizLen, velocity.y / horizLen, 0)
+
+	local relX = forward.x * velNorm.x + forward.y * velNorm.y
+	local relY = right.x * velNorm.x + right.y * velNorm.y
+
+	local relLen = math.sqrt(relX * relX + relY * relY)
+	if relLen > 0.001 then
+		return Vector3(relX / relLen, relY / relLen, 0)
+	end
+
+	return Vector3(1, 0, 0)
+end
 
 ---Creates a player context from entity
 ---@param entity Entity
@@ -87,6 +174,10 @@ function PredictionContext.createPlayerContext(entity, lazyness)
 
 	local originWithOffset = origin + Vector3(0, 0, 1)
 
+	local yaw = getEntityEyeYaw(entity) or 0
+	local _, yawDeltaPerTick = calculateYawDelta(entity, nil, nil)
+	local relativeWishDir = calculateRelativeWishDir(velocity, yaw)
+
 	return {
 		entity = entity,
 		origin = Vector3(originWithOffset:Unpack()),
@@ -97,6 +188,9 @@ function PredictionContext.createPlayerContext(entity, lazyness)
 		index = index,
 		stepheight = 18,
 		lazyness = lazyness or 1,
+		yaw = yaw,
+		yawDeltaPerTick = yawDeltaPerTick,
+		relativeWishDir = relativeWishDir,
 	}
 end
 

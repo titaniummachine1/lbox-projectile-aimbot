@@ -4,7 +4,30 @@ local GameConstants = require("constants.game_constants")
 -- Module declaration
 local PlayerTick = {}
 
+-- Constants
+local DEG2RAD = math.pi / 180
+
 -- Private helpers -----
+
+---Convert yaw-relative wishdir to world-space wishdir
+---@param relWishDir Vector3 Relative wishdir (forward/side basis)
+---@param yaw number Yaw angle in degrees
+---@return Vector3 World-space wishdir (always horizontal, z=0)
+local function relativeToWorldWishDir(relWishDir, yaw)
+	local yawRad = yaw * DEG2RAD
+	local cosYaw = math.cos(yawRad)
+	local sinYaw = math.sin(yawRad)
+
+	local worldX = cosYaw * relWishDir.x + sinYaw * relWishDir.y
+	local worldY = sinYaw * relWishDir.x - cosYaw * relWishDir.y
+
+	local len = math.sqrt(worldX * worldX + worldY * worldY)
+	if len > 0.001 then
+		return Vector3(worldX / len, worldY / len, 0)
+	end
+
+	return Vector3(cosYaw, sinYaw, 0)
+end
 
 ---@param velocity Vector3
 ---@param wishdir Vector3
@@ -284,30 +307,27 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 	)
 
 	local tickinterval = simCtx.tickinterval
-	local rawWishdir = Vector3(0, 0, 0)
-	local horizLen = playerCtx.velocity:Length2D()
-	if horizLen > 0.001 then
-		rawWishdir = Vector3(playerCtx.velocity.x / horizLen, playerCtx.velocity.y / horizLen, 0)
+
+	playerCtx.yaw = (playerCtx.yaw or 0) + (playerCtx.yawDeltaPerTick or 0)
+
+	local wishdir = nil
+	if playerCtx.relativeWishDir then
+		wishdir = relativeToWorldWishDir(playerCtx.relativeWishDir, playerCtx.yaw)
+	else
+		local horizLen = playerCtx.velocity:Length2D()
+		if horizLen > 0.001 then
+			wishdir = Vector3(playerCtx.velocity.x / horizLen, playerCtx.velocity.y / horizLen, 0)
+		else
+			wishdir = Vector3(1, 0, 0)
+		end
 	end
 
+	wishdir.z = 0
+
 	local is_on_ground = checkIsOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.index)
-	local wishdir = rawWishdir
-	if is_on_ground then
-		if horizLen > 0.001 then
-			playerCtx.wishdir = rawWishdir
-		else
-			playerCtx.wishdir = Vector3(0, 0, 0)
-		end
-		if playerCtx.velocity.z < 0 then
-			playerCtx.velocity.z = 0
-		end
-	else
-		local cachedWishdir = playerCtx.wishdir
-		if cachedWishdir and cachedWishdir:Length2D() > 0.001 then
-			wishdir = cachedWishdir
-		elseif horizLen > 0.001 then
-			playerCtx.wishdir = rawWishdir
-		end
+
+	if is_on_ground and playerCtx.velocity.z < 0 then
+		playerCtx.velocity.z = 0
 	end
 
 	friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
@@ -316,7 +336,6 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 		accelerate(playerCtx.velocity, wishdir, playerCtx.maxspeed, simCtx.sv_accelerate, tickinterval)
 		playerCtx.velocity.z = 0
 	else
-		wishdir.z = 0
 		airAccelerate(
 			playerCtx.velocity,
 			wishdir,
