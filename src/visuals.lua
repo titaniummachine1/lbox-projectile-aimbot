@@ -172,12 +172,24 @@ local function drawPlayerPath(texture, playerPath, thickness)
 	end
 end
 
-local function drawProjPath(texture, projPath, thickness, startColor, endColor)
+local function drawProjPath(texture, projPath, thickness, startColor, endColor, alphaMul)
 	if not projPath or #projPath < 2 then
 		return
 	end
 
 	local pathLength = #projPath
+
+	-- Calculate total path distance for proper interpolation
+	local totalDistance = 0
+	local distances = {0} -- Distance from start to each point
+	for i = 2, pathLength do
+		local prev = projPath[i-1]
+		local curr = projPath[i]
+		local dist = (curr - prev):Length()
+		totalDistance = totalDistance + dist
+		distances[i] = totalDistance
+	end
+
 	local first = projPath[1]
 	local last = first and client.WorldToScreen(first)
 	if not last then
@@ -188,12 +200,20 @@ local function drawProjPath(texture, projPath, thickness, startColor, endColor)
 		local entry = projPath[i]
 		local current = entry and client.WorldToScreen(entry)
 		if current and last then
-			-- Calculate gradient color based on position along path
-			local t = (i - 2) / (pathLength - 2) -- Position from 0 to 1 along the path
-			local r = math.floor(startColor[1] + (endColor[1] - startColor[1]) * t + 0.5)
-			local g = math.floor(startColor[2] + (endColor[2] - startColor[2]) * t + 0.5)
-			local b = math.floor(startColor[3] + (endColor[3] - startColor[3]) * t + 0.5)
-			local a = math.floor(startColor[4] + (endColor[4] - startColor[4]) * t + 0.5)
+			-- Calculate gradient color based on distance along path (more accurate)
+			local t = distances[i] / totalDistance -- Position from 0 to 1 along total path distance
+
+			-- Interpolate each color component
+			local r = startColor[1] + (endColor[1] - startColor[1]) * t
+			local g = startColor[2] + (endColor[2] - startColor[2]) * t
+			local b = startColor[3] + (endColor[3] - startColor[3]) * t
+			local a = (startColor[4] + (endColor[4] - startColor[4]) * t) * (alphaMul or 1.0)
+
+			-- Convert to integers with proper rounding
+			r = math.floor(r + 0.5)
+			g = math.floor(g + 0.5)
+			b = math.floor(b + 0.5)
+			a = math.floor(a + 0.5)
 
 			-- Ensure values are within valid range
 			r = math.max(0, math.min(255, r))
@@ -738,8 +758,6 @@ function Visuals.draw(state)
 	if vis.DrawProjectilePath and projPath and #projPath > 0 then
 		local startR, startG, startB, startA = getColor(vis, "ProjectilePathStart", 60)
 		local endR, endG, endB, endA = getColor(vis, "ProjectilePathEnd", 60)
-		startA = math.floor(startA * alphaMul)
-		endA = math.floor(endA * alphaMul)
 		local startColor = {
 			math.floor(startR + 0.5),
 			math.floor(startG + 0.5),
@@ -752,7 +770,7 @@ function Visuals.draw(state)
 			math.floor(endB + 0.5),
 			endA
 		}
-		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath, startColor, endColor)
+		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath, startColor, endColor, alphaMul)
 	end
 
 	local debugDuration = (vis.ShowMultipointDebug and (vis.MultipointDebugDuration or 0)) or 0

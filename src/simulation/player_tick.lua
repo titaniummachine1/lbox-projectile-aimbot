@@ -298,6 +298,9 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 		else
 			playerCtx.wishdir = Vector3(0, 0, 0)
 		end
+		if playerCtx.velocity.z < 0 then
+			playerCtx.velocity.z = 0
+		end
 	else
 		local cachedWishdir = playerCtx.wishdir
 		if cachedWishdir and cachedWishdir:Length2D() > 0.001 then
@@ -313,6 +316,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 		accelerate(playerCtx.velocity, wishdir, playerCtx.maxspeed, simCtx.sv_accelerate, tickinterval)
 		playerCtx.velocity.z = 0
 	else
+		wishdir.z = 0
 		airAccelerate(
 			playerCtx.velocity,
 			wishdir,

@@ -1,5 +1,7 @@
 --spalsh bot proof of concept by terminator or titaniummachine1(https://github.com/titaniummachine1)
 
+local TickProfiler = require("tick_profiler")
+
 -- Local constants
 local HITBOX_COLOR = { 255, 255, 0, 255 } -- Yellow color for hitbox
 local CENTER_COLOR = { 0, 255, 0, 255 } -- Green color for center square
@@ -20,26 +22,17 @@ local BINSEARCH_SIZE = 10 -- Size of orange square
 local BINARY_SEARCH_ITERATIONS = 8 -- Increased from 7 for higher precision
 local RADIUS_TOLERANCE = 1.0
 local NORMAL_TOLERANCE = 0.1 -- Reduced from 0.1 for more precise normal grouping
-local POSITION_EPSILON = 0.01 -- 1mm precision for position comparisons
+local POSITION_EPSILON = 1.0 -- 1 unit precision for position comparisons
 local VISIBILITY_THRESHOLD = 0.99 -- Increased from 0.99 for stricter visibility checks
 local CARDINAL_HULL_MINS = Vector3(-2, -2, -2)
 local CARDINAL_HULL_MAXS = Vector3(2, 2, 2)
 local MAX_SEGMENT_RADIUS = 1024
 
--- circle helper
+-- circle helper - REDUCED to 4 segments for performance (90 degree separation)
 local CIRCLE_RADIUS = 181 -- units from centre‑of‑player to sample
-local CIRCLE_SEGMENTS = 24 -- how many points around the ring
+local CIRCLE_SEGMENTS = 4 -- 4 segments at 90 degree intervals (was 24)
 
-local CIRCLE_COS = {}
-local CIRCLE_SIN = {}
-do
-	local step = (2 * math.pi) / CIRCLE_SEGMENTS
-	for i = 0, CIRCLE_SEGMENTS - 1 do
-		local ang = i * step
-		CIRCLE_COS[i] = math.cos(ang)
-		CIRCLE_SIN[i] = math.sin(ang)
-	end
-end
+-- No precomputed cos/sin - we'll align dynamically to shooter-target direction
 
 -- composite cost tuning
 local DAMAGE_WT = 0.75 -- 75% weight on damage proximity (distance to target)
@@ -151,7 +144,7 @@ local function GetPlayerCOM(player)
 	return player:GetAbsOrigin() + (mins + maxs) / 2
 end
 
- local function GetPlayerWorldAABB(player)
+local function GetPlayerWorldAABB(player)
 	local mins = player:GetMins()
 	local maxs = player:GetMaxs()
 	if not mins or not maxs then
@@ -159,9 +152,9 @@ end
 	end
 	local pos = player:GetAbsOrigin()
 	return pos + mins, pos + maxs
- end
+end
 
- local function CanSplashDamagePlayerFromPoint(pointPos, targetPlayer, blastRadius)
+local function CanSplashDamagePlayerFromPoint(pointPos, targetPlayer, blastRadius)
 	if not pointPos or not targetPlayer or not blastRadius then
 		return false
 	end
@@ -184,9 +177,9 @@ end
 	end
 	local tr = engine.TraceLine(start, closest, MASK_SHOT + CONTENTS_GRATE)
 	return tr.entity and tr.entity:GetIndex() == targetPlayer:GetIndex()
- end
+end
 
- local function CanSplashFromPoint(pointPos, targetCOM, targetPlayer, blastRadius)
+local function CanSplashFromPoint(pointPos, targetCOM, targetPlayer, blastRadius)
 	if not pointPos or not targetCOM or not targetPlayer then
 		return false
 	end
@@ -203,11 +196,11 @@ end
 	return tr.entity and tr.entity:GetIndex() == targetPlayer:GetIndex()
 end
 
- local GetWeaponBlastRadius
- local CanDamageFrom
+local GetWeaponBlastRadius
+local CanDamageFrom
 
-
- local function ComputeSplashDataForPlayer(targetPlayer, localPlayer, prevData)
+local function ComputeSplashDataForPlayer(targetPlayer, localPlayer, prevData)
+	TickProfiler.BeginSection("ComputeSplashDataForPlayer")
 	assert(targetPlayer, "ComputeSplashDataForPlayer: missing targetPlayer")
 	assert(localPlayer, "ComputeSplashDataForPlayer: missing localPlayer")
 
@@ -243,13 +236,69 @@ end
 	end
 
 	local axisDirs = {
-		Vector3(1, 0, 0),
-		Vector3(-1, 0, 0),
-		Vector3(0, 1, 0),
-		Vector3(0, -1, 0),
-		Vector3(0, 0, 1),
-		Vector3(0, 0, -1),
+		-- 6 faces
+		Vector3(1, 0, 0), -- 1: +X (right)
+		Vector3(-1, 0, 0), -- 2: -X (left)
+		Vector3(0, 1, 0), -- 3: +Y (forward)
+		Vector3(0, -1, 0), -- 4: -Y (back)
+		Vector3(0, 0, 1), -- 5: +Z (up)
+		Vector3(0, 0, -1), -- 6: -Z (down)
+		-- 12 edges
+		vector.Normalize(Vector3(1, 1, 0)), -- 7: +X+Y
+		vector.Normalize(Vector3(1, -1, 0)), -- 8: +X-Y
+		vector.Normalize(Vector3(-1, 1, 0)), -- 9: -X+Y
+		vector.Normalize(Vector3(-1, -1, 0)), -- 10: -X-Y
+		vector.Normalize(Vector3(1, 0, 1)), -- 11: +X+Z
+		vector.Normalize(Vector3(1, 0, -1)), -- 12: +X-Z
+		vector.Normalize(Vector3(-1, 0, 1)), -- 13: -X+Z
+		vector.Normalize(Vector3(-1, 0, -1)), -- 14: -X-Z
+		vector.Normalize(Vector3(0, 1, 1)), -- 15: +Y+Z
+		vector.Normalize(Vector3(0, 1, -1)), -- 16: +Y-Z
+		vector.Normalize(Vector3(0, -1, 1)), -- 17: -Y+Z
+		vector.Normalize(Vector3(0, -1, -1)), -- 18: -Y-Z
+		-- 8 corners
+		vector.Normalize(Vector3(1, 1, 1)), -- 19: +X+Y+Z
+		vector.Normalize(Vector3(1, 1, -1)), -- 20: +X+Y-Z
+		vector.Normalize(Vector3(1, -1, 1)), -- 21: +X-Y+Z
+		vector.Normalize(Vector3(1, -1, -1)), -- 22: +X-Y-Z
+		vector.Normalize(Vector3(-1, 1, 1)), -- 23: -X+Y+Z
+		vector.Normalize(Vector3(-1, 1, -1)), -- 24: -X+Y-Z
+		vector.Normalize(Vector3(-1, -1, 1)), -- 25: -X-Y+Z
+		vector.Normalize(Vector3(-1, -1, -1)), -- 26: -X-Y-Z
 	}
+
+	-- Neighbor relationships: each direction's adjacent directions
+	local dirNeighbors = {
+		{ 5, 11, 19, 21, 3, 7, 4, 8 }, -- 1: +X neighbors
+		{ 5, 13, 23, 25, 3, 9, 4, 10 }, -- 2: -X neighbors
+		{ 5, 15, 19, 23, 1, 7, 2, 9 }, -- 3: +Y neighbors
+		{ 5, 17, 21, 25, 1, 8, 2, 10 }, -- 4: -Y neighbors
+		{ 1, 11, 13, 3, 15, 4, 17, 2 }, -- 5: +Z neighbors
+		{ 1, 12, 14, 3, 16, 4, 18, 2 }, -- 6: -Z neighbors
+		{ 1, 3, 5, 11, 15, 19 }, -- 7: +X+Y neighbors
+		{ 1, 4, 5, 11, 17, 21 }, -- 8: +X-Y neighbors
+		{ 2, 3, 5, 13, 15, 23 }, -- 9: -X+Y neighbors
+		{ 2, 4, 5, 13, 17, 25 }, -- 10: -X-Y neighbors
+		{ 1, 5, 7, 8, 19, 21 }, -- 11: +X+Z neighbors
+		{ 1, 6, 7, 8, 20, 22 }, -- 12: +X-Z neighbors
+		{ 2, 5, 9, 10, 23, 25 }, -- 13: -X+Z neighbors
+		{ 2, 6, 9, 10, 24, 26 }, -- 14: -X-Z neighbors
+		{ 3, 5, 7, 9, 19, 23 }, -- 15: +Y+Z neighbors
+		{ 3, 6, 7, 9, 20, 24 }, -- 16: +Y-Z neighbors
+		{ 4, 5, 8, 10, 21, 25 }, -- 17: -Y+Z neighbors
+		{ 4, 6, 8, 10, 22, 26 }, -- 18: -Y-Z neighbors
+		{ 1, 3, 5, 7, 11, 15 }, -- 19: +X+Y+Z neighbors
+		{ 1, 3, 6, 7, 12, 16 }, -- 20: +X+Y-Z neighbors
+		{ 1, 4, 5, 8, 11, 17 }, -- 21: +X-Y+Z neighbors
+		{ 1, 4, 6, 8, 12, 18 }, -- 22: +X-Y-Z neighbors
+		{ 2, 3, 5, 9, 13, 15 }, -- 23: -X+Y+Z neighbors
+		{ 2, 3, 6, 9, 14, 16 }, -- 24: -X+Y-Z neighbors
+		{ 2, 4, 5, 10, 13, 17 }, -- 25: -X-Y+Z neighbors
+		{ 2, 4, 6, 10, 14, 18 }, -- 26: -X-Y-Z neighbors
+	}
+
+	-- Bottom 9 directions (have -Z component): always check these
+	local bottomDirs = { 6, 12, 14, 16, 18, 20, 22, 24, 26 }
 
 	local out = prevData or {}
 	local points = out.points or {}
@@ -258,229 +307,322 @@ end
 	end
 	local step = (2 * math.pi) / CIRCLE_SEGMENTS
 
+	-- First pass: trace all 26 directions for hit/miss detection
+	-- Use plane ONLY for backface culling, no caching
+	local directionHits = {}
 	for planeId = 1, #axisDirs do
 		local axis = axisDirs[planeId]
 		local seedTr = engine.TraceLine(com, com + axis * maxProbeDist, traceMask, shouldHitEntity)
-		local planeLocked = false
-		local planePoint = nil
-		local planeNormal = nil
-		local hub = nil
 		if seedTr and seedTr.fraction < 1.0 and seedTr.endpos and seedTr.plane then
-			planePoint = seedTr.endpos
-			planeNormal = seedTr.plane
-			if PlaneFacesPlayer(planeNormal, eye, planePoint) then
-				local toCom = com - planePoint
-				hub = com - planeNormal * toCom:Dot(planeNormal)
-				planeLocked = true
-			end
-		end
-		if not planeLocked then
-			-- fallback: assume an orientation plane at max range
-			planePoint = com + axis * maxProbeDist
-			planeNormal = axis * -1
-			hub = planePoint
-			cachedBlueprint[playerIdx][planeId] = nil
-		end
-
-		local planeBlueprint = planeLocked and cachedBlueprint[playerIdx][planeId] or nil
-		local useCache = false
-		if planeBlueprint and planeBlueprint.normal and planeBlueprint.hub and planeBlueprint.maxProbeDist then
-			if planeBlueprint.maxProbeDist == maxProbeDist then
-				local hubDelta = hub - planeBlueprint.hub
-				if hubDelta:Length() <= 1.0 and planeBlueprint.normal:Dot(planeNormal) >= 0.999 then
-					useCache = true
-				end
-			end
-		end
-
-		local function RebuildDirs()
-			local u, v = BuildBasis(planeNormal)
-			local newDirs = {}
-			for seg = 0, CIRCLE_SEGMENTS - 1 do
-				local dirPlane = u * CIRCLE_COS[seg] + v * CIRCLE_SIN[seg]
-				dirPlane = vector.Normalize(dirPlane)
-				newDirs[seg] = dirPlane
-			end
-			return newDirs
-		end
-
-		local dirs
-		if useCache then
-			dirs = planeBlueprint.dirs
-		else
-			dirs = RebuildDirs()
-			if planeLocked then
-				cachedBlueprint[playerIdx][planeId] = {
-					normal = planeNormal,
-					hub = hub,
-					maxProbeDist = maxProbeDist,
-					dirs = dirs,
-				}
-			end
-		end
-
-		cachedRadii[playerIdx][planeId] = cachedRadii[playerIdx][planeId] or {}
-		cachedSegmentRadii[playerIdx] = cachedSegmentRadii[playerIdx] or {}
-		cachedSegmentRadii[playerIdx][planeId] = cachedSegmentRadii[playerIdx][planeId] or {}
-
-		for seg = 0, CIRCLE_SEGMENTS - 1 do
-			local dirPlane = dirs[seg]
-			local segCache = cachedSegmentRadii[playerIdx][planeId][seg]
-			if not segCache then
-				segCache = { buf = {}, head = 1, count = 0 }
-				cachedSegmentRadii[playerIdx][planeId][seg] = segCache
-			end
-			local function PushSample(sample)
-				local idx = segCache.head
-				segCache.buf[idx] = sample
-				segCache.head = idx + 1
-				if segCache.head > 22 then
-					segCache.head = 1
-				end
-				if segCache.count < 22 then
-					segCache.count = segCache.count + 1
-				end
-			end
-
-			local traceOut = 16
-			local traceIn = 64
-			local function TraceSurface(radius)
-				local sample = hub + dirPlane * radius
-				PushSample(sample)
-				local start = sample + planeNormal * traceOut
-				local stop = sample - planeNormal * traceIn
-				local tr = engine.TraceLine(start, stop, traceMask, shouldHitEntity)
-				if (not tr) or tr.fraction >= 1.0 or (not tr.endpos) or (not tr.plane) then
-					return nil
-				end
-				if tr.plane:Dot(planeNormal) < PLANE_NORMAL_SIMILARITY then
-					return nil
-				end
-				if not PlaneFacesPlayer(tr.plane, eye, tr.endpos) then
-					return nil
-				end
-				return tr
-			end
-			local function EvalRadius(radius)
-				local tr = TraceSurface(radius)
-				if not tr then
-					return false
-				end
-				if not CanDamageFrom(tr.endpos, com, targetPlayer, blastRadius) then
-					return false
-				end
-				return true, tr.endpos, tr.fraction, tr.plane
-			end
-			local function EvalTrace(tr)
-				if not tr then
-					return false
-				end
-				if not CanDamageFrom(tr.endpos, com, targetPlayer, blastRadius) then
-					return false
-				end
-				return true, tr.endpos, tr.fraction, tr.plane
-			end
-
-			local minR = 8
-			local maxR = math.min(maxProbeDist, MAX_SEGMENT_RADIUS)
-			if maxR <= minR then
-				goto continue_segment
-			end
-
-			local prevR = cachedRadii[playerIdx][planeId][seg]
-			local trPrev = nil
-			if prevR and prevR >= minR and prevR <= maxR then
-				trPrev = TraceSurface(prevR)
-			end
-			local trMax = TraceSurface(maxR)
-			local trMin = nil
-			if (not trPrev) and (not trMax) then
-				trMin = TraceSurface(minR)
-				if not trMin then
-					goto continue_segment
-				end
-			end
-			local low = minR
-			local high = maxR
-
-			local bestR = nil
-			local bestPos = nil
-			local bestFrac = nil
-			local bestN = nil
-
-			if trPrev and prevR and prevR >= minR and prevR <= maxR then
-				local okPrevR, posPrevR, fracPrevR, nPrevR = EvalTrace(trPrev)
-				if okPrevR then
-					bestR, bestPos, bestFrac, bestN = prevR, posPrevR, fracPrevR, nPrevR
-					low = prevR
-				end
-			end
-
-			local okMax, posMax, fracMax, nMax = EvalTrace(trMax)
-			if okMax then
-				bestR, bestPos, bestFrac, bestN = maxR, posMax, fracMax, nMax
+			-- Check backface culling - only accept if plane faces player
+			if PlaneFacesPlayer(seedTr.plane, eye, seedTr.endpos) then
+				directionHits[planeId] = true
 			else
-				if not bestR then
-					if not trMin then
-						trMin = TraceSurface(minR)
+				directionHits[planeId] = false
+			end
+		else
+			directionHits[planeId] = false
+		end
+	end
+
+	-- Helper: check if direction is in bottom 9
+	local function IsBottomDir(planeId)
+		for _, bottomId in ipairs(bottomDirs) do
+			if bottomId == planeId then
+				return true
+			end
+		end
+		return false
+	end
+
+	-- Helper: check if direction and all neighbors missed
+	local function ShouldSkipDirection(planeId)
+		if IsBottomDir(planeId) then
+			return false -- never skip bottom directions
+		end
+		if directionHits[planeId] then
+			return false -- hit something, don't skip
+		end
+		-- Check if any neighbor hit
+		local neighbors = dirNeighbors[planeId]
+		if neighbors then
+			for _, neighborId in ipairs(neighbors) do
+				if directionHits[neighborId] then
+					return false -- neighbor hit, don't skip
+				end
+			end
+		end
+		return true -- this direction and all neighbors missed
+	end
+
+	for planeId = 1, #axisDirs do
+		TickProfiler.BeginSection("PlaneIteration")
+		repeat
+			local axis, seedTr, planeLocked, planePoint, planeNormal, hub
+			local toCom, planeBlueprint, useCache, hubDelta, dirs
+			local RebuildDirs
+
+			-- Early termination: skip if direction and neighbors all missed
+			if ShouldSkipDirection(planeId) then
+				break
+			end
+			axis = axisDirs[planeId]
+			-- Trace for this plane (accepts duplicate trace for memory savings)
+			seedTr = engine.TraceLine(com, com + axis * maxProbeDist, traceMask, shouldHitEntity)
+			planeLocked = false
+			planePoint = nil
+			planeNormal = nil
+			hub = nil
+			if seedTr and seedTr.fraction < 1.0 and seedTr.endpos and seedTr.plane then
+				planePoint = seedTr.endpos
+				planeNormal = seedTr.plane
+				if PlaneFacesPlayer(planeNormal, eye, planePoint) then
+					toCom = com - planePoint
+					hub = com - planeNormal * toCom:Dot(planeNormal)
+					planeLocked = true
+				end
+			end
+			if not planeLocked then
+				-- fallback: assume an orientation plane at max range
+				planePoint = com + axis * maxProbeDist
+				planeNormal = axis * -1
+				hub = planePoint
+				cachedBlueprint[playerIdx][planeId] = nil
+			end
+
+			planeBlueprint = planeLocked and cachedBlueprint[playerIdx][planeId] or nil
+			useCache = false
+			if planeBlueprint and planeBlueprint.normal and planeBlueprint.hub and planeBlueprint.maxProbeDist then
+				if planeBlueprint.maxProbeDist == maxProbeDist then
+					hubDelta = hub - planeBlueprint.hub
+					if hubDelta:Length() <= 1.0 and planeBlueprint.normal:Dot(planeNormal) >= 0.999 then
+						useCache = true
 					end
-					local okMin, posMin, fracMin, nMin = EvalTrace(trMin)
-					if okMin then
-						bestR, bestPos, bestFrac, bestN = minR, posMin, fracMin, nMin
-						low = minR
-					else
-						local midR = (minR + maxR) * 0.5
-						local okMid, posMid, fracMid, nMid = EvalRadius(midR)
-						if okMid then
-							bestR, bestPos, bestFrac, bestN = midR, posMid, fracMid, nMid
-							low = midR
-						else
-							goto continue_segment
+				end
+			end
+
+			RebuildDirs = function()
+				local u, v = BuildBasis(planeNormal)
+				-- Align first segment toward shooter (eye position)
+				local toEye = eye - hub
+				local toEyeFlat = toEye - planeNormal * toEye:Dot(planeNormal)
+				local toEyeLen = toEyeFlat:Length()
+
+				local newDirs = {}
+				if toEyeLen > 0.01 then
+					-- Align u to point toward shooter
+					u = toEyeFlat / toEyeLen
+					v = planeNormal:Cross(u)
+				end
+
+				-- 4 segments at 0, 90, 180, 270 degrees
+				newDirs[0] = u -- toward shooter
+				newDirs[1] = v -- 90 degrees
+				newDirs[2] = u * -1 -- 180 degrees (away from shooter)
+				newDirs[3] = v * -1 -- 270 degrees
+				return newDirs
+			end
+
+			if useCache then
+				dirs = planeBlueprint.dirs
+			else
+				dirs = RebuildDirs()
+				if planeLocked then
+					cachedBlueprint[playerIdx][planeId] = {
+						normal = planeNormal,
+						hub = hub,
+						maxProbeDist = maxProbeDist,
+						dirs = dirs,
+					}
+				end
+			end
+
+			cachedRadii[playerIdx][planeId] = cachedRadii[playerIdx][planeId] or {}
+			cachedSegmentRadii[playerIdx] = cachedSegmentRadii[playerIdx] or {}
+			cachedSegmentRadii[playerIdx][planeId] = cachedSegmentRadii[playerIdx][planeId] or {}
+
+			for seg = 0, CIRCLE_SEGMENTS - 1 do
+				TickProfiler.BeginSection("SegmentSearch")
+				repeat
+					local dirPlane = dirs[seg]
+					local segCache = cachedSegmentRadii[playerIdx][planeId][seg]
+					if not segCache then
+						segCache = { buf = {}, head = 1, count = 0 }
+						cachedSegmentRadii[playerIdx][planeId][seg] = segCache
+					end
+					local function PushSample(sample)
+						local idx = segCache.head
+						segCache.buf[idx] = sample
+						segCache.head = idx + 1
+						if segCache.head > 22 then
+							segCache.head = 1
+						end
+						if segCache.count < 22 then
+							segCache.count = segCache.count + 1
 						end
 					end
-				end
-				high = maxR
-				local iterCount = math.min(SEGMENT_SEARCH_ITERATIONS, 4)
-				for _ = 1, iterCount do
-					if (high - low) <= SEGMENT_SEARCH_EPSILON then
+
+					local traceOut = 16
+					local traceIn = 64
+					local function TraceSurface(radius)
+						TickProfiler.BeginSection("TraceSurface")
+						local sample = hub + dirPlane * radius
+						PushSample(sample)
+						local start = sample + planeNormal * traceOut
+						local stop = sample - planeNormal * traceIn
+						local tr = engine.TraceLine(start, stop, traceMask, shouldHitEntity)
+						if (not tr) or tr.fraction >= 1.0 or not tr.endpos or not tr.plane then
+							return nil
+						end
+						if tr.plane:Dot(planeNormal) < PLANE_NORMAL_SIMILARITY then
+							return nil
+						end
+						if not PlaneFacesPlayer(tr.plane, eye, tr.endpos) then
+							return nil
+						end
+						TickProfiler.EndSection("TraceSurface")
+						return tr
+					end
+					local function EvalRadius(radius)
+						local tr = TraceSurface(radius)
+						if not tr then
+							return false
+						end
+						if not CanDamageFrom(tr.endpos, com, targetPlayer, blastRadius) then
+							return false
+						end
+						return true, tr.endpos, tr.fraction, tr.plane
+					end
+					local function EvalTrace(tr)
+						if not tr then
+							return false
+						end
+						if not CanDamageFrom(tr.endpos, com, targetPlayer, blastRadius) then
+							return false
+						end
+						return true, tr.endpos, tr.fraction, tr.plane
+					end
+
+					local cached = cachedRadii[playerIdx][planeId][seg]
+					local minR = 8
+					local maxR = math.min(maxProbeDist, MAX_SEGMENT_RADIUS)
+					local prevR, trPrev, trMax, trMin, low, high
+					local bestR, bestPos, bestFrac, bestN
+					local okMax, posMax, fracMax, nMax
+					local okMin, posMin, fracMin, nMin
+					local midR, okMid, posMid, fracMid, nMid
+					local iterCount, mid
+					local okPrev, posPrev, fracPrev, nPrev
+					local okPrevR, posPrevR, fracPrevR, nPrevR
+
+					if maxR <= minR then
 						break
 					end
-					local mid = (low + high) * 0.5
-					local okMid, posMid, fracMid, nMid = EvalRadius(mid)
-					if okMid then
-						bestR, bestPos, bestFrac, bestN = mid, posMid, fracMid, nMid
-						low = mid
-					else
-						high = mid
+
+					prevR = cached and cached.radius
+					trPrev = nil
+					if prevR and prevR >= minR and prevR <= maxR then
+						trPrev = TraceSurface(prevR)
 					end
-				end
+					trMax = TraceSurface(maxR)
+					trMin = nil
+					if (not trPrev) and not trMax then
+						trMin = TraceSurface(minR)
+						if not trMin then
+							break
+						end
+					end
+					low = minR
+					high = maxR
+					if cached and cached.low and cached.high then
+						low = math.max(minR, cached.low)
+						high = math.min(maxR, cached.high)
+					end
+
+					bestR = nil
+					bestPos = nil
+					bestFrac = nil
+					bestN = nil
+
+					if trPrev and prevR and prevR >= minR and prevR <= maxR then
+						okPrevR, posPrevR, fracPrevR, nPrevR = EvalTrace(trPrev)
+						if okPrevR then
+							bestR, bestPos, bestFrac, bestN = prevR, posPrevR, fracPrevR, nPrevR
+							low = prevR
+						end
+					end
+
+					okMax, posMax, fracMax, nMax = EvalTrace(trMax)
+					if okMax then
+						bestR, bestPos, bestFrac, bestN = maxR, posMax, fracMax, nMax
+					else
+						if not bestR then
+							if not trMin then
+								trMin = TraceSurface(minR)
+							end
+							okMin, posMin, fracMin, nMin = EvalTrace(trMin)
+							if okMin then
+								bestR, bestPos, bestFrac, bestN = minR, posMin, fracMin, nMin
+								low = minR
+							else
+								midR = (minR + maxR) * 0.5
+								okMid, posMid, fracMid, nMid = EvalRadius(midR)
+								if okMid then
+									bestR, bestPos, bestFrac, bestN = midR, posMid, fracMid, nMid
+									low = midR
+								else
+									break
+								end
+							end
+						end
+						high = maxR
+						iterCount = math.min(SEGMENT_SEARCH_ITERATIONS, 4)
+						for _ = 1, iterCount do
+							if (high - low) <= SEGMENT_SEARCH_EPSILON then
+								break
+							end
+							mid = (low + high) * 0.5
+							okMid, posMid, fracMid, nMid = EvalRadius(mid)
+							if okMid then
+								bestR, bestPos, bestFrac, bestN = mid, posMid, fracMid, nMid
+								low = mid
+							else
+								high = mid
+							end
+						end
+					end
+
+					if not bestR or bestR < 10 then
+						break
+					end
+
+					if prevR and math.abs(bestR - prevR) < RADIUS_HYSTERESIS then
+						okPrev, posPrev, fracPrev, nPrev = EvalRadius(prevR)
+						if okPrev then
+							bestR, bestPos, bestFrac, bestN = prevR, posPrev, fracPrev, nPrev
+						end
+					end
+					cachedRadii[playerIdx][planeId][seg] = {
+						radius = bestR,
+						low = bestR - RADIUS_TOLERANCE,
+						high = bestR + RADIUS_TOLERANCE,
+					}
+
+					table.insert(points, {
+						pos = bestPos,
+						fraction = bestFrac or 1.0,
+						radius = bestR,
+						normal = bestN or planeNormal,
+						segmentIndex = seg,
+						planeId = planeId,
+					})
+
+				until true
+				TickProfiler.EndSection("SegmentSearch")
 			end
-			
-			if not bestR or bestR < 10 then
-				goto continue_segment
-			end
 
-			if prevR and math.abs(bestR - prevR) < RADIUS_HYSTERESIS then
-				local okPrev, posPrev, fracPrev, nPrev = EvalRadius(prevR)
-				if okPrev then
-					bestR, bestPos, bestFrac, bestN = prevR, posPrev, fracPrev, nPrev
-				end
-			end
-			cachedRadii[playerIdx][planeId][seg] = bestR
-
-			table.insert(points, {
-				pos = bestPos,
-				fraction = bestFrac or 1.0,
-				radius = bestR,
-				normal = bestN or planeNormal,
-				segmentIndex = seg,
-				planeId = planeId,
-			})
-
-			::continue_segment::
-		end
-
-		::continue_plane::
+		until true
+		TickProfiler.EndSection("PlaneIteration")
 	end
 
 	out.playerIndex = targetPlayer:GetIndex()
@@ -488,16 +630,21 @@ end
 	out.blastRadius = blastRadius
 	out.eye = eye
 	out.points = points
+	TickProfiler.EndSection("ComputeSplashDataForPlayer")
 	return out
- end
+end
 
 -- Function to check if an explosion at pointPos will splash the player's COM
 GetWeaponBlastRadius = function()
 	local localPlayer = entities.GetLocalPlayer()
-	if not localPlayer then return 169 end -- fallback
-	
+	if not localPlayer then
+		return 169
+	end -- fallback
+
 	local weapon = localPlayer:GetPropEntity("m_hActiveWeapon")
-	if not weapon then return cachedBlastRadiusValue end
+	if not weapon then
+		return cachedBlastRadiusValue
+	end
 
 	if not cachedProjectileInfoResolver then
 		local success, projectileInfo = pcall(function()
@@ -584,7 +731,9 @@ end
 
 -- Function to draw AABB collision bounds around a player
 local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
+	TickProfiler.BeginSection("DrawPlayerAABB")
 	if not player or not player:IsAlive() then
+		TickProfiler.EndSection("DrawPlayerAABB")
 		return
 	end
 
@@ -733,15 +882,15 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 
 				local lo, hi = 0, BLAST_RADIUS
 				for _ = 1, 12 do
+					if (hi - lo) < POSITION_EPSILON then
+						break
+					end
 					local mid = (lo + hi) * 0.5
 					local test = hub + dir * mid
 					if CanDamageFrom(test, targetCOM, targetPlayer, BLAST_RADIUS) then
 						lo = mid
 					else
 						hi = mid
-					end
-					if (hi - lo) < POSITION_EPSILON then
-						break
 					end
 				end
 				return lo - POSITION_EPSILON
@@ -811,19 +960,27 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 				local toCom = center - planePoint
 				local hub = center - planeNormal * toCom:Dot(planeNormal)
 
-				local tmp = (math.abs(planeNormal.z) < 0.9) and Vector3(0, 0, 1) or Vector3(1, 0, 0)
-				local u = vector.Normalize(tmp:Cross(planeNormal))
-				local v = planeNormal:Cross(u)
+				-- Align to shooter direction for smart sampling
+				local toEye = eye - hub
+				local toEyeFlat = toEye - planeNormal * toEye:Dot(planeNormal)
+				local toEyeLen = toEyeFlat:Length()
 
+				local u, v
+				if toEyeLen > 0.01 then
+					u = toEyeFlat / toEyeLen
+					v = planeNormal:Cross(u)
+				else
+					local tmp = (math.abs(planeNormal.z) < 0.9) and Vector3(0, 0, 1) or Vector3(1, 0, 0)
+					u = vector.Normalize(tmp:Cross(planeNormal))
+					v = planeNormal:Cross(u)
+				end
+
+				-- 4 aligned directions
+				local dirs = { u, v, u * -1, v * -1 }
 				local prevRadius = math.min(BLAST_RADIUS - RADIUS_TOLERANCE, CIRCLE_RADIUS)
-				local step = (2 * math.pi) / CIRCLE_SEGMENTS
-				for i = 0, CIRCLE_SEGMENTS - 1 do
-					local ang = i * step
-					local dirInPlane = u * math.cos(ang) + v * math.sin(ang)
-					local len = dirInPlane:Length()
-					if len > 0 then
-						dirInPlane = dirInPlane / len
-					end
+
+				for i = 1, 4 do
+					local dirInPlane = dirs[i]
 
 					local trBest, safeRadius = FindMaxRadiusOnPlaneRay(hub, planeNormal, dirInPlane, prevRadius)
 					prevRadius = safeRadius
@@ -847,8 +1004,10 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 			--  Draw a red sample ring on *any* plane that just splashed
 			----------------------------------------------------------------
 			local function AddCirclePointsOnPlane(planeNormal, planePoint, directionIndex)
+				TickProfiler.BeginSection("AddCirclePointsOnPlane")
 				-- 0) make sure the plane still faces us
 				if not PlaneFacesPlayer(planeNormal, eye, planePoint) then
+					TickProfiler.EndSection("AddCirclePointsOnPlane")
 					return
 				end
 
@@ -856,21 +1015,30 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 				local toCom = center - planePoint
 				local hub = center - planeNormal * toCom:Dot(planeNormal)
 
-				-- 2) build an orthonormal basis {u,v} that spans the plane
-				local tmp = (math.abs(planeNormal.z) < 0.9) and Vector3(0, 0, 1) or Vector3(1, 0, 0)
-				local u = vector.Normalize(tmp:Cross(planeNormal))
-				local v = planeNormal:Cross(u)
+				-- 2) Align basis to shooter direction for smart sampling
+				local toEye = eye - hub
+				local toEyeFlat = toEye - planeNormal * toEye:Dot(planeNormal)
+				local toEyeLen = toEyeFlat:Length()
+
+				local u, v
+				if toEyeLen > 0.01 then
+					u = toEyeFlat / toEyeLen
+					v = planeNormal:Cross(u)
+				else
+					local tmp = (math.abs(planeNormal.z) < 0.9) and Vector3(0, 0, 1) or Vector3(1, 0, 0)
+					u = vector.Normalize(tmp:Cross(planeNormal))
+					v = planeNormal:Cross(u)
+				end
 
 				-- Initialize radius cache for this player/direction if needed
 				local playerIdx = player:GetIndex()
 				cachedRadii[playerIdx] = cachedRadii[playerIdx] or {}
 				cachedRadii[playerIdx][directionIndex] = cachedRadii[playerIdx][directionIndex] or {}
 
-				-- 3) for each segment, binary search for max radius that can damage
+				-- 3) for each of 4 segments, binary search for max radius
 				local CIRCLE_SEARCH_ITERATIONS = 7
 				local CIRCLE_TRACE_OUT = 8
 				local CIRCLE_TRACE_IN = 32
-				local step = (2 * math.pi) / CIRCLE_SEGMENTS
 				local circlePoints = {}
 				local traceMask = MASK_SHOT + CONTENTS_GRATE
 
@@ -878,12 +1046,15 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 				local aabbSize = (worldMaxs - worldMins):Length()
 				local dynamicMaxRadius = BLAST_RADIUS + (aabbSize * 2) + 20
 
-				for i = 0, CIRCLE_SEGMENTS - 1 do
-					local ang = i * step
-					local dir = u * math.cos(ang) + v * math.sin(ang)
+				-- 4 aligned directions: toward shooter, 90deg, away, 270deg
+				local dirs = { u, v, u * -1, v * -1 }
 
-					-- Get cached radius as starting guess (or default)
-					local cachedR = cachedRadii[playerIdx][directionIndex][i] or CIRCLE_RADIUS
+				for i = 1, 4 do
+					local dir = dirs[i]
+
+					-- Get cached data as starting guess (or default)
+					local cachedData = cachedRadii[playerIdx][directionIndex][i]
+					local cachedR = cachedData and cachedData.radius or CIRCLE_RADIUS
 
 					-- Binary search for max radius that can hit target
 					local minR = 8
@@ -918,12 +1089,21 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 						bestFraction = fracMin
 					else
 						-- segment never valid
-						cachedRadii[playerIdx][directionIndex][i] = minR
-						goto continue_segment
+						cachedRadii[playerIdx][directionIndex][i] = {
+							radius = minR,
+							low = minR,
+							high = minR,
+						}
+						break
 					end
 
 					-- 2) expand upward starting from cachedR (but never below minR)
-					expandR = math.max(minR, cachedR)
+					-- If we have cached bounds, start from the cached high bound
+					if cachedData and cachedData.high then
+						expandR = math.max(minR, math.min(cachedData.high, dynamicMaxRadius))
+					else
+						expandR = math.max(minR, cachedR)
+					end
 					if expandR > lowOk then
 						local okProbe, impactProbe, fracProbe = EvalRadius(expandR)
 						if okProbe then
@@ -983,11 +1163,20 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 						end
 					end
 
-					-- Cache the found radius for next tick
-					cachedRadii[playerIdx][directionIndex][i] = bestR or minR
-
-
-					::continue_segment::
+					-- Cache the found radius and bounds for next tick
+					if bestR then
+						cachedRadii[playerIdx][directionIndex][i] = {
+							radius = bestR,
+							low = math.max(minR, bestR - RADIUS_TOLERANCE),
+							high = math.min(dynamicMaxRadius, bestR + RADIUS_TOLERANCE),
+						}
+					else
+						cachedRadii[playerIdx][directionIndex][i] = {
+							radius = minR,
+							low = minR,
+							high = minR + RADIUS_TOLERANCE,
+						}
+					end
 
 					-- Add point if valid
 					if bestPos then
@@ -1014,10 +1203,12 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 					end
 				end
 
+				TickProfiler.EndSection("AddCirclePointsOnPlane")
 				return circlePoints
 			end
 
 			local function DrawDirectionDot(direction, directionIndex)
+				TickProfiler.BeginSection("DrawDirectionDot")
 				-- Normalize direction
 				local dir = vector.Normalize(direction)
 				local aimPoint = center + dir * BLAST_RADIUS -- raw white dot
@@ -1101,6 +1292,7 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 				local key = string.format("%.3f,%.3f,%.3f", surfN.x, surfN.y, surfN.z)
 				normalGroups[key] = normalGroups[key] or {}
 				table.insert(normalGroups[key], pointT)
+				TickProfiler.EndSection("DrawDirectionDot")
 			end
 
 			-- Draw all cardinal direction dots
@@ -1269,28 +1461,29 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 
 			-- Step 1: Backface cull groups and calculate average points
 			for normalKey, points in pairs(normalGroups) do
-				if #points == 0 then
-					goto continue
-				end
+				repeat
+					if #points == 0 then
+						break
+					end
 
-				-- Calculate average point for this group
-				local avgPoint = Vector3(0, 0, 0)
-				for _, point in ipairs(points) do
-					avgPoint = avgPoint + point.pos
-				end
-				avgPoint = avgPoint / #points
+					-- Calculate average point for this group
+					local avgPoint = Vector3(0, 0, 0)
+					for _, point in ipairs(points) do
+						avgPoint = avgPoint + point.pos
+					end
+					avgPoint = avgPoint / #points
 
-				-- Check if this group faces the camera (use camera position)
-				local surfaceNormal = points[1].normal
-				-- Use camera position for backface culling (consistent within frame)
-				if PlaneFacesPlayer(surfaceNormal, viewPos, avgPoint) then
-					visibleGroups[normalKey] = points
-					print("Group faces camera:", normalKey, "with", #points, "points")
-				else
-					print("Group faces away:", normalKey, "with", #points, "points")
-				end
+					-- Check if this group faces the camera (use camera position)
+					local surfaceNormal = points[1].normal
+					-- Use camera position for backface culling (consistent within frame)
+					if PlaneFacesPlayer(surfaceNormal, viewPos, avgPoint) then
+						visibleGroups[normalKey] = points
+						print("Group faces camera:", normalKey, "with", #points, "points")
+					else
+						print("Group faces away:", normalKey, "with", #points, "points")
+					end
 
-				::continue::
+				until true
 			end
 
 			-- Step 2: Process only visible groups
@@ -1431,7 +1624,6 @@ local function DrawPlayerAABB(player, localPlayer, blastRadius, eye)
 	end
 end
 
-
 -- Visual helper: draw a yellow line only when the point you are aiming at
 -- could splash the enemy's COM within 169 u.
 local function CheckAimPointAndVisualize(localPlayer, targetPlayer)
@@ -1481,8 +1673,10 @@ end
 
 -- Main paint hook to draw AABB bounds
 local function OnPaint()
+	TickProfiler.BeginSection("OnPaint")
 	local localPlayer = entities.GetLocalPlayer()
 	if not localPlayer then
+		TickProfiler.EndSection("OnPaint")
 		return
 	end
 
@@ -1543,13 +1737,23 @@ local function OnPaint()
 			end
 		end
 	end
+	TickProfiler.EndSection("OnPaint")
 end
 
 local function OnCreateMove(_cmd)
+	TickProfiler.BeginSection("OnCreateMove")
 	local localPlayer = entities.GetLocalPlayer()
 	if not localPlayer or not localPlayer:IsAlive() then
+		TickProfiler.EndSection("OnCreateMove")
 		return
 	end
+
+	-- Only compute when F key is held
+	if not input.IsButtonDown(KEY_F) then
+		TickProfiler.EndSection("OnCreateMove")
+		return
+	end
+
 	local localTeam = localPlayer:GetTeamNumber()
 	local players = entities.FindByClass("CTFPlayer")
 	local present = {}
@@ -1584,6 +1788,7 @@ local function OnCreateMove(_cmd)
 			cachedSegmentRadii[idx] = nil
 		end
 	end
+	TickProfiler.EndSection("OnCreateMove")
 end
 
 -- Register the paint hook

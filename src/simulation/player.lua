@@ -220,8 +220,7 @@ local function ClipVelocity(velocity, normal, overbounce)
 end
 
 local function AccelerateInPlace(velocity, wishdir, wishspeed, accel, dt, surf)
-	--local currentspeed = v:Dot(wishdir)
-	local currentspeed = velocity:Length()
+	local currentspeed = velocity:Dot(wishdir)
 	local addspeed = wishspeed - currentspeed
 	if addspeed <= 0 then
 		return
@@ -249,8 +248,7 @@ local function AirAccelerateInPlace(v, wishdir, wishspeed, accel, dt, surf, pTar
 		wishspeed = GetAirSpeedCap(pTarget)
 	end
 
-	--local currentspeed = v:Dot(wishdir)
-	local currentspeed = v:Length()
+	local currentspeed = v:Dot(wishdir)
 	local addspeed = wishspeed - currentspeed
 	if addspeed <= 0 then
 		return
