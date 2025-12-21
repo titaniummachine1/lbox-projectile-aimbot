@@ -755,6 +755,16 @@ function Visuals.draw(state)
 	end
 
 	-- Draw projectile path
+	if vis.DrawProjectilePath then
+		if not projPath then
+			printc(255, 0, 0, 255, "[Visuals] projPath is nil")
+		elseif #projPath == 0 then
+			printc(255, 165, 0, 255, "[Visuals] projPath is empty (length 0)")
+		else
+			printc(0, 255, 0, 255, "[Visuals] projPath has " .. #projPath .. " points")
+		end
+	end
+
 	if vis.DrawProjectilePath and projPath and #projPath > 0 then
 		local startR, startG, startB, startA = getColor(vis, "ProjectilePathStart", 60)
 		local endR, endG, endB, endA = getColor(vis, "ProjectilePathEnd", 60)

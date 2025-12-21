@@ -9,7 +9,6 @@
 -- Config
 local PREDICT_TICKS = 66
 local DOT_SIZE = 4
-local USE_CMD_WISHDIR = false -- set true to drive sim with current input; false to test guessed/stable wishdir
 
 -- Constants
 local FL_ONGROUND = (1 << 0)
@@ -311,11 +310,12 @@ function StrafeTracker.updateFromVelocity(self, entity)
 		return
 	end
 
-	-- Skip yaw deltas when barely moving (avoid noise)
+	-- Reset yaw delta when barely moving (standing still)
 	local speed2DSqr = vel.x * vel.x + vel.y * vel.y
 	local minSpeed = 10
 	if speed2DSqr < (minSpeed * minSpeed) then
 		self.lastVelocityYaw[idx] = math.atan(vel.y, vel.x) * RAD2DEG
+		self.yawDeltaPerTick[idx] = 0
 		return
 	end
 
@@ -368,9 +368,10 @@ function WishDirTracker.updateFromCmd(self, entity, cmd)
 	local fwd = cmd:GetForwardMove()
 	local side = cmd:GetSideMove()
 
-	-- Ignore minimal movements
+	-- Clear wishdir when no input
 	if math.abs(fwd) < 5 and math.abs(side) < 5 then
 		self.cmdWishDir[idx] = nil
+		self.stableWishDir[idx] = nil
 		return
 	end
 
@@ -410,6 +411,9 @@ function WishDirTracker.updateFromMotion(self, entity, yaw)
 			local relWish = worldToRelativeWishDir(delta, yaw)
 			normalize2DInPlace(relWish)
 			self.stableWishDir[idx] = relWish
+		else
+			-- Clear wishdir when standing still
+			self.stableWishDir[idx] = nil
 		end
 	end
 
@@ -419,11 +423,6 @@ end
 function WishDirTracker.getRelativeWishDir(self, idx)
 	assert(self, "WishDirTracker.getRelativeWishDir: self is nil")
 	assert(idx, "WishDirTracker.getRelativeWishDir: idx is nil")
-
-	local cmdDir = self.cmdWishDir[idx]
-	if USE_CMD_WISHDIR and cmdDir then
-		return cmdDir
-	end
 
 	return self.stableWishDir[idx]
 end
@@ -678,9 +677,8 @@ end
 local PlayerMoveSim = {}
 PlayerMoveSim.__index = PlayerMoveSim
 
-function PlayerMoveSim.newFromPlayer(player, yawSeed, yawDeltaPerTick, relativeWishDir)
+function PlayerMoveSim.newFromPlayer(player, yawDeltaPerTick)
 	assert(player, "PlayerMoveSim.newFromPlayer: player is nil")
-	assert(type(yawSeed) == "number", "PlayerMoveSim.newFromPlayer: yawSeed must be a number")
 	assert(type(yawDeltaPerTick) == "number", "PlayerMoveSim.newFromPlayer: yawDeltaPerTick must be a number")
 
 	local self = setmetatable({}, PlayerMoveSim)
@@ -697,6 +695,7 @@ function PlayerMoveSim.newFromPlayer(player, yawSeed, yawDeltaPerTick, relativeW
 
 	self.origin = Vector3(origin.x, origin.y, origin.z + 1)
 	self.velocity = Vector3(velocity.x, velocity.y, velocity.z)
+	self.strafeVelocity = Vector3(velocity.x, velocity.y, velocity.z)
 	self.mins = player:GetMins()
 	self.maxs = player:GetMaxs()
 	self.index = player:GetIndex()
@@ -704,15 +703,7 @@ function PlayerMoveSim.newFromPlayer(player, yawSeed, yawDeltaPerTick, relativeW
 	self.maxspeed = player:GetPropFloat("m_flMaxspeed") or 450
 	self.tickinterval = tickinterval
 
-	self.yaw = yawSeed
 	self.yawDeltaPerTick = yawDeltaPerTick
-
-	if relativeWishDir then
-		self.relativeWishDir = Vector3(relativeWishDir.x, relativeWishDir.y, 0)
-		normalize2DInPlace(self.relativeWishDir)
-	else
-		self.relativeWishDir = nil
-	end
 
 	return self
 end
@@ -721,50 +712,64 @@ function PlayerMoveSim.stepTick(self, playerEntity)
 	assert(self, "PlayerMoveSim.stepTick: self is nil")
 	assert(playerEntity, "PlayerMoveSim.stepTick: playerEntity is nil")
 
-	self.yaw = self.yaw + self.yawDeltaPerTick
+	local strafeRate = self.yawDeltaPerTick
 
-	local wishdirWorld = nil
-	if self.relativeWishDir then
-		wishdirWorld = relativeToWorldWishDir(self.relativeWishDir, self.yaw)
-		normalize2DInPlace(wishdirWorld)
+	local strafeSpeed = length2D(self.strafeVelocity)
+	if strafeSpeed > 0.01 and math.abs(strafeRate) > 0.001 then
+		local ang = math.atan(self.strafeVelocity.y, self.strafeVelocity.x) * RAD2DEG
+		ang = ang + strafeRate
+		local angRad = ang * DEG2RAD
+		self.strafeVelocity.x = math.cos(angRad) * strafeSpeed
+		self.strafeVelocity.y = math.sin(angRad) * strafeSpeed
+	end
+
+	if strafeSpeed > 0.1 then
+		local simSpeed = length2D(self.velocity)
+		if simSpeed > 0.01 then
+			local strafeDir = Vector3(self.strafeVelocity.x, self.strafeVelocity.y, 0)
+			normalize2DInPlace(strafeDir)
+			self.velocity.x = strafeDir.x * simSpeed
+			self.velocity.y = strafeDir.y * simSpeed
+		end
+	end
+
+	local newPos = Vector3(
+		self.origin.x + self.velocity.x * self.tickinterval,
+		self.origin.y + self.velocity.y * self.tickinterval,
+		self.origin.z + self.velocity.z * self.tickinterval
+	)
+
+	local trace = engine.TraceHull(self.origin, newPos, self.mins, self.maxs, MASK_PLAYERSOLID, function(ent)
+		return ent:GetIndex() ~= self.index
+	end)
+
+	if trace.fraction > 0 then
+		self.origin.x = trace.endpos.x
+		self.origin.y = trace.endpos.y
+		self.origin.z = trace.endpos.z
+	end
+
+	if trace.fraction < 1 and trace.plane then
+		local normal = trace.plane
+		clipVelocityInPlace(self.velocity, normal, 1.0)
+
+		if trace.plane.z > 0.7 and self.velocity.z < 0 then
+			self.velocity.z = 0
+		end
 	end
 
 	local isOnGround = checkIsOnGround(self.origin, self.mins, self.maxs, self.index)
 
-	if isOnGround and self.velocity.z < 0 then
-		self.velocity.z = 0
+	if not isOnGround then
+		self.velocity.z = self.velocity.z - gravity * self.tickinterval
 	end
 
-	applyFrictionInPlace(self.velocity, isOnGround, self.tickinterval)
-
-	if wishdirWorld then
-		local wishspeed = self.maxspeed -- (as requested: assume full maxspeed)
-
-		if isOnGround then
-			accelerateInPlace(self.velocity, wishdirWorld, wishspeed, accelerate, self.tickinterval)
-			self.velocity.z = 0
-		else
-			airAccelerateInPlace(
-				self.velocity,
-				wishdirWorld,
-				wishspeed,
-				airAccelerate,
-				self.tickinterval,
-				1,
-				playerEntity
-			)
-			self.velocity.z = self.velocity.z - gravity * self.tickinterval
-		end
-	else
-		-- No input: only gravity in-air.
-		if not isOnGround then
-			self.velocity.z = self.velocity.z - gravity * self.tickinterval
-		else
-			self.velocity.z = 0
-		end
+	local speed = length2D(self.velocity)
+	if speed > self.maxspeed then
+		local scale = self.maxspeed / speed
+		self.velocity.x = self.velocity.x * scale
+		self.velocity.y = self.velocity.y * scale
 	end
-
-	tryPlayerMoveInPlace(self.origin, self.velocity, self.mins, self.maxs, self.index, self.tickinterval)
 
 	if isOnGround then
 		stayOnGround(self.origin, self.mins, self.maxs, stepSize, self.index)
@@ -882,11 +887,9 @@ local function OnDraw()
 		end
 	end
 
-	local yawSeed = strafeTracker:getYawSeed(meIdx)
 	local yawDeltaPerTick = strafeTracker:getYawDeltaPerTick(meIdx)
-	local relWishDir = wishDirTracker:getRelativeWishDir(meIdx)
 
-	local sim = PlayerMoveSim.newFromPlayer(me, yawSeed, yawDeltaPerTick, relWishDir)
+	local sim = PlayerMoveSim.newFromPlayer(me, yawDeltaPerTick)
 	local path = sim:simulateTicks(me, PREDICT_TICKS)
 	if not path then
 		return
