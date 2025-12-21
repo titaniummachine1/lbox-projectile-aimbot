@@ -181,9 +181,9 @@ local function drawProjPath(texture, projPath, thickness, startColor, endColor, 
 
 	-- Calculate total path distance for proper interpolation
 	local totalDistance = 0
-	local distances = {0} -- Distance from start to each point
+	local distances = { 0 } -- Distance from start to each point
 	for i = 2, pathLength do
-		local prev = projPath[i-1]
+		local prev = projPath[i - 1]
 		local curr = projPath[i]
 		local dist = (curr - prev):Length()
 		totalDistance = totalDistance + dist
@@ -702,7 +702,7 @@ function Visuals.draw(state)
 	-- Determine a best-effort target position for rendering boxes/quads even if paths are missing
 	local curTime = (globals and globals.CurTime and globals.CurTime()) or 0
 	playerPath = filterPathByTime(playerPath, playerTime, curTime, shotTime)
-	projPath = filterPathByTime(projPath, projTime, curTime)
+	-- Don't filter projectile path - it's a future trajectory, not historical data
 	local currentOrigin = (targetEntity and targetEntity.GetAbsOrigin and targetEntity:GetAbsOrigin()) or nil
 	local targetPos = predictedOrigin or lastVec(playerPath) or currentOrigin
 
@@ -762,13 +762,13 @@ function Visuals.draw(state)
 			math.floor(startR + 0.5),
 			math.floor(startG + 0.5),
 			math.floor(startB + 0.5),
-			startA
+			startA,
 		}
 		local endColor = {
 			math.floor(endR + 0.5),
 			math.floor(endG + 0.5),
 			math.floor(endB + 0.5),
-			endA
+			endA,
 		}
 		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath, startColor, endColor, alphaMul)
 	end

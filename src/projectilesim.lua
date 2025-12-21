@@ -135,10 +135,19 @@ local function SimulateProjectile(target, targetPredictedPos, startPos, angle, i
 	local timetable = {}
 	local curtime = globals.CurTime()
 
+	-- Add start position
+	path[#path + 1] = Vector3(startPos:Unpack())
+	timetable[#timetable + 1] = curtime
+
 	while env:GetSimulationTime() < timeEnd do
 		local vStart = projectile:GetPosition()
 		env:Simulate(tickInterval)
 		local vEnd = projectile:GetPosition()
+
+		-- Add position to path BEFORE break checks
+		path[#path + 1] = Vector3(vEnd:Unpack())
+		timetable[#timetable + 1] = curtime + env:GetSimulationTime()
+
 		local trace = TraceProjectile(vStart, vEnd, mins, maxs, info, target, localTeam, env:GetSimulationTime())
 		if trace and trace.fraction < 1.0 and trace.entity and trace.entity.GetIndex then
 			if trace.entity:GetIndex() == target:GetIndex() then
@@ -157,9 +166,6 @@ local function SimulateProjectile(target, targetPredictedPos, startPos, angle, i
 		if trace.fraction < 1.0 then
 			break
 		end
-
-		path[#path + 1] = Vector3(vEnd:Unpack())
-		timetable[#timetable + 1] = curtime + env:GetSimulationTime()
 	end
 
 	-- Check if we simulated the full time
@@ -228,11 +234,20 @@ local function SimulateFakeProjectile(
 	local currentVel = startVelocity
 	local gravity_to_add = Vector3(0, 0, -gravity * tickInterval)
 
+	-- Add start position
+	path[#path + 1] = Vector3(startPos:Unpack())
+	timeTable[#timeTable + 1] = curtime
+
 	while time < time_seconds do
 		local vStart = currentPos
 		-- Apply gravity to velocity
 		currentVel = currentVel + gravity_to_add
 		local vEnd = currentPos + currentVel * tickInterval
+
+		-- Add current position to path BEFORE checks
+		path[#path + 1] = Vector3(vEnd:Unpack())
+		timeTable[#timeTable + 1] = curtime + time
+
 		local trace = TraceProjectile(vStart, vEnd, mins, maxs, info, target, localTeam, time)
 		if trace and trace.fraction < 1.0 and trace.entity and trace.entity.GetIndex then
 			if trace.entity:GetIndex() == target:GetIndex() then
@@ -241,10 +256,6 @@ local function SimulateFakeProjectile(
 				break
 			end
 		end
-
-		-- Add current position to path before checking collision
-		path[#path + 1] = Vector3(vEnd:Unpack())
-		timeTable[#timeTable + 1] = curtime + time
 
 		if IsIntersectingBB(vEnd, targetPredictedPos, info, target:GetMaxs(), target:GetMins()) then
 			hit = true

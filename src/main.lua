@@ -1248,6 +1248,22 @@ local function onCreateMove(cmd)
 					local distance = (entityCenter - localPos):Length()
 					local confidence =
 						CalculateHitchance(entity, projpath, hit, distance, speed, gravity, totalTime, cfg.MaxDistance)
+
+					-- Store persistent visual data regardless of confidence
+					local shotTime = simStartTime + totalTime
+					PlayerTracker.Update(entity, {
+						path = path,
+						projpath = projpath,
+						timetable = timetable,
+						projtimetable = projtimetable,
+						predictedOrigin = predictedOrigin,
+						aimPos = lastPos,
+						multipointPos = multipointPos,
+						shotTime = shotTime,
+						confidence = confidence,
+					})
+
+					-- Only aim if confidence meets threshold
 					if confidence >= cfg.MinConfidence then
 						local secondaryFire = doSecondaryFiretbl[weaponID]
 						local noSilent = noSilentTbl[weaponID]
@@ -1259,20 +1275,6 @@ local function onCreateMove(cmd)
 						state.charges = info.m_bCharges
 						state.secondaryfire = secondaryFire
 						state.silent = not noSilent
-
-						-- Store persistent visual data in player tracker
-						local shotTime = simStartTime + totalTime
-						PlayerTracker.Update(entity, {
-							path = path,
-							projpath = projpath,
-							timetable = timetable,
-							projtimetable = projtimetable,
-							predictedOrigin = predictedOrigin,
-							aimPos = lastPos,
-							multipointPos = multipointPos,
-							shotTime = shotTime,
-							confidence = confidence,
-						})
 
 						-- Found valid target, apply aim
 					end
