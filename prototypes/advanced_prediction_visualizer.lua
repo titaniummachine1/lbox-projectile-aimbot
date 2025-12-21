@@ -695,7 +695,11 @@ function PlayerMoveSim.newFromPlayer(player, yawDeltaPerTick)
 
 	self.origin = Vector3(origin.x, origin.y, origin.z + 1)
 	self.velocity = Vector3(velocity.x, velocity.y, velocity.z)
-	self.strafeVelocity = Vector3(velocity.x, velocity.y, velocity.z)
+
+	local strafeDir = Vector3(velocity.x, velocity.y, 0)
+	normalize2DInPlace(strafeDir)
+	self.strafeVelocity = strafeDir
+
 	self.mins = player:GetMins()
 	self.maxs = player:GetMaxs()
 	self.index = player:GetIndex()
@@ -714,23 +718,18 @@ function PlayerMoveSim.stepTick(self, playerEntity)
 
 	local strafeRate = self.yawDeltaPerTick
 
-	local strafeSpeed = length2D(self.strafeVelocity)
-	if strafeSpeed > 0.01 and math.abs(strafeRate) > 0.001 then
+	if math.abs(strafeRate) > 0.001 then
 		local ang = math.atan(self.strafeVelocity.y, self.strafeVelocity.x) * RAD2DEG
 		ang = ang + strafeRate
 		local angRad = ang * DEG2RAD
-		self.strafeVelocity.x = math.cos(angRad) * strafeSpeed
-		self.strafeVelocity.y = math.sin(angRad) * strafeSpeed
+		self.strafeVelocity.x = math.cos(angRad)
+		self.strafeVelocity.y = math.sin(angRad)
 	end
 
-	if strafeSpeed > 0.1 then
-		local simSpeed = length2D(self.velocity)
-		if simSpeed > 0.01 then
-			local strafeDir = Vector3(self.strafeVelocity.x, self.strafeVelocity.y, 0)
-			normalize2DInPlace(strafeDir)
-			self.velocity.x = strafeDir.x * simSpeed
-			self.velocity.y = strafeDir.y * simSpeed
-		end
+	local simSpeed = length2D(self.velocity)
+	if simSpeed > 0.01 then
+		self.velocity.x = self.strafeVelocity.x * simSpeed
+		self.velocity.y = self.strafeVelocity.y * simSpeed
 	end
 
 	local newPos = Vector3(
