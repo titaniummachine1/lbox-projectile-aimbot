@@ -728,40 +728,33 @@ function PlayerMoveSim.stepTick(self, playerEntity)
 
 	local simSpeed = length2D(self.velocity)
 	if simSpeed > 0.01 then
-		self.velocity.x = self.strafeVelocity.x * simSpeed
-		self.velocity.y = self.strafeVelocity.y * simSpeed
-	end
+		local testPos = Vector3(
+			self.origin.x + self.strafeVelocity.x * simSpeed * self.tickinterval,
+			self.origin.y + self.strafeVelocity.y * simSpeed * self.tickinterval,
+			self.origin.z
+		)
 
-	local newPos = Vector3(
-		self.origin.x + self.velocity.x * self.tickinterval,
-		self.origin.y + self.velocity.y * self.tickinterval,
-		self.origin.z + self.velocity.z * self.tickinterval
-	)
+		local trace = engine.TraceHull(self.origin, testPos, self.mins, self.maxs, MASK_PLAYERSOLID, function(ent)
+			return ent:GetIndex() ~= self.index
+		end)
 
-	local trace = engine.TraceHull(self.origin, newPos, self.mins, self.maxs, MASK_PLAYERSOLID, function(ent)
-		return ent:GetIndex() ~= self.index
-	end)
-
-	if trace.fraction > 0 then
-		self.origin.x = trace.endpos.x
-		self.origin.y = trace.endpos.y
-		self.origin.z = trace.endpos.z
-	end
-
-	if trace.fraction < 1 and trace.plane then
-		local normal = trace.plane
-		clipVelocityInPlace(self.velocity, normal, 1.0)
-
-		if trace.plane.z > 0.7 and self.velocity.z < 0 then
-			self.velocity.z = 0
+		if trace.fraction > 0.95 then
+			self.velocity.x = self.strafeVelocity.x * simSpeed
+			self.velocity.y = self.strafeVelocity.y * simSpeed
 		end
 	end
 
 	local isOnGround = checkIsOnGround(self.origin, self.mins, self.maxs, self.index)
 
+	if isOnGround and self.velocity.z < 0 then
+		self.velocity.z = 0
+	end
+
 	if not isOnGround then
 		self.velocity.z = self.velocity.z - gravity * self.tickinterval
 	end
+
+	tryPlayerMoveInPlace(self.origin, self.velocity, self.mins, self.maxs, self.index, self.tickinterval)
 
 	local speed = length2D(self.velocity)
 	if speed > self.maxspeed then
