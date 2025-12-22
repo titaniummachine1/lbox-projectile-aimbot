@@ -90,32 +90,20 @@ end
 
 ---Calculate yaw delta per tick from velocity changes (EMA smoothed)
 ---@param entity Entity
----@param lastVelocityYaw number?
----@param lastYawDelta number?
----@return number newVelocityYaw
 ---@return number yawDeltaPerTick
-local function calculateYawDelta(entity, lastVelocityYaw, lastYawDelta)
+local function calculateYawDelta(entity)
 	local vel = entity:EstimateAbsVelocity()
 	if not vel then
-		return lastVelocityYaw or 0, lastYawDelta or 0
+		return 0
 	end
 
-	local speed2D = math.sqrt(vel.x * vel.x + vel.y * vel.y)
-	if speed2D < 10 then
-		local velYaw = math.atan(vel.y, vel.x) * RAD2DEG
-		return velYaw, lastYawDelta or 0
+	local speed2DSqr = vel.x * vel.x + vel.y * vel.y
+	local minSpeed = 10
+	if speed2DSqr < (minSpeed * minSpeed) then
+		return 0
 	end
 
-	local velYaw = math.atan(vel.y, vel.x) * RAD2DEG
-
-	if type(lastVelocityYaw) == "number" then
-		local angleDelta = normalizeAngle(velYaw - lastVelocityYaw)
-		local prev = lastYawDelta or 0
-		local newDelta = prev * 0.8 + angleDelta * 0.2
-		return velYaw, newDelta
-	end
-
-	return velYaw, 0
+	return 0
 end
 
 ---Calculate relative wishdir from velocity and yaw
@@ -175,7 +163,7 @@ function PredictionContext.createPlayerContext(entity, lazyness)
 	local originWithOffset = origin + Vector3(0, 0, 1)
 
 	local yaw = getEntityEyeYaw(entity) or 0
-	local _, yawDeltaPerTick = calculateYawDelta(entity, nil, nil)
+	local yawDeltaPerTick = calculateYawDelta(entity)
 	local relativeWishDir = calculateRelativeWishDir(velocity, yaw)
 
 	return {
