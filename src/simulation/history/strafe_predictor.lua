@@ -122,6 +122,18 @@ function StrafePredictor.predictStrafeDirection(entityIndex, currentYaw)
 	return Vector3(dirX, dirY, 0)
 end
 
+---Gets yaw delta per tick in DEGREES for use in simulation
+---@param entityIndex integer
+---@param minSamples integer Minimum samples required (default 3)
+---@return number yawDeltaPerTick Yaw change in degrees per tick (0 if insufficient data)
+function StrafePredictor.getYawDeltaPerTickDegrees(entityIndex, minSamples)
+	local avgYawChangeRad = StrafePredictor.calculateAverageYawChange(entityIndex, minSamples or 3)
+	if not avgYawChangeRad then
+		return 0
+	end
+	return avgYawChangeRad * GameConstants.RAD2DEG
+end
+
 ---Updates velocity history for all active players
 ---@param entities table List of entities to track
 ---@param maxSamples integer

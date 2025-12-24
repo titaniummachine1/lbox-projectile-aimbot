@@ -7,16 +7,14 @@
 --   - Gravity when airborne
 --   - Collision detection with world geometry
 --   - Ground snapping
+--   - Strafe prediction (yaw rotation independent of collisions)
+--   - Water level detection
 --
--- FLOW:
---   1. main.lua calls createPlayerContext() to snapshot current player state
---   2. main.lua calls simulateTick() in a loop to step simulation forward
---   3. Each tick updates velocity and position based on Source engine rules
---
--- KEY CONCEPTS:
---   - PlayerContext: Current player state (position, velocity, bbox, etc.)
---   - SimulationContext: Game constants (gravity, friction, tick rate, etc.)
---   - wishdir: Direction player wants to move (derived from current velocity)
+-- STRAFE PREDICTION:
+--   - strafeDir: Normalized direction vector that rotates by yawDeltaPerTick each tick
+--   - strafeDir rotates INDEPENDENTLY of collisions
+--   - Velocity tries to follow strafeDir when possible
+--   - If collision changes velocity angle, strafeDir keeps rotating unaffected
 -- ============================================================================
 
 local GameConstants = require("constants.game_constants")
@@ -27,6 +25,113 @@ local PlayerTick = {}
 -- CONSTANTS
 -- ============================================================================
 local DEG2RAD = math.pi / 180
+local RAD2DEG = 180 / math.pi
+
+-- Water level constants
+local EWaterLevel = {
+	WL_NotInWater = 0,
+	WL_Feet = 1,
+	WL_Waist = 2,
+	WL_Eyes = 3,
+}
+
+-- Expose water levels
+PlayerTick.WaterLevel = EWaterLevel
+
+-- ============================================================================
+-- SECTION 0: WATER DETECTION
+-- ============================================================================
+
+---Get water level at a position
+---@param origin Vector3 Player position
+---@param mins Vector3 Player bbox mins
+---@param maxs Vector3 Player bbox maxs
+---@param viewOffset Vector3 View offset (eye position relative to origin)
+---@return number Water level (0=none, 1=feet, 2=waist, 3=eyes)
+local function getWaterLevel(origin, mins, maxs, viewOffset)
+	local point = Vector3(origin.x + (mins.x + maxs.x) * 0.5, origin.y + (mins.y + maxs.y) * 0.5, origin.z + mins.z + 1)
+
+	local cont = engine.GetPointContents(point, 0)
+	if not cont or (cont & GameConstants.MASK_WATER) == 0 then
+		return EWaterLevel.WL_NotInWater
+	end
+
+	-- Feet in water, check waist
+	point.z = origin.z + (mins.z + maxs.z) * 0.5
+	cont = engine.GetPointContents(point, 1)
+	if (cont & GameConstants.MASK_WATER) == 0 then
+		return EWaterLevel.WL_Feet
+	end
+
+	-- Waist in water, check eyes
+	point.z = origin.z + (viewOffset and viewOffset.z or 64)
+	cont = engine.GetPointContents(point, 2)
+	if (cont & GameConstants.MASK_WATER) == 0 then
+		return EWaterLevel.WL_Waist
+	end
+
+	return EWaterLevel.WL_Eyes
+end
+
+PlayerTick.getWaterLevel = getWaterLevel
+
+-- ============================================================================
+-- SECTION 0.5: STRAFE DIRECTION UTILITIES
+-- ============================================================================
+
+---Normalize a 2D vector in-place, returns original length
+---@param vec Vector3 Vector to normalize (modified in-place)
+---@return number Original 2D length
+local function normalize2DInPlace(vec)
+	local len = math.sqrt(vec.x * vec.x + vec.y * vec.y)
+	if len <= 0.0001 then
+		vec.x, vec.y, vec.z = 0, 0, 0
+		return 0
+	end
+	vec.x = vec.x / len
+	vec.y = vec.y / len
+	vec.z = 0
+	return len
+end
+
+---Get 2D length of a vector
+---@param vec Vector3 Vector
+---@return number 2D length
+local function length2D(vec)
+	return math.sqrt(vec.x * vec.x + vec.y * vec.y)
+end
+
+---Rotate a 2D direction vector by angle in degrees
+---@param dir Vector3 Direction vector (modified in-place)
+---@param angleDeg number Angle to rotate in degrees
+local function rotateDirByAngle(dir, angleDeg)
+	local currentAngle = math.atan(dir.y, dir.x) * RAD2DEG
+	local newAngle = (currentAngle + angleDeg) * DEG2RAD
+	dir.x = math.cos(newAngle)
+	dir.y = math.sin(newAngle)
+	dir.z = 0
+end
+
+---Get yaw angle from direction vector
+---@param dir Vector3 Direction vector
+---@return number Yaw in degrees
+local function dirToYaw(dir)
+	return math.atan(dir.y, dir.x) * RAD2DEG
+end
+
+---Get direction vector from yaw angle
+---@param yaw number Yaw in degrees
+---@return Vector3 Normalized direction vector
+local function yawToDir(yaw)
+	local rad = yaw * DEG2RAD
+	return Vector3(math.cos(rad), math.sin(rad), 0)
+end
+
+PlayerTick.normalize2DInPlace = normalize2DInPlace
+PlayerTick.length2D = length2D
+PlayerTick.rotateDirByAngle = rotateDirByAngle
+PlayerTick.dirToYaw = dirToYaw
+PlayerTick.yawToDir = yawToDir
 
 -- ============================================================================
 -- SECTION 1: MOVEMENT DIRECTION
@@ -589,47 +694,88 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 
 	local tickinterval = simCtx.tickinterval
 
-	-- Step 1: Update yaw (strafe prediction)
-	playerCtx.yaw = (playerCtx.yaw or 0) + (playerCtx.yawDeltaPerTick or 0)
+	-- =========================================================================
+	-- STRAFE PREDICTION: Rotate strafeDir independently of collisions
+	-- strafeDir is a normalized direction that rotates by yawDeltaPerTick each tick
+	-- Velocity tries to follow strafeDir, but collisions don't affect strafeDir
+	-- =========================================================================
 
-	-- Step 2: Calculate movement direction
-	local wishdir = nil
-	if playerCtx.relativeWishDir then
-		wishdir = relativeToWorldWishDir(playerCtx.relativeWishDir, playerCtx.yaw)
-	else
-		local horizLen = playerCtx.velocity:Length()
-		if horizLen > 0.001 then
-			wishdir = Vector3(playerCtx.velocity.x / horizLen, playerCtx.velocity.y / horizLen, 0)
+	-- Initialize strafeDir from velocity direction if not set
+	if not playerCtx.strafeDir then
+		local vel2d = Vector3(playerCtx.velocity.x, playerCtx.velocity.y, 0)
+		local speed2d = length2D(vel2d)
+		if speed2d > 0.1 then
+			playerCtx.strafeDir = Vector3(vel2d.x / speed2d, vel2d.y / speed2d, 0)
 		else
-			wishdir = Vector3(1, 0, 0)
+			playerCtx.strafeDir = Vector3(1, 0, 0)
 		end
 	end
 
-	wishdir.z = 0
+	-- Rotate strafeDir by yawDeltaPerTick (INDEPENDENT of collisions)
+	local yawDelta = playerCtx.yawDeltaPerTick or 0
+	if math.abs(yawDelta) > 0.001 then
+		rotateDirByAngle(playerCtx.strafeDir, yawDelta)
+	end
 
-	-- Step 3: Simple ground check (like user's working code)
+	-- Try to steer velocity toward strafeDir (if not blocked by collision)
+	local speed2d = length2D(playerCtx.velocity)
+	if speed2d > 0.1 then
+		-- Test if we can move in strafeDir without hitting wall
+		local testDist = speed2d * tickinterval
+		local testPos = Vector3(
+			playerCtx.origin.x + playerCtx.strafeDir.x * testDist,
+			playerCtx.origin.y + playerCtx.strafeDir.y * testDist,
+			playerCtx.origin.z
+		)
+
+		local trace = engine.TraceHull(
+			playerCtx.origin,
+			testPos,
+			playerCtx.mins,
+			playerCtx.maxs,
+			GameConstants.MASK_PLAYERSOLID,
+			function(ent)
+				return ent:GetIndex() ~= playerCtx.index
+			end
+		)
+
+		-- If path is mostly clear (>95%), steer velocity toward strafeDir
+		if trace.fraction > 0.95 then
+			playerCtx.velocity.x = playerCtx.strafeDir.x * speed2d
+			playerCtx.velocity.y = playerCtx.strafeDir.y * speed2d
+		end
+		-- If blocked, velocity keeps its collision-adjusted direction
+		-- but strafeDir keeps rotating for next tick
+	end
+
+	-- =========================================================================
+	-- Standard TF2 movement physics
+	-- =========================================================================
+
+	-- Calculate wishdir from strafeDir (strafe prediction takes over wishdir)
+	local wishdir = Vector3(playerCtx.strafeDir.x, playerCtx.strafeDir.y, 0)
+
+	-- Ground check
 	local is_on_ground =
 		checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
 
-	-- Step 3.5: CRITICAL ground velocity management (like working visualizer)
+	-- Zero downward velocity when on ground
 	if is_on_ground and playerCtx.velocity.z < 0 then
 		playerCtx.velocity.z = 0
 	end
 
-	-- Step 4: Apply friction
+	-- Apply friction
 	friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
 
-	-- Step 4.5: CheckVelocity - clamp to max velocity (TF2 source)
+	-- Clamp velocity
 	checkVelocity(playerCtx.velocity)
 
-	-- Step 5: StartGravity - apply half gravity BEFORE movement (TF2 source)
+	-- StartGravity (half gravity before movement)
 	if not is_on_ground then
-		-- TF2: "Add gravity so they'll be in the correct position during movement"
-		-- "yes, this 0.5 looks wrong, but it's not"
 		playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
 	end
 
-	-- Step 6: Accelerate
+	-- Accelerate
 	if is_on_ground then
 		accelerate(playerCtx.velocity, wishdir, playerCtx.maxspeed, simCtx.sv_accelerate, tickinterval)
 		playerCtx.velocity.z = 0
@@ -640,14 +786,13 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 			playerCtx.maxspeed,
 			simCtx.sv_airaccelerate,
 			tickinterval,
-			1.0, -- surface friction for air
+			1.0,
 			playerCtx.entity
 		)
 	end
 
-	-- Step 7: Move with proper TF2 movement logic
+	-- Move with collision detection
 	if is_on_ground then
-		-- Ground movement uses StepMove for stair handling
 		playerCtx.origin = stepMove(
 			playerCtx.origin,
 			playerCtx.velocity,
@@ -657,11 +802,8 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 			tickinterval,
 			playerCtx.stepheight or 18
 		)
-
-		-- TF2: Call StayOnGround AFTER movement to keep on ground when going downhill
 		stayOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.stepheight or 18, playerCtx.index)
 	else
-		-- In air, just do regular collision movement
 		playerCtx.origin = tryPlayerMove(
 			playerCtx.origin,
 			playerCtx.velocity,
@@ -672,17 +814,16 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 		)
 	end
 
-	-- Step 8: Re-categorize position after movement (like TF2 FullWalkMove)
+	-- Re-categorize position
 	local new_ground_state =
 		checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
 
-	-- Step 9: FinishGravity - apply remaining half gravity AFTER movement (TF2 source)
+	-- FinishGravity (remaining half gravity after movement)
 	if not new_ground_state then
-		-- TF2: "Get the correct velocity for the end of the dt"
 		playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
 	end
 
-	-- If on ground after movement, zero downward velocity
+	-- Zero downward velocity when on ground
 	if new_ground_state and playerCtx.velocity.z < 0 then
 		playerCtx.velocity.z = 0
 	end

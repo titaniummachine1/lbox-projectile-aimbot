@@ -1,4 +1,5 @@
 -- Imports
+local StrafePredictor = require("simulation.history.strafe_predictor")
 
 -- Module declaration
 local PredictionContext = {}
@@ -88,22 +89,17 @@ local function getEntityEyeYaw(entity)
 	return nil
 end
 
----Calculate yaw delta per tick from velocity changes (EMA smoothed)
+---Calculate yaw delta per tick from velocity history (using StrafePredictor)
 ---@param entity Entity
----@return number yawDeltaPerTick
+---@return number yawDeltaPerTick in degrees
 local function calculateYawDelta(entity)
-	local vel = entity:EstimateAbsVelocity()
-	if not vel then
+	local index = entity:GetIndex()
+	if not index then
 		return 0
 	end
 
-	local speed2DSqr = vel.x * vel.x + vel.y * vel.y
-	local minSpeed = 10
-	if speed2DSqr < (minSpeed * minSpeed) then
-		return 0
-	end
-
-	return 0
+	-- Use StrafePredictor to get yaw delta per tick in degrees
+	return StrafePredictor.getYawDeltaPerTickDegrees(index, 3)
 end
 
 ---Calculate fallback relative wishdir from velocity when tracker has no data
