@@ -438,9 +438,34 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 		tickinterval
 	)
 
-	-- Step 8: Snap to ground
+	-- Step 8: Ground snapping logic
 	if is_on_ground then
-		stayOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.stepheight, playerCtx.index)
+		local was_airborne = playerCtx.velocity.z > 0.1 or playerCtx.velocity.z < -250.0
+		if not was_airborne then
+			stayOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.stepheight, playerCtx.index)
+		else
+			local small_snap_distance = 2.0
+			local vstart = Vector3(playerCtx.origin.x, playerCtx.origin.y, playerCtx.origin.z)
+			local vend = Vector3(playerCtx.origin.x, playerCtx.origin.y, playerCtx.origin.z - small_snap_distance)
+
+			local trace = engine.TraceHull(
+				vstart,
+				vend,
+				playerCtx.mins,
+				playerCtx.maxs,
+				GameConstants.MASK_PLAYERSOLID,
+				function(ent, contentsMask)
+					return ent:GetIndex() ~= playerCtx.index
+				end
+			)
+
+			if trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7 then
+				local delta = math.abs(playerCtx.origin.z - trace.endpos.z)
+				if delta <= 1.0 and playerCtx.velocity.z <= 0 then
+					playerCtx.origin.z = trace.endpos.z
+				end
+			end
+		end
 	end
 
 	return Vector3(playerCtx.origin:Unpack())
