@@ -11,6 +11,7 @@ local SimulateProj = require("projectilesim")
 local Latency = require("utils.latency")
 local WeaponOffsets = require("constants.weapon_offsets")
 local StrafePredictor = require("simulation.history.strafe_predictor")
+local WishdirTracker = require("simulation.history.wishdir_tracker")
 local TickProfiler = require("tick_profiler")
 local PlayerTracker = require("player_tracker")
 local ViewmodelManager = require("targeting.viewmodel_manager")
@@ -947,11 +948,12 @@ local function onCreateMove(cmd)
 		local isPlayer = entity.IsPlayer and entity:IsPlayer()
 		if isPlayer then
 			TickProfiler.BeginSection("CM:SimPlayer")
-			local simCtx = PredictionContext.createContext()
-			assert(simCtx and simCtx.sv_gravity and simCtx.tickinterval, "Main: createContext failed")
+			local simCtx = PredictionContext.createSimulationContext()
+			assert(simCtx and simCtx.sv_gravity and simCtx.tickinterval, "Main: createSimulationContext failed")
 			simStartTime = simCtx.curtime
 
-			local playerCtx = PredictionContext.createPlayerContext(entity, lazyness)
+			local relWishDir = WishdirTracker.getRelativeWishdir(entity)
+			local playerCtx = PredictionContext.createPlayerContext(entity, lazyness, relWishDir)
 			assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
 
 			local maxTotalTime = math.max(0.0, outgoingLatency + lerp + maxFlightTime)

@@ -15,7 +15,7 @@ local SimulationContext = {}
 
 ---Creates a new simulation context with current cvars
 ---@return SimulationContext
-function PredictionContext.createContext()
+function PredictionContext.createSimulationContext()
 	local _, sv_gravity = client.GetConVar("sv_gravity")
 	assert(sv_gravity, "createContext: client.GetConVar('sv_gravity') returned nil")
 
@@ -106,11 +106,11 @@ local function calculateYawDelta(entity)
 	return 0
 end
 
----Calculate relative wishdir from velocity and yaw
+---Calculate fallback relative wishdir from velocity when tracker has no data
 ---@param velocity Vector3
 ---@param yaw number
 ---@return Vector3 relativeWishDir
-local function calculateRelativeWishDir(velocity, yaw)
+local function fallbackRelativeWishDir(velocity, yaw)
 	local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
 	if horizLen < 0.001 then
 		return Vector3(1, 0, 0)
@@ -139,8 +139,9 @@ end
 ---Creates a player context from entity
 ---@param entity Entity
 ---@param lazyness number? Optional tick multiplier
+---@param relativeWishDir Vector3? Optional override for relative wish direction
 ---@return PlayerContext
-function PredictionContext.createPlayerContext(entity, lazyness)
+function PredictionContext.createPlayerContext(entity, lazyness, relativeWishDir)
 	assert(entity, "createPlayerContext: entity is nil")
 
 	local velocity = entity:EstimateAbsVelocity()
@@ -164,7 +165,10 @@ function PredictionContext.createPlayerContext(entity, lazyness)
 
 	local yaw = getEntityEyeYaw(entity) or 0
 	local yawDeltaPerTick = calculateYawDelta(entity)
-	local relativeWishDir = calculateRelativeWishDir(velocity, yaw)
+
+	if not relativeWishDir then
+		relativeWishDir = fallbackRelativeWishDir(velocity, yaw)
+	end
 
 	return {
 		entity = entity,

@@ -852,6 +852,8 @@ function Visuals.draw(state)
 						last = current
 					end
 				end
+			else
+				printc(255, 100, 100, 255, "[Visuals] Self-prediction: context creation failed")
 			end
 		end)
 
