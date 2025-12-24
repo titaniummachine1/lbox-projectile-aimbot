@@ -57,28 +57,44 @@ end
 -- ============================================================================
 
 ---Apply Source engine friction (only when on ground)
+---From TF2 source: CGameMovement::Friction()
 ---@param velocity Vector3 Current velocity (modified in-place)
 ---@param is_on_ground boolean Whether player is on ground
 ---@param frametime number Tick interval
 ---@param sv_friction number Server friction cvar
 ---@param sv_stopspeed number Server stopspeed cvar
-local function friction(velocity, is_on_ground, frametime, sv_friction, sv_stopspeed)
-	local speed = velocity:LengthSqr()
-	if speed < 0.01 then
+---@param surface_friction number Surface friction multiplier (default 1.0)
+local function friction(velocity, is_on_ground, frametime, sv_friction, sv_stopspeed, surface_friction)
+	surface_friction = surface_friction or 1.0
+
+	-- Calculate actual speed (not squared!)
+	local speed = velocity:Length()
+
+	-- If too slow, return
+	if speed < 0.1 then
 		return
 	end
 
 	local drop = 0
 
+	-- Apply ground friction (TF2: control * sv_friction * surfaceFriction * frametime)
 	if is_on_ground then
-		local friction_val = sv_friction
-		local control = speed < sv_stopspeed and sv_stopspeed or speed
-		drop = drop + control * friction_val * frametime
+		-- Bleed off some speed, but if we have less than the bleed
+		-- threshold, bleed the threshold amount (TF2 source)
+		local control = (speed < sv_stopspeed) and sv_stopspeed or speed
+		drop = control * sv_friction * surface_friction * frametime
 	end
 
+	-- Scale the velocity
 	local newspeed = speed - drop
+	if newspeed < 0 then
+		newspeed = 0
+	end
+
 	if newspeed ~= speed then
+		-- Determine proportion of old speed we are using
 		newspeed = newspeed / speed
+		-- Adjust velocity according to proportion
 		velocity.x = velocity.x * newspeed
 		velocity.y = velocity.y * newspeed
 		velocity.z = velocity.z * newspeed
@@ -86,12 +102,16 @@ local function friction(velocity, is_on_ground, frametime, sv_friction, sv_stops
 end
 
 ---Apply ground acceleration
+---From TF2 source: CGameMovement::Accelerate()
 ---@param velocity Vector3 Current velocity (modified in-place)
 ---@param wishdir Vector3 Direction to accelerate
 ---@param wishspeed number Target speed
 ---@param accel number Acceleration multiplier
 ---@param frametime number Tick interval
-local function accelerate(velocity, wishdir, wishspeed, accel, frametime)
+---@param surface_friction number Surface friction multiplier (default 1.0)
+local function accelerate(velocity, wishdir, wishspeed, accel, frametime, surface_friction)
+	surface_friction = surface_friction or 1.0
+
 	local currentspeed = velocity:Dot(wishdir)
 	local addspeed = wishspeed - currentspeed
 
@@ -99,7 +119,8 @@ local function accelerate(velocity, wishdir, wishspeed, accel, frametime)
 		return
 	end
 
-	local accelspeed = accel * frametime * wishspeed
+	-- TF2: accelspeed = accel * frametime * wishspeed * surfaceFriction
+	local accelspeed = accel * frametime * wishspeed * surface_friction
 	if accelspeed > addspeed then
 		accelspeed = addspeed
 	end
@@ -172,23 +193,70 @@ end
 -- SECTION 4: SIMPLE GROUND DETECTION (Like user's working code)
 -- ============================================================================
 
----Simple ground check (like working visualizer)
----Uses 45-degree walkable angle: cos(45°) = 0.7 (like working code)
+-- TF2 movement constants
+local NON_JUMP_VELOCITY = 140.0 -- If moving up faster than this, not on ground
+local GROUND_CHECK_OFFSET = 2.0 -- TF2 uses 2 units for ground detection
+local DIST_EPSILON = 0.03125 -- Source engine epsilon for step traces
+local SV_MAXVELOCITY = 3500 -- Default sv_maxvelocity
+
+---TF2 CheckVelocity - clamps velocity components to sv_maxvelocity
+---From TF2 source: CGameMovement::CheckVelocity()
+---@param velocity Vector3 Velocity (modified in-place)
+---@param maxvelocity number Max velocity (default 3500)
+local function checkVelocity(velocity, maxvelocity)
+	maxvelocity = maxvelocity or SV_MAXVELOCITY
+
+	-- Clamp each component
+	if velocity.x > maxvelocity then
+		velocity.x = maxvelocity
+	end
+	if velocity.x < -maxvelocity then
+		velocity.x = -maxvelocity
+	end
+	if velocity.y > maxvelocity then
+		velocity.y = maxvelocity
+	end
+	if velocity.y < -maxvelocity then
+		velocity.y = -maxvelocity
+	end
+	if velocity.z > maxvelocity then
+		velocity.z = maxvelocity
+	end
+	if velocity.z < -maxvelocity then
+		velocity.z = -maxvelocity
+	end
+end
+
+---TF2 CategorizePosition ground check
+---From TF2 source: checks if player is on walkable ground
 ---@param origin Vector3 Player position
+---@param velocity Vector3 Player velocity (for jump detection)
 ---@param mins Vector3 Player bbox mins
 ---@param maxs Vector3 Player bbox maxs
 ---@param index integer Player entity index
----@return boolean True if ground detected within 18 units
-local function checkIsOnGround(origin, mins, maxs, index)
-	local down = Vector3(origin.x, origin.y, origin.z - 18)
-	local trace = engine.TraceHull(origin, down, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent, contentsMask)
+---@return boolean True if on ground
+local function checkIsOnGround(origin, velocity, mins, maxs, index)
+	-- TF2: If moving up rapidly, not on ground (jumping)
+	if velocity and velocity.z > NON_JUMP_VELOCITY then
+		return false
+	end
+
+	-- TF2: Trace down by 2 units to check for ground
+	local down = Vector3(origin.x, origin.y, origin.z - GROUND_CHECK_OFFSET)
+	local trace = engine.TraceHull(origin, down, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
 		return ent:GetIndex() ~= index
 	end)
 
-	return trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7
+	-- Must hit something with walkable slope (normal.z >= 0.7)
+	if trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7 then
+		return true
+	end
+
+	return false
 end
 
----Improved ground snapping like reference implementation
+---TF2 StayOnGround - keeps walking player on ground when running down slopes
+---From TF2 source: trace UP 2 units first to find safe position, then DOWN by stepSize
 ---@param origin Vector3 Player position (modified in-place)
 ---@param mins Vector3 Player bbox mins
 ---@param maxs Vector3 Player bbox maxs
@@ -196,19 +264,38 @@ end
 ---@param index integer Player entity index
 ---@return boolean True if ground snapping occurred
 local function stayOnGround(origin, mins, maxs, stepheight, index)
-	local vstart = Vector3(origin.x, origin.y, origin.z + 2)
-	local vend = Vector3(origin.x, origin.y, origin.z - stepheight)
+	-- TF2 algorithm: First trace UP to find safe starting position
+	local start_pos = Vector3(origin.x, origin.y, origin.z + 2)
+	local end_pos = Vector3(origin.x, origin.y, origin.z - stepheight)
 
-	local trace = engine.TraceHull(vstart, vend, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
+	-- See how far up we can go without getting stuck
+	local up_trace = engine.TraceHull(origin, start_pos, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
 		return ent:GetIndex() ~= index
 	end)
 
-	if trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7 then
-		local delta = math.abs(origin.z - trace.endpos.z)
+	-- Use the safe elevated position as start
+	local safe_start = up_trace.endpos
+
+	-- Now trace down from the safe position
+	local down_trace = engine.TraceHull(safe_start, end_pos, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
+		return ent:GetIndex() ~= index
+	end)
+
+	-- Check if we found valid ground
+	if
+		down_trace.fraction > 0 -- must go somewhere
+		and down_trace.fraction < 1.0 -- must hit something
+		and not down_trace.startsolid -- can't be embedded in solid
+		and down_trace.plane
+		and down_trace.plane.z >= 0.7
+	then -- must be walkable slope
+		local delta = math.abs(origin.z - down_trace.endpos.z)
+
+		-- Only snap if significant difference (TF2 uses 0.5 * COORD_RESOLUTION)
 		if delta > 0.5 then
-			origin.x = trace.endpos.x
-			origin.y = trace.endpos.y
-			origin.z = trace.endpos.z
+			origin.x = down_trace.endpos.x
+			origin.y = down_trace.endpos.y
+			origin.z = down_trace.endpos.z
 			return true
 		end
 	end
@@ -382,8 +469,8 @@ local function stepMove(origin, velocity, mins, maxs, index, tickinterval, steph
 	velocity.y = original_vel.y
 	velocity.z = original_vel.z
 
-	-- Try step-up path: Move up by step height
-	local step_up_dest = Vector3(origin.x, origin.y, origin.z + stepheight)
+	-- Try step-up path: Move up by step height + epsilon (TF2 source)
+	local step_up_dest = Vector3(origin.x, origin.y, origin.z + stepheight + DIST_EPSILON)
 
 	local step_trace = engine.TraceHull(origin, step_up_dest, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
 		return ent:GetIndex() ~= index
@@ -399,8 +486,8 @@ local function stepMove(origin, velocity, mins, maxs, index, tickinterval, steph
 		-- Try movement from elevated position
 		tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
 
-		-- Step back down to ground level
-		local step_down_dest = Vector3(origin.x, origin.y, origin.z - stepheight)
+		-- Step back down to ground level + epsilon (TF2 source)
+		local step_down_dest = Vector3(origin.x, origin.y, origin.z - stepheight - DIST_EPSILON)
 
 		local step_down_trace = engine.TraceHull(
 			origin,
@@ -521,7 +608,8 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 	wishdir.z = 0
 
 	-- Step 3: Simple ground check (like user's working code)
-	local is_on_ground = checkIsOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.index)
+	local is_on_ground =
+		checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
 
 	-- Step 3.5: CRITICAL ground velocity management (like working visualizer)
 	if is_on_ground and playerCtx.velocity.z < 0 then
@@ -531,7 +619,17 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 	-- Step 4: Apply friction
 	friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
 
-	-- Step 5 & 6: Accelerate and apply gravity
+	-- Step 4.5: CheckVelocity - clamp to max velocity (TF2 source)
+	checkVelocity(playerCtx.velocity)
+
+	-- Step 5: StartGravity - apply half gravity BEFORE movement (TF2 source)
+	if not is_on_ground then
+		-- TF2: "Add gravity so they'll be in the correct position during movement"
+		-- "yes, this 0.5 looks wrong, but it's not"
+		playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
+	end
+
+	-- Step 6: Accelerate
 	if is_on_ground then
 		accelerate(playerCtx.velocity, wishdir, playerCtx.maxspeed, simCtx.sv_accelerate, tickinterval)
 		playerCtx.velocity.z = 0
@@ -542,14 +640,14 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 			playerCtx.maxspeed,
 			simCtx.sv_airaccelerate,
 			tickinterval,
-			0,
+			1.0, -- surface friction for air
 			playerCtx.entity
 		)
-		playerCtx.velocity.z = playerCtx.velocity.z - simCtx.sv_gravity * tickinterval
 	end
 
-	-- Step 7: Move with proper TF2 StepMove logic
+	-- Step 7: Move with proper TF2 movement logic
 	if is_on_ground then
+		-- Ground movement uses StepMove for stair handling
 		playerCtx.origin = stepMove(
 			playerCtx.origin,
 			playerCtx.velocity,
@@ -559,6 +657,9 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 			tickinterval,
 			playerCtx.stepheight or 18
 		)
+
+		-- TF2: Call StayOnGround AFTER movement to keep on ground when going downhill
+		stayOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.stepheight or 18, playerCtx.index)
 	else
 		-- In air, just do regular collision movement
 		playerCtx.origin = tryPlayerMove(
@@ -569,6 +670,21 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 			playerCtx.index,
 			tickinterval
 		)
+	end
+
+	-- Step 8: Re-categorize position after movement (like TF2 FullWalkMove)
+	local new_ground_state =
+		checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
+
+	-- Step 9: FinishGravity - apply remaining half gravity AFTER movement (TF2 source)
+	if not new_ground_state then
+		-- TF2: "Get the correct velocity for the end of the dt"
+		playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
+	end
+
+	-- If on ground after movement, zero downward velocity
+	if new_ground_state and playerCtx.velocity.z < 0 then
+		playerCtx.velocity.z = 0
 	end
 
 	return Vector3(playerCtx.origin:Unpack())
