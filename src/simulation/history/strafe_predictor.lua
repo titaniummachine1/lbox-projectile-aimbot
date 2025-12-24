@@ -102,6 +102,16 @@ function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
 	return totalYawChange / samples
 end
 
+---Predicts future strafe direction based on velocity history
+---@param entityIndex integer
+---@param currentYaw number Current yaw in radians
+---@return Vector3? Predicted direction vector (nil if insufficient data)
+function StrafePredictor.predictStrafeDirection(entityIndex, currentYaw)
+	local avgYawChange = StrafePredictor.calculateAverageYawChange(entityIndex, 3)
+	if not avgYawChange then
+		return nil
+	end
+
 	-- Apply predicted yaw change
 	local predictedYaw = currentYaw + avgYawChange
 

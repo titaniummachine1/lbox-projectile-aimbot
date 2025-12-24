@@ -169,22 +169,67 @@ local function airAccelerate(v, wishdir, wishspeed, accel, dt, surf, target)
 end
 
 -- ============================================================================
--- SECTION 4: GROUND DETECTION
+-- SECTION 4: GROUND STATE MANAGEMENT (Persistent State Machine)
 -- ============================================================================
 
----Check if player is on ground by tracing down 18 units
----@param origin Vector3 Player position
----@param mins Vector3 Player bbox mins
----@param maxs Vector3 Player bbox maxs
----@param index integer Player entity index (to exclude from trace)
----@return boolean True if on ground
-local function checkIsOnGround(origin, mins, maxs, index)
-	local down = Vector3(origin.x, origin.y, origin.z - 18)
-	local trace = engine.TraceHull(origin, down, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent, contentsMask)
-		return ent:GetIndex() ~= index
-	end)
+-- Per-player ground state persistence (like swing prediction)
+local playerGroundStates = {}
 
-	return trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7
+---Clean up stale ground state entries for disconnected players
+---@param validPlayerIndices table<integer, boolean> Set of valid player indices
+function PlayerTick.cleanupGroundStates(validPlayerIndices)
+	for index in pairs(playerGroundStates) do
+		if not validPlayerIndices[index] then
+			playerGroundStates[index] = nil
+		end
+	end
+end
+
+---Update ground state based on collision detection (preserves state between ticks)
+---@param playerCtx PlayerContext Player context with current state
+---@param tickinterval number Time for this tick
+---@return boolean Current ground state after collision resolution
+local function updateGroundState(playerCtx, tickinterval)
+	local index = playerCtx.index
+	local lastGroundState = playerGroundStates[index]
+	if lastGroundState == nil then
+		local flags = playerCtx.entity:GetPropInt("m_fFlags")
+		lastGroundState = (flags & GameConstants.FL_ONGROUND) ~= 0
+		playerGroundStates[index] = lastGroundState
+	end
+
+	local currentGroundState = lastGroundState
+	local vStep = Vector3(0, 0, playerCtx.stepheight)
+	local vUp = Vector3(0, 0, 1)
+
+	local downStep = currentGroundState and vStep or Vector3(0, 0, 0)
+
+	local groundTrace = engine.TraceHull(
+		playerCtx.origin + vStep,
+		playerCtx.origin - downStep,
+		playerCtx.mins,
+		playerCtx.maxs,
+		GameConstants.MASK_PLAYERSOLID,
+		function(ent, contentsMask)
+			return ent:GetIndex() ~= index
+		end
+	)
+
+	if groundTrace and groundTrace.fraction < 1.0 and not groundTrace.startsolid and groundTrace.plane then
+		local normal = groundTrace.plane
+		local angle = math.deg(math.acos(math.min(1.0, math.max(-1.0, normal:Dot(vUp)))))
+
+		if angle < 45.0 then
+			currentGroundState = true
+		elseif angle >= 55.0 then
+			currentGroundState = false
+		end
+	else
+		currentGroundState = false
+	end
+
+	playerGroundStates[index] = currentGroundState
+	return currentGroundState
 end
 
 ---Snap player to ground surface when on ground
@@ -405,8 +450,8 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 
 	wishdir.z = 0
 
-	-- Step 3: Check ground state
-	local is_on_ground = checkIsOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.index)
+	-- Step 3: Update persistent ground state
+	local is_on_ground = updateGroundState(playerCtx, tickinterval)
 
 	-- Step 4: Apply friction
 	friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
@@ -438,33 +483,11 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 		tickinterval
 	)
 
-	-- Step 8: Ground snapping logic
+	-- Step 8: Ground snapping (only for truly grounded players)
 	if is_on_ground then
-		local was_airborne = playerCtx.velocity.z > 0.1 or playerCtx.velocity.z < -250.0
-		if not was_airborne then
+		local is_airborne = playerCtx.velocity.z > 0.1 or playerCtx.velocity.z < -250.0
+		if not is_airborne then
 			stayOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.stepheight, playerCtx.index)
-		else
-			local small_snap_distance = 2.0
-			local vstart = Vector3(playerCtx.origin.x, playerCtx.origin.y, playerCtx.origin.z)
-			local vend = Vector3(playerCtx.origin.x, playerCtx.origin.y, playerCtx.origin.z - small_snap_distance)
-
-			local trace = engine.TraceHull(
-				vstart,
-				vend,
-				playerCtx.mins,
-				playerCtx.maxs,
-				GameConstants.MASK_PLAYERSOLID,
-				function(ent, contentsMask)
-					return ent:GetIndex() ~= playerCtx.index
-				end
-			)
-
-			if trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7 then
-				local delta = math.abs(playerCtx.origin.z - trace.endpos.z)
-				if delta <= 1.0 and playerCtx.velocity.z <= 0 then
-					playerCtx.origin.z = trace.endpos.z
-				end
-			end
 		end
 	end
 

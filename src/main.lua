@@ -1146,9 +1146,7 @@ local function onCreateMove(cmd)
 		local drop = 0.5 * gravity * flightTime * flightTime
 		local predictedOriginVis = predictedOrigin + Vector3(0, 0, drop)
 
-		-- TODO: Deep integration - Apply strafe prediction to each simulation tick
-		-- Currently only recording history; deeper integration requires modifying PlayerTick.simulateTick
-		-- to accept and use StrafePredictor.predictStrafeDirection per tick
+		-- REMOVED: Polluted strafe prediction integration - only visuals.lua prediction allowed
 
 		local multipointHitbox, multipointPos = nil, nil
 		if entity.IsPlayer and entity:IsPlayer() then
