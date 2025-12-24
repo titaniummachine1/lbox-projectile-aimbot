@@ -61,58 +61,12 @@ local function shouldPrune(entry)
 	return (globals.TickCount() - entry.lastTick) > EXPIRY_TICKS
 end
 
-local function simulateAllDirections(entity, yaw)
-	assert(entity, "simulateAllDirections: entity is nil")
-	assert(yaw, "simulateAllDirections: yaw is nil")
+-- REMOVED: simulateAllDirections - will be hooked up to local player prediction later
 
-	local predictions = {}
-	local simCtx = PredictionContext.createSimulationContext()
-
-	for _, dir in ipairs(DIRECTIONS) do
-		local relWishDir = nil
-		if dir.x and dir.y then
-			relWishDir = normalizeDirection(dir.x, dir.y)
-		end
-
-		local playerCtx = PredictionContext.createPlayerContext(entity, 1.0, relWishDir)
-		playerCtx.yaw = yaw
-		playerCtx.yawDeltaPerTick = 0
-
-		local predictedPos = PlayerTick.simulateTick(playerCtx, simCtx)
-
-		predictions[dir.name] = {
-			position = predictedPos,
-			relWishDir = relWishDir,
-		}
-	end
-
-	return predictions
-end
-
-local function findClosestPrediction(actualPos, predictions)
-	assert(actualPos, "findClosestPrediction: actualPos is nil")
-	assert(predictions, "findClosestPrediction: predictions is nil")
-
-	local closestName = nil
-	local closestDistSq = math.huge
-
-	for name, pred in pairs(predictions) do
-		local predPos = pred.position
-		local dx = actualPos.x - predPos.x
-		local dy = actualPos.y - predPos.y
-		local dz = actualPos.z - predPos.z
-		local distSq = dx * dx + dy * dy + dz * dz
-
-		if distSq < closestDistSq then
-			closestDistSq = distSq
-			closestName = name
-		end
-	end
-
-	return closestName, closestDistSq
-end
+-- REMOVED: findClosestPrediction - will be hooked up to local player prediction later
 
 function WishdirTracker.update(entity)
+	-- Keep basic tracking for history but no prediction
 	if not entity or not entity:IsAlive() or entity:IsDormant() then
 		return
 	end
@@ -124,87 +78,27 @@ function WishdirTracker.update(entity)
 	local s = state[idx]
 
 	local currentPos = entity:GetAbsOrigin()
-	assert(currentPos, "WishdirTracker.update: entity:GetAbsOrigin() returned nil")
+	if not currentPos then
+		return
+	end
 
 	local currentYaw = getEntityYaw(entity)
 	if not currentYaw then
 		return
 	end
 
-	if s.predictions then
-		local matchedDir, distSq = findClosestPrediction(currentPos, s.predictions)
-
-		if matchedDir and s.predictions[matchedDir] then
-			s.detectedRelWishDir = s.predictions[matchedDir].relWishDir
-			s.detectedYaw = s.lastYaw
-		end
-	end
-
-	s.predictions = simulateAllDirections(entity, currentYaw)
+	-- Store basic position/yaw history for later hookup
+	s.lastPos = currentPos
 	s.lastYaw = currentYaw
 	s.lastTick = globals.TickCount()
 end
 
-local function snapVelocityToClosestDirection(entity, yaw)
-	local velocity = entity:EstimateAbsVelocity()
-	if not velocity then
-		return Vector3(1, 0, 0)
-	end
-
-	local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
-	if horizLen < 0.001 then
-		return Vector3(1, 0, 0)
-	end
-
-	local yawRad = yaw * (math.pi / 180)
-	local cosYaw = math.cos(yawRad)
-	local sinYaw = math.sin(yawRad)
-
-	local forward = Vector3(cosYaw, sinYaw, 0)
-	local right = Vector3(sinYaw, -cosYaw, 0)
-
-	local velNorm = Vector3(velocity.x / horizLen, velocity.y / horizLen, 0)
-
-	local relX = forward.x * velNorm.x + forward.y * velNorm.y
-	local relY = right.x * velNorm.x + right.y * velNorm.y
-
-	local closestDir = nil
-	local closestDot = -math.huge
-
-	for _, dir in ipairs(DIRECTIONS) do
-		if dir.x and dir.y then
-			local normalized = normalizeDirection(dir.x, dir.y)
-			if normalized then
-				local dot = relX * normalized.x + relY * normalized.y
-				if dot > closestDot then
-					closestDot = dot
-					closestDir = normalized
-				end
-			end
-		end
-	end
-
-	return closestDir or Vector3(1, 0, 0)
-end
+-- REMOVED: snapVelocityToClosestDirection and getRelativeWishdir
+-- These will be hooked up to local player prediction later
 
 function WishdirTracker.getRelativeWishdir(entity)
-	if not entity then
-		return nil
-	end
-
-	local idx = entity:GetIndex()
-	local s = state[idx]
-
-	if s and not shouldPrune(s) and s.detectedRelWishDir then
-		return s.detectedRelWishDir
-	end
-
-	local yaw = getEntityYaw(entity)
-	if not yaw then
-		return nil
-	end
-
-	return snapVelocityToClosestDirection(entity, yaw)
+	-- Return nil - no prediction for enemies, only history collection
+	return nil
 end
 
 ---Update tracker for a provided, pre-sorted list of entities (nearest/top).

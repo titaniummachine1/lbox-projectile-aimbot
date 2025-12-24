@@ -102,30 +102,6 @@ function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
 	return totalYawChange / samples
 end
 
----Predicts strafe-adjusted velocity direction
----@param entityIndex integer
----@param currentVelocity Vector3
----@param minDifference number Minimum yaw change to apply (degrees)
----@return Vector3? predictedDirection Unit vector of predicted direction (nil if no prediction)
-function StrafePredictor.predictStrafeDirection(entityIndex, currentVelocity, minDifference)
-	local avgYawChange = StrafePredictor.calculateAverageYawChange(entityIndex, 3)
-
-	if not avgYawChange then
-		return nil
-	end
-
-	-- Convert to degrees for threshold check
-	local avgYawDegrees = avgYawChange * GameConstants.RAD2DEG
-	minDifference = minDifference or 5.0
-
-	-- Only apply if change is significant
-	if math.abs(avgYawDegrees) < minDifference then
-		return nil
-	end
-
-	-- Get current direction
-	local currentYaw = math.atan(currentVelocity.y, currentVelocity.x)
-
 	-- Apply predicted yaw change
 	local predictedYaw = currentYaw + avgYawChange
 

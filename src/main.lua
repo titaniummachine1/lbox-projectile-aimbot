@@ -901,7 +901,7 @@ local function onCreateMove(cmd)
 			keepHistory[idx] = true
 			local velocity = entity:EstimateAbsVelocity()
 			if velocity then
-				StrafePredictor.recordVelocity(idx, velocity, 10)
+				-- DISABLED: StrafePredictor.recordVelocity(idx, velocity, 10)
 			end
 		end
 	end
@@ -947,6 +947,9 @@ local function onCreateMove(cmd)
 		local simStartTime = globals.CurTime()
 		local isPlayer = entity.IsPlayer and entity:IsPlayer()
 		if isPlayer then
+			-- DISABLED: Enemy prediction completely removed per user request
+			error("ENEMY PREDICTION DISABLED - Only local player prediction should work")
+			--[[
 			TickProfiler.BeginSection("CM:SimPlayer")
 			local simCtx = PredictionContext.createSimulationContext()
 			assert(simCtx and simCtx.sv_gravity and simCtx.tickinterval, "Main: createSimulationContext failed")
@@ -955,7 +958,9 @@ local function onCreateMove(cmd)
 			local relWishDir = WishdirTracker.getRelativeWishdir(entity)
 			local playerCtx = PredictionContext.createPlayerContext(entity, lazyness, relWishDir)
 			assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
+			--]]
 
+			--[[
 			local maxTotalTime = math.max(0.0, outgoingLatency + lerp + maxFlightTime)
 			local tickinterval = simCtx.tickinterval
 			local clock = 0.0
@@ -1010,6 +1015,7 @@ local function onCreateMove(cmd)
 			end
 
 			TickProfiler.EndSection("CM:SimPlayer")
+			--]]
 
 			assert(path, "Main: SimulatePlayer returned nil path")
 			assert(lastPos, "Main: SimulatePlayer returned nil lastPos")
