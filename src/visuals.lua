@@ -12,6 +12,10 @@ local WHITE_PIXEL_RGBA = string.char(255, 255, 255, 255)
 local whiteTexture = nil
 local PLAYER_PATH_GAP_SQ = 80 * 80
 
+-- Enhanced visualization: draw prediction points at intervals
+local PREDICTION_POINT_INTERVAL = 3 -- Draw a point every N steps
+local PREDICTION_POINT_SIZE = 4.0 -- Size of prediction points
+
 local function getWhiteTexture()
 	if whiteTexture then
 		return whiteTexture
@@ -86,6 +90,28 @@ local function drawLine(texture, p1, p2, thickness)
 	}
 
 	draw.TexturedPolygon(tex, verts, false)
+end
+
+-- Draw a filled circle for prediction points
+local function drawCircle(x, y, radius)
+	if not x or not y or radius <= 0 then
+		return
+	end
+
+	-- Draw filled circle using triangle fan approximation
+	local segments = math.max(8, math.floor(radius * 2))
+	local verts = {}
+
+	for i = 0, segments do
+		local angle = (i / segments) * math.pi * 2
+		local vx = x + math.cos(angle) * radius
+		local vy = y + math.sin(angle) * radius
+		table.insert(verts, { vx, vy })
+	end
+
+	if #verts >= 3 then
+		draw.FilledPolygon(verts)
+	end
 end
 
 local function buildBoxFaces(worldMins, worldMaxs)
@@ -708,11 +734,13 @@ function Visuals.draw(state)
 	local currentOrigin = (targetEntity and targetEntity.GetAbsOrigin and targetEntity:GetAbsOrigin()) or nil
 	local targetPos = predictedOrigin or lastVec(playerPath) or currentOrigin
 
-	-- Draw player path
+	-- Draw player path with enhanced visualization
 	if vis.DrawPlayerPath and playerPath and #playerPath > 1 then
 		local r, g, b, a = getColor(vis, "PlayerPath", 180)
 		a = math.floor(a * alphaMul)
 		draw.Color(r, g, b, a)
+
+		-- Draw the path line
 		if currentOrigin then
 			local lastWorld = currentOrigin
 			local last = client.WorldToScreen(currentOrigin)
@@ -738,6 +766,28 @@ function Visuals.draw(state)
 		else
 			drawPlayerPath(texture, playerPath, vis.Thickness.PlayerPath)
 		end
+
+		-- Draw prediction points with gradient colors
+		for i = 1, #playerPath, PREDICTION_POINT_INTERVAL do
+			local pointWorld = playerPath[i]
+			local pointScreen = pointWorld and client.WorldToScreen(pointWorld)
+			if pointScreen then
+				-- Color gradient from start (green) to end (red)
+				local progress = i / #playerPath
+				local hue = progress * 120 -- 0 = red, 120 = green
+				local pr, pg, pb = hsvToRgb(120 - hue, 0.8, 1)
+				draw.Color(math.floor(pr * 255), math.floor(pg * 255), math.floor(pb * 255), a)
+				drawCircle(pointScreen[1], pointScreen[2], PREDICTION_POINT_SIZE)
+			end
+		end
+
+		-- Always draw the final prediction point (larger, different color)
+		local finalPoint = playerPath[#playerPath]
+		local finalScreen = finalPoint and client.WorldToScreen(finalPoint)
+		if finalScreen then
+			draw.Color(255, 100, 100, a) -- Red for final point
+			drawCircle(finalScreen[1], finalScreen[2], PREDICTION_POINT_SIZE * 1.5)
+		end
 	end
 
 	-- Draw bounding box
@@ -756,17 +806,7 @@ function Visuals.draw(state)
 		)
 	end
 
-	-- Draw projectile path
-	if vis.DrawProjectilePath then
-		if not projPath then
-			printc(255, 0, 0, 255, "[Visuals] projPath is nil")
-		elseif #projPath == 0 then
-			printc(255, 165, 0, 255, "[Visuals] projPath is empty (length 0)")
-		else
-			printc(0, 255, 0, 255, "[Visuals] projPath has " .. #projPath .. " points")
-		end
-	end
-
+	-- Draw projectile path with enhanced visualization
 	if vis.DrawProjectilePath and projPath and #projPath > 0 then
 		local startR, startG, startB, startA = getColor(vis, "ProjectilePathStart", 60)
 		local endR, endG, endB, endA = getColor(vis, "ProjectilePathEnd", 60)
@@ -783,6 +823,26 @@ function Visuals.draw(state)
 			endA,
 		}
 		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath, startColor, endColor, alphaMul)
+
+		-- Draw projectile path points with different interval
+		local projPointInterval = math.max(2, math.floor(#projPath / 20)) -- Show ~20 points max
+		for i = 1, #projPath, projPointInterval do
+			local pointWorld = projPath[i]
+			local pointScreen = pointWorld and client.WorldToScreen(pointWorld)
+			if pointScreen then
+				-- Gradient from cyan (start) to yellow (end)
+				local progress = i / #projPath
+				local hue = 180 - progress * 60 -- 180 = cyan, 120 = yellow
+				local pr, pg, pb = hsvToRgb(hue, 1.0, 1)
+				draw.Color(
+					math.floor(pr * 255),
+					math.floor(pg * 255),
+					math.floor(pb * 255),
+					math.floor(startA * alphaMul)
+				)
+				drawCircle(pointScreen[1], pointScreen[2], PREDICTION_POINT_SIZE * 0.75)
+			end
+		end
 	end
 
 	local debugDuration = (vis.ShowMultipointDebug and (vis.MultipointDebugDuration or 0)) or 0
@@ -842,6 +902,7 @@ function Visuals.draw(state)
 					local r, g, b, a = getColor(vis, "SelfPrediction", 300)
 					draw.Color(r, g, b, a)
 
+					-- Draw the path line
 					local last = nil
 					for i = 1, #path do
 						local curWorld = path[i]
@@ -850,6 +911,24 @@ function Visuals.draw(state)
 							drawLine(texture, last, current, vis.Thickness.SelfPrediction or 2.0)
 						end
 						last = current
+					end
+
+					-- Draw self-prediction points with purple gradient
+					for i = 1, #path, PREDICTION_POINT_INTERVAL do
+						local pointWorld = path[i]
+						local pointScreen = pointWorld and client.WorldToScreen(pointWorld)
+						if pointScreen then
+							-- Purple to white gradient for self-prediction
+							local progress = i / #path
+							local brightness = 0.5 + progress * 0.5
+							draw.Color(
+								math.floor(200 * brightness),
+								math.floor(100 * brightness),
+								math.floor(255 * brightness),
+								a
+							)
+							drawCircle(pointScreen[1], pointScreen[2], PREDICTION_POINT_SIZE * 0.8)
+						end
 					end
 				end
 			else

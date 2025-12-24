@@ -429,6 +429,12 @@ local function onCreateMove(cmd)
 	PlayerTracker.UpdatePlayerList()
 	StrafePredictor.cleanupStalePlayers()
 
+	-- Update strafe predictor velocity history for all players (REQUIRED for yaw delta calculation)
+	local allPlayers = entities.FindByClass("CTFPlayer")
+	if allPlayers then
+		StrafePredictor.updateAll(allPlayers, 10)
+	end
+
 	-- Guard clauses
 	if not cfg.Enabled then
 		TickProfiler.EndSection("CM:Total")
