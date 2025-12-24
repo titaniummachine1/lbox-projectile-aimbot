@@ -161,6 +161,16 @@ local function drawMenu()
 			vis.MultipointDebugDuration = TimMenu.Slider("Debug Fade", vis.MultipointDebugDuration or 1.0, 0, 5, 0.1)
 			TimMenu.NextLine()
 		end
+
+		vis.SelfPrediction = TimMenu.Checkbox("Self Prediction", vis.SelfPrediction or false)
+		TimMenu.Tooltip("Visualize local player movement prediction (debug)")
+		TimMenu.NextLine()
+		if vis.SelfPrediction then
+			vis.SelfPredictionDuration =
+				TimMenu.Slider("Predict Time", vis.SelfPredictionDuration or 2.0, 0.5, 5.0, 0.1)
+			TimMenu.Tooltip("How many seconds ahead to predict")
+			TimMenu.NextLine()
+		end
 		TimMenu.EndSector()
 
 		TimMenu.BeginSector("Colors")
@@ -181,6 +191,9 @@ local function drawMenu()
 			TimMenu.ColorPicker("Multipoint", vis.ColorsRGBA.MultipointTarget or { 255, 0, 0, 255 })
 		TimMenu.NextLine()
 		vis.ColorsRGBA.Quads = TimMenu.ColorPicker("Quads", vis.ColorsRGBA.Quads or { 0, 0, 255, 25 })
+		TimMenu.NextLine()
+		vis.ColorsRGBA.SelfPrediction =
+			TimMenu.ColorPicker("Self Prediction", vis.ColorsRGBA.SelfPrediction or { 255, 100, 255, 255 })
 		TimMenu.EndSector()
 
 		TimMenu.BeginSector("Thickness")
@@ -198,6 +211,11 @@ local function drawMenu()
 		end
 		if vis.DrawMultipointTarget then
 			vis.Thickness.MultipointTarget = TimMenu.Slider("Multipoint", vis.Thickness.MultipointTarget, 1, 10, 0.5)
+			TimMenu.NextLine()
+		end
+		if vis.SelfPrediction then
+			vis.Thickness.SelfPrediction =
+				TimMenu.Slider("Self Prediction", vis.Thickness.SelfPrediction or 2.0, 0.5, 5, 0.5)
 		end
 		TimMenu.EndSector()
 		TimMenu.NextLine()

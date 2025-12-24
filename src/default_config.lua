@@ -40,6 +40,8 @@ local DefaultConfig = {
 		ShowMultipointDebug = false,
 		MultipointDebugDuration = 1.0,
 		DrawQuads = false,
+		SelfPrediction = false,
+		SelfPredictionDuration = 2.0,
 
 		-- Colors (HSV hue 0-360, or 360+ for white)
 		Colors = {
@@ -56,6 +58,7 @@ local DefaultConfig = {
 			BoundingBox = { 0, 255, 0, 255 },
 			MultipointTarget = { 255, 0, 0, 255 },
 			Quads = { 0, 0, 255, 25 },
+			SelfPrediction = { 255, 100, 255, 255 },
 		},
 
 		-- Line/element thickness
@@ -64,6 +67,7 @@ local DefaultConfig = {
 			ProjectilePath = 1.5,
 			BoundingBox = 1.5,
 			MultipointTarget = 4.0,
+			SelfPrediction = 2.0,
 		},
 	},
 }

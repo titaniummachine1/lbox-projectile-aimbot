@@ -143,8 +143,8 @@ end
 function PredictionContext.createPlayerContext(entity, lazyness)
 	assert(entity, "createPlayerContext: entity is nil")
 
-	local velocity = entity:GetPropVector("localdata", "m_vecVelocity[0]")
-	assert(velocity, "createPlayerContext: entity:GetPropVector('m_vecVelocity[0]') returned nil")
+	local velocity = entity:EstimateAbsVelocity()
+	assert(velocity, "createPlayerContext: entity:EstimateAbsVelocity() returned nil")
 
 	local origin = entity:GetAbsOrigin()
 	assert(origin, "createPlayerContext: entity:GetAbsOrigin() returned nil")

@@ -1,6 +1,8 @@
 -- Imports
 local G = require("globals")
 local multipoint = require("multipoint")
+local PlayerTick = require("simulation.player_tick")
+local PredictionContext = require("simulation.prediction_context")
 
 -- Module declaration
 local Visuals = {}
@@ -823,6 +825,39 @@ function Visuals.draw(state)
 		a = math.floor(a * alphaMul)
 		draw.Color(r, g, b, a)
 		drawImpactDot(texture, impactPos, vis.Thickness.ProjectilePath * 2)
+	end
+
+	-- Draw self-prediction (local player movement prediction for debugging)
+	if vis.SelfPrediction and localPlayer and localPlayer:IsAlive() then
+		local predictDuration = vis.SelfPredictionDuration or 2.0
+
+		local success, err = pcall(function()
+			local playerCtx = PredictionContext.createPlayerContext(localPlayer, 1.0)
+			local simCtx = PredictionContext.createSimulationContext()
+
+			if playerCtx and simCtx then
+				local path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, predictDuration)
+
+				if path and #path > 1 then
+					local r, g, b, a = getColor(vis, "SelfPrediction", 300)
+					draw.Color(r, g, b, a)
+
+					local last = nil
+					for i = 1, #path do
+						local curWorld = path[i]
+						local current = curWorld and client.WorldToScreen(curWorld)
+						if current and last then
+							drawLine(texture, last, current, vis.Thickness.SelfPrediction or 2.0)
+						end
+						last = current
+					end
+				end
+			end
+		end)
+
+		if not success then
+			printc(255, 100, 100, 255, "[Visuals] Self-prediction error: " .. tostring(err))
+		end
 	end
 end
 
