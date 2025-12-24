@@ -26,7 +26,7 @@ local WishdirTracker = require("simulation.history.wishdir_tracker")
 -- constants
 local MIN_SPEED = 25 -- HU/s
 local MAX_ANGULAR_VEL = 360 -- deg/s
-local WALKABLE_ANGLE = 45 -- degrees
+local WALKABLE_ANGLE = 55 -- degrees
 local MIN_VELOCITY_Z = 0.1
 local AIR_ACCELERATE = 10.0 -- Default air acceleration value
 local GROUND_ACCELERATE = 10.0 -- Default ground acceleration value

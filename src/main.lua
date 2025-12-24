@@ -251,7 +251,7 @@ local function CalculateHitchance(entity, projpath, hit, distance, speed, gravit
 	--- more speed = less confiident we are
 	local velocity = entity:EstimateAbsVelocity() or Vector3()
 	if velocity then
-		local speed2d = velocity:Length2D()
+		local speed2d = velocity:Length()
 		if speed2d > 300 then
 			score = score - 15
 		elseif speed2d > 200 then
@@ -517,7 +517,7 @@ local function onCreateMove(cmd)
 	-- Auto flip viewmodels will be handled after we have target + projectile info
 
 	local charge = info.m_bCharges and weapon:GetCurrentCharge() or 0.0
-	local speed = info:GetVelocity(charge):Length2D()
+	local speed = info:GetVelocity(charge):Length()
 	local _, sv_gravity = client.GetConVar("sv_gravity")
 	local gravityScale = 0
 	if info.HasGravity and info:HasGravity() then
@@ -977,7 +977,7 @@ local function onCreateMove(cmd)
 				if flightCandidate < 0 or flightCandidate > maxFlightTime then
 					return
 				end
-				local dx = (lastPos - aimEyePos):Length2D()
+				local dx = (lastPos - aimEyePos):Length()
 				if (speed * flightCandidate) >= dx then
 					rocketIndices[#rocketIndices + 1] = #path
 				end

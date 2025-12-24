@@ -169,81 +169,37 @@ local function airAccelerate(v, wishdir, wishspeed, accel, dt, surf, target)
 end
 
 -- ============================================================================
--- SECTION 4: GROUND STATE MANAGEMENT (Persistent State Machine)
+-- SECTION 4: SIMPLE GROUND DETECTION (Like user's working code)
 -- ============================================================================
 
--- Per-player ground state persistence (like swing prediction)
-local playerGroundStates = {}
+---Simple ground check (like working visualizer)
+---Uses 45-degree walkable angle: cos(45°) = 0.7 (like working code)
+---@param origin Vector3 Player position
+---@param mins Vector3 Player bbox mins
+---@param maxs Vector3 Player bbox maxs
+---@param index integer Player entity index
+---@return boolean True if ground detected within 18 units
+local function checkIsOnGround(origin, mins, maxs, index)
+	local down = Vector3(origin.x, origin.y, origin.z - 18)
+	local trace = engine.TraceHull(origin, down, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent, contentsMask)
+		return ent:GetIndex() ~= index
+	end)
 
----Clean up stale ground state entries for disconnected players
----@param validPlayerIndices table<integer, boolean> Set of valid player indices
-function PlayerTick.cleanupGroundStates(validPlayerIndices)
-	for index in pairs(playerGroundStates) do
-		if not validPlayerIndices[index] then
-			playerGroundStates[index] = nil
-		end
-	end
+	return trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7
 end
 
----Update ground state based on collision detection (preserves state between ticks)
----@param playerCtx PlayerContext Player context with current state
----@param tickinterval number Time for this tick
----@return boolean Current ground state after collision resolution
-local function updateGroundState(playerCtx, tickinterval)
-	local index = playerCtx.index
-	local lastGroundState = playerGroundStates[index]
-	if lastGroundState == nil then
-		local flags = playerCtx.entity:GetPropInt("m_fFlags")
-		lastGroundState = (flags & GameConstants.FL_ONGROUND) ~= 0
-		playerGroundStates[index] = lastGroundState
-	end
-
-	local currentGroundState = lastGroundState
-	local vStep = Vector3(0, 0, playerCtx.stepheight)
-	local vUp = Vector3(0, 0, 1)
-
-	local downStep = currentGroundState and vStep or Vector3(0, 0, 0)
-
-	local groundTrace = engine.TraceHull(
-		playerCtx.origin + vStep,
-		playerCtx.origin - downStep,
-		playerCtx.mins,
-		playerCtx.maxs,
-		GameConstants.MASK_PLAYERSOLID,
-		function(ent, contentsMask)
-			return ent:GetIndex() ~= index
-		end
-	)
-
-	if groundTrace and groundTrace.fraction < 1.0 and not groundTrace.startsolid and groundTrace.plane then
-		local normal = groundTrace.plane
-		local angle = math.deg(math.acos(math.min(1.0, math.max(-1.0, normal:Dot(vUp)))))
-
-		if angle < 45.0 then
-			currentGroundState = true
-		elseif angle >= 55.0 then
-			currentGroundState = false
-		end
-	else
-		currentGroundState = false
-	end
-
-	playerGroundStates[index] = currentGroundState
-	return currentGroundState
-end
-
----Snap player to ground surface when on ground
+---Improved ground snapping like reference implementation
 ---@param origin Vector3 Player position (modified in-place)
 ---@param mins Vector3 Player bbox mins
 ---@param maxs Vector3 Player bbox maxs
----@param step_size number Max step height
+---@param stepheight number Max step height (18 units)
 ---@param index integer Player entity index
----@return boolean True if snapped to ground
-local function stayOnGround(origin, mins, maxs, step_size, index)
+---@return boolean True if ground snapping occurred
+local function stayOnGround(origin, mins, maxs, stepheight, index)
 	local vstart = Vector3(origin.x, origin.y, origin.z + 2)
-	local vend = Vector3(origin.x, origin.y, origin.z - step_size)
+	local vend = Vector3(origin.x, origin.y, origin.z - stepheight)
 
-	local trace = engine.TraceHull(vstart, vend, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent, contentsMask)
+	local trace = engine.TraceHull(vstart, vend, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
 		return ent:GetIndex() ~= index
 	end)
 
@@ -286,7 +242,7 @@ local function clipVelocity(velocity, normal, overbounce)
 	end
 end
 
----Move player with collision detection (Source engine multi-bump algorithm)
+---Move player with collision detection (improved reference implementation)
 ---@param origin Vector3 Starting position (modified in-place)
 ---@param velocity Vector3 Current velocity (modified in-place)
 ---@param mins Vector3 Player bbox mins
@@ -295,6 +251,7 @@ end
 ---@param tickinterval number Time to move
 ---@return Vector3 Final position
 local function tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
+	local MAX_CLIP_PLANES = 5
 	local time_left = tickinterval
 	local planes = {}
 	local numplanes = 0
@@ -334,7 +291,7 @@ local function tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
 
 		time_left = time_left - time_left * trace.fraction
 
-		if trace.plane and numplanes < GameConstants.DEFAULT_MAX_CLIP_PLANES then
+		if trace.plane and numplanes < MAX_CLIP_PLANES then
 			planes[numplanes] = trace.plane
 			numplanes = numplanes + 1
 		end
@@ -396,6 +353,119 @@ local function tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
 	return origin
 end
 
+---TF2 StepMove - handles both up and down stepping (from TF2 source)
+---@param origin Vector3 Starting position (modified in-place)
+---@param velocity Vector3 Current velocity (modified in-place)
+---@param mins Vector3 Player bbox mins
+---@param maxs Vector3 Player bbox maxs
+---@param index integer Player entity index
+---@param tickinterval number Time to move
+---@param stepheight number Step height (18 units)
+---@return Vector3 Final position
+local function stepMove(origin, velocity, mins, maxs, index, tickinterval, stepheight)
+	-- Store original position and velocity
+	local original_pos = Vector3(origin.x, origin.y, origin.z)
+	local original_vel = Vector3(velocity.x, velocity.y, velocity.z)
+
+	-- Try normal slide movement first (the "down" path)
+	tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
+
+	-- Store down path results
+	local down_pos = Vector3(origin.x, origin.y, origin.z)
+	local down_vel = Vector3(velocity.x, velocity.y, velocity.z)
+
+	-- Reset to original position and velocity
+	origin.x = original_pos.x
+	origin.y = original_pos.y
+	origin.z = original_pos.z
+	velocity.x = original_vel.x
+	velocity.y = original_vel.y
+	velocity.z = original_vel.z
+
+	-- Try step-up path: Move up by step height
+	local step_up_dest = Vector3(origin.x, origin.y, origin.z + stepheight)
+
+	local step_trace = engine.TraceHull(origin, step_up_dest, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
+		return ent:GetIndex() ~= index
+	end)
+
+	-- If we can step up, try movement from elevated position
+	if not step_trace.startsolid and not step_trace.allsolid then
+		-- Move to elevated position
+		origin.x = step_trace.endpos.x
+		origin.y = step_trace.endpos.y
+		origin.z = step_trace.endpos.z
+
+		-- Try movement from elevated position
+		tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
+
+		-- Step back down to ground level
+		local step_down_dest = Vector3(origin.x, origin.y, origin.z - stepheight)
+
+		local step_down_trace = engine.TraceHull(
+			origin,
+			step_down_dest,
+			mins,
+			maxs,
+			GameConstants.MASK_PLAYERSOLID,
+			function(ent)
+				return ent:GetIndex() ~= index
+			end
+		)
+
+		-- If we hit a steep slope stepping down, use down path instead
+		if step_down_trace.plane and step_down_trace.plane.z < 0.7 then
+			origin.x = down_pos.x
+			origin.y = down_pos.y
+			origin.z = down_pos.z
+			velocity.x = down_vel.x
+			velocity.y = down_vel.y
+			velocity.z = down_vel.z
+			return origin
+		end
+
+		-- Step down to final position
+		if not step_down_trace.startsolid and not step_down_trace.allsolid then
+			origin.x = step_down_trace.endpos.x
+			origin.y = step_down_trace.endpos.y
+			origin.z = step_down_trace.endpos.z
+		end
+
+		-- Store up path results
+		local up_pos = Vector3(origin.x, origin.y, origin.z)
+
+		-- Compare horizontal distances traveled
+		local down_dist = (down_pos.x - original_pos.x) * (down_pos.x - original_pos.x)
+			+ (down_pos.y - original_pos.y) * (down_pos.y - original_pos.y)
+		local up_dist = (up_pos.x - original_pos.x) * (up_pos.x - original_pos.x)
+			+ (up_pos.y - original_pos.y) * (up_pos.y - original_pos.y)
+
+		-- Use whichever path went farther horizontally
+		if down_dist > up_dist then
+			-- Down path was better
+			origin.x = down_pos.x
+			origin.y = down_pos.y
+			origin.z = down_pos.z
+			velocity.x = down_vel.x
+			velocity.y = down_vel.y
+			velocity.z = down_vel.z
+		else
+			-- Up path was better, but preserve Z velocity from down path
+			velocity.z = down_vel.z
+		end
+	else
+		-- Couldn't step up, use down path results
+		origin.x = down_pos.x
+		origin.y = down_pos.y
+		origin.z = down_pos.z
+		velocity.x = down_vel.x
+		velocity.y = down_vel.y
+		velocity.z = down_vel.z
+	end
+
+	return origin
+end
+
 -- ============================================================================
 -- SECTION 6: PUBLIC API - Main Simulation Functions
 -- ============================================================================
@@ -440,7 +510,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 	if playerCtx.relativeWishDir then
 		wishdir = relativeToWorldWishDir(playerCtx.relativeWishDir, playerCtx.yaw)
 	else
-		local horizLen = playerCtx.velocity:Length2D()
+		local horizLen = playerCtx.velocity:Length()
 		if horizLen > 0.001 then
 			wishdir = Vector3(playerCtx.velocity.x / horizLen, playerCtx.velocity.y / horizLen, 0)
 		else
@@ -450,8 +520,13 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 
 	wishdir.z = 0
 
-	-- Step 3: Update persistent ground state
-	local is_on_ground = updateGroundState(playerCtx, tickinterval)
+	-- Step 3: Simple ground check (like user's working code)
+	local is_on_ground = checkIsOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.index)
+
+	-- Step 3.5: CRITICAL ground velocity management (like working visualizer)
+	if is_on_ground and playerCtx.velocity.z < 0 then
+		playerCtx.velocity.z = 0
+	end
 
 	-- Step 4: Apply friction
 	friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
@@ -473,22 +548,27 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 		playerCtx.velocity.z = playerCtx.velocity.z - simCtx.sv_gravity * tickinterval
 	end
 
-	-- Step 7: Move with collision
-	playerCtx.origin = tryPlayerMove(
-		playerCtx.origin,
-		playerCtx.velocity,
-		playerCtx.mins,
-		playerCtx.maxs,
-		playerCtx.index,
-		tickinterval
-	)
-
-	-- Step 8: Ground snapping (only for truly grounded players)
+	-- Step 7: Move with proper TF2 StepMove logic
 	if is_on_ground then
-		local is_airborne = playerCtx.velocity.z > 0.1 or playerCtx.velocity.z < -250.0
-		if not is_airborne then
-			stayOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.stepheight, playerCtx.index)
-		end
+		playerCtx.origin = stepMove(
+			playerCtx.origin,
+			playerCtx.velocity,
+			playerCtx.mins,
+			playerCtx.maxs,
+			playerCtx.index,
+			tickinterval,
+			playerCtx.stepheight or 18
+		)
+	else
+		-- In air, just do regular collision movement
+		playerCtx.origin = tryPlayerMove(
+			playerCtx.origin,
+			playerCtx.velocity,
+			playerCtx.mins,
+			playerCtx.maxs,
+			playerCtx.index,
+			tickinterval
+		)
 	end
 
 	return Vector3(playerCtx.origin:Unpack())
