@@ -103,13 +103,15 @@ local function calculateYawDelta(entity)
 end
 
 ---Calculate fallback relative wishdir from velocity when tracker has no data
+---If player is standing still (no horizontal velocity), return zero wishdir (no movement prediction)
 ---@param velocity Vector3
 ---@param yaw number
 ---@return Vector3 relativeWishDir
 local function fallbackRelativeWishDir(velocity, yaw)
 	local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
-	if horizLen < 0.001 then
-		return Vector3(1, 0, 0)
+	-- CRITICAL: If player is standing still, return zero wishdir - don't predict movement!
+	if horizLen < 10 then
+		return Vector3(0, 0, 0)
 	end
 
 	local yawRad = yaw * DEG2RAD

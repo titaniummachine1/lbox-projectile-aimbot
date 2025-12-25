@@ -869,15 +869,6 @@ function Visuals.draw(state)
 		end
 		local width = vis.PathWidth or vis.Thickness.PlayerPath or 5
 
-		-- DEBUG: Print style value
-		printc(
-			255,
-			255,
-			0,
-			255,
-			"[DEBUG] PlayerPathStyle raw=" .. tostring(vis.PlayerPathStyle) .. " final=" .. tostring(style)
-		)
-
 		-- Skip every N points to reduce draw calls (performance)
 		local step = math.max(1, math.floor(#playerPath / 60))
 

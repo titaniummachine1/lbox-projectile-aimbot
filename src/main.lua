@@ -978,7 +978,8 @@ local function onCreateMove(cmd)
 				if flightCandidate < 0 or flightCandidate > maxFlightTime then
 					return
 				end
-				local dx = (lastPos - aimEyePos):Length()
+				-- Use 2D horizontal distance for rocket check (gravity only affects vertical)
+				local dx = (lastPos - aimEyePos):Length2D()
 				if (speed * flightCandidate) >= dx then
 					rocketIndices[#rocketIndices + 1] = #path
 				end
@@ -1057,72 +1058,81 @@ local function onCreateMove(cmd)
 		local bestPos = lastPos
 		local bestAngle = nil
 
+		-- SINGLE SOLUTION APPROACH: Find first valid rocket candidate and solve once
+		-- We do NOT try multiple solutions - if first fails, we bail
 		local maxPathIdx = (timetable and #timetable) or 1
-		for attempt = 1, 3 do
-			local attemptFlight = flightTime
-			if isPlayer and rocketIndices then
-				ensureRocketCandidates(attempt)
-			end
-			if rocketIndices and #rocketIndices > 0 then
-				local useRocket = rocketIndices[math.min(#rocketIndices, attempt)]
-				local useIdx = math.max(1, math.min(maxPathIdx, useRocket))
-				local totalCandidate = (timetable[useIdx] - simStartTime)
-				attemptFlight = totalCandidate - outgoingLatency - lerp
-			end
-			attemptFlight = math.max(0.0, math.min(maxFlightTime, attemptFlight))
-			local attemptTotal = outgoingLatency + lerp + attemptFlight
 
-			local curFlight = attemptFlight
-			local curTotal = attemptTotal
-			local curPos = nil
-			local curAngle = nil
+		-- Step 1: Get first rocket candidate (lazy simulation - only simulate until we find one)
+		if isPlayer and rocketIndices then
+			ensureRocketCandidates(1)
+		end
 
-			for _ = 1, 2 do
-				ensureSimulatedToTotal(curTotal)
-				curPos = isPlayer and posAtTotalTime(curTotal) or entityCenter
-				if (not autoFlipDecided) and curPos then
-					ViewmodelManager.autoFlipIfNeeded(
-						entity,
-						curPos,
-						aimEyePos,
-						weapon,
-						speed,
-						gravity,
-						hullMins,
-						hullMaxs,
-						traceMask,
-						localIndex
-					)
-					autoFlipDecided = true
-				end
+		-- Step 2: Use first rocket candidate if available
+		local attemptFlight = flightTime
+		if rocketIndices and #rocketIndices > 0 then
+			local useIdx = math.max(1, math.min(maxPathIdx, rocketIndices[1]))
+			local totalCandidate = (timetable[useIdx] - simStartTime)
+			attemptFlight = totalCandidate - outgoingLatency - lerp
+		end
+		attemptFlight = math.max(0.0, math.min(maxFlightTime, attemptFlight))
+		local attemptTotal = outgoingLatency + lerp + attemptFlight
 
-				TickProfiler.BeginSection("CM:Ballistics")
-				curAngle = utils.math.SolveBallisticArc(aimEyePos, curPos, speed, gravity)
-				TickProfiler.EndSection("CM:Ballistics")
-				if not curAngle then
-					break
-				end
+		local curFlight = attemptFlight
+		local curTotal = attemptTotal
+		local curPos = nil
+		local curAngle = nil
 
-				local solvedFlight = utils.math.GetBallisticFlightTime(aimEyePos, curPos, speed, gravity)
-				if (not solvedFlight) or solvedFlight <= 0 then
-					solvedFlight = utils.math.EstimateTravelTime(aimEyePos, curPos, speed)
-				end
-				if (not solvedFlight) or solvedFlight <= 0 then
-					curAngle = nil
-					break
-				end
+		-- Step 3: Refine solution with ballistic arc (iterate twice for convergence)
+		for _ = 1, 2 do
+			-- Simulate player to the candidate time
+			ensureSimulatedToTotal(curTotal)
+			curPos = isPlayer and posAtTotalTime(curTotal) or entityCenter
 
-				curFlight = math.max(0.0, math.min(maxFlightTime, solvedFlight))
-				curTotal = outgoingLatency + lerp + curFlight
+			-- Auto-flip viewmodel if needed
+			if (not autoFlipDecided) and curPos then
+				ViewmodelManager.autoFlipIfNeeded(
+					entity,
+					curPos,
+					aimEyePos,
+					weapon,
+					speed,
+					gravity,
+					hullMins,
+					hullMaxs,
+					traceMask,
+					localIndex
+				)
+				autoFlipDecided = true
 			end
 
-			if curAngle then
-				bestFlightTime = curFlight
-				bestTotalTime = curTotal
-				bestPos = curPos
-				bestAngle = curAngle
-				break
+			-- Solve ballistic arc to get firing angle
+			TickProfiler.BeginSection("CM:Ballistics")
+			curAngle = utils.math.SolveBallisticArc(aimEyePos, curPos, speed, gravity)
+			TickProfiler.EndSection("CM:Ballistics")
+			if not curAngle then
+				break -- No solution found, bail
 			end
+
+			-- Refine flight time from ballistic solution
+			local solvedFlight = utils.math.GetBallisticFlightTime(aimEyePos, curPos, speed, gravity)
+			if (not solvedFlight) or solvedFlight <= 0 then
+				solvedFlight = utils.math.EstimateTravelTime(aimEyePos, curPos, speed)
+			end
+			if (not solvedFlight) or solvedFlight <= 0 then
+				curAngle = nil
+				break -- Invalid flight time, bail
+			end
+
+			curFlight = math.max(0.0, math.min(maxFlightTime, solvedFlight))
+			curTotal = outgoingLatency + lerp + curFlight
+		end
+
+		-- Step 4: Use solution if valid
+		if curAngle then
+			bestFlightTime = curFlight
+			bestTotalTime = curTotal
+			bestPos = curPos
+			bestAngle = curAngle
 		end
 
 		if bestAngle then
