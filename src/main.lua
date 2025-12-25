@@ -1477,7 +1477,16 @@ end
 printc(150, 255, 150, 255, "[Projectile Aimbot] Loaded successfully")
 printc(100, 200, 255, 255, "[Projectile Aimbot] FOV: " .. G.Menu.Aimbot.AimFOV, "Aim Key: " .. getKeyName())
 
+-- Game event handler - invalidate player cache on connect/disconnect
+local function onGameEvent(event)
+	local eventName = event:GetName()
+	if eventName == "player_disconnect" or eventName == "player_connect" or eventName == "player_spawn" then
+		FastPlayers.Invalidate()
+	end
+end
+
 -- Callbacks -----
 callbacks.Register("Draw", "PROJ_AIMBOT_DRAW", onDraw)
 callbacks.Register("CreateMove", "PROJ_AIMBOT_CM", onCreateMove)
+callbacks.Register("FireGameEvent", "PROJ_AIMBOT_EVENT", onGameEvent)
 -- No unload callback - environment handles cleanup automatically

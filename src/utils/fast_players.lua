@@ -1,4 +1,4 @@
--- fast_players.lua - Cached player list, updated once per tick
+-- fast_players.lua - Cached player list, updated only when player list changes
 -- Eliminates redundant entities.FindByClass("CTFPlayer") calls
 
 local FastPlayers = {}
@@ -11,39 +11,95 @@ local cachedLocal = nil
 local cachedLocalTeam = nil
 local lastUpdateTick = -1
 
+-- Change detection state
+local lastEntityIndices = {}
+local lastEntityCount = 0
+local forceRebuild = true -- Force rebuild on first call
+
 -- Flags for derived caches
 local enemiesUpdated = false
 local teammatesUpdated = false
 
+-- Build index set from current entities for fast comparison
+local function buildIndexSet(players)
+	local indices = {}
+	local count = 0
+	for _, ent in pairs(players) do
+		if ent and ent:IsValid() then
+			indices[ent:GetIndex()] = true
+			count = count + 1
+		end
+	end
+	return indices, count
+end
+
+-- Check if entity indices changed since last update
+local function hasPlayerListChanged(newIndices, newCount)
+	-- Count mismatch = definitely changed
+	if newCount ~= lastEntityCount then
+		return true
+	end
+
+	-- Check if any index is different
+	for idx in pairs(newIndices) do
+		if not lastEntityIndices[idx] then
+			return true
+		end
+	end
+
+	return false
+end
+
+--- Force a cache rebuild on next Update call (call after player_disconnect event)
+function FastPlayers.Invalidate()
+	forceRebuild = true
+end
+
 --- Update the player cache if needed (call once per tick at start of CreateMove)
+--- Only rebuilds if player count or indices actually changed
 function FastPlayers.Update()
 	local currentTick = globals.TickCount()
-	if currentTick == lastUpdateTick then
+	if currentTick == lastUpdateTick and not forceRebuild then
 		return -- Already updated this tick
 	end
 
-	-- Clear caches
+	-- Get local player (always refresh)
+	cachedLocal = entities.GetLocalPlayer()
+	cachedLocalTeam = cachedLocal and cachedLocal:GetTeamNumber() or nil
+
+	-- Get raw player list from engine
+	local rawPlayers = entities.FindByClass("CTFPlayer") or {}
+
+	-- Build index set to detect changes
+	local newIndices, newCount = buildIndexSet(rawPlayers)
+
+	-- Check if we actually need to rebuild
+	local needsRebuild = forceRebuild or hasPlayerListChanged(newIndices, newCount)
+
+	if not needsRebuild then
+		-- Player list unchanged, just update tick marker
+		lastUpdateTick = currentTick
+		return
+	end
+
+	-- Rebuild the cached lists
 	cachedAllPlayers = {}
 	cachedEnemies = {}
 	cachedTeammates = {}
 	enemiesUpdated = false
 	teammatesUpdated = false
 
-	-- Get local player
-	cachedLocal = entities.GetLocalPlayer()
-	cachedLocalTeam = cachedLocal and cachedLocal:GetTeamNumber() or nil
-
-	-- Single scan of all players
-	local players = entities.FindByClass("CTFPlayer")
-	if players then
-		for _, ent in pairs(players) do
-			if ent and ent:IsValid() and ent:IsAlive() and not ent:IsDormant() then
-				cachedAllPlayers[#cachedAllPlayers + 1] = ent
-			end
+	for _, ent in pairs(rawPlayers) do
+		if ent and ent:IsValid() and ent:IsAlive() and not ent:IsDormant() then
+			cachedAllPlayers[#cachedAllPlayers + 1] = ent
 		end
 	end
 
+	-- Store current state for next comparison
+	lastEntityIndices = newIndices
+	lastEntityCount = newCount
 	lastUpdateTick = currentTick
+	forceRebuild = false
 end
 
 --- Get all valid players (alive, not dormant)
