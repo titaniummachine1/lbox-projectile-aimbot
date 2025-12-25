@@ -42,10 +42,10 @@ local DefaultConfig = {
 		DrawQuads = false,
 		SelfPrediction = false,
 
-		-- Path style options (1=Pavement, 2=ArrowPath, 3=Arrows, 4=L Line, 5=Dashed, 6=Line)
+		-- Path style options (0=Pavement, 1=ArrowPath, 2=Arrows, 3=L Line, 4=Dashed, 5=Line)
 		PathStyles = { "Pavement", "ArrowPath", "Arrows", "L Line", "Dashed", "Line" },
-		PlayerPathStyle = 1, -- Pavement
-		ProjectilePathStyle = 6, -- Line
+		PlayerPathStyle = 0, -- Pavement (0-indexed for dropdown)
+		ProjectilePathStyle = 5, -- Line (0-indexed for dropdown)
 
 		-- Colors (HSV hue 0-360, or 360+ for white)
 		Colors = {

@@ -16,6 +16,13 @@ local PLAYER_PATH_GAP_SQ = 80 * 80
 local PREDICTION_POINT_INTERVAL = 3 -- Draw a point every N steps
 local PREDICTION_POINT_SIZE = 4.0 -- Size of prediction points
 
+-- Self-prediction cache to avoid simulating every frame
+local selfPredCache = {
+	path = nil,
+	lastUpdateTime = 0,
+	updateInterval = 0.1, -- Only update every 100ms
+}
+
 local function getWhiteTexture()
 	if whiteTexture then
 		return whiteTexture
@@ -855,7 +862,7 @@ function Visuals.draw(state)
 		local r, g, b, a = getColor(vis, "PlayerPath", 180)
 		a = math.floor(a * alphaMul)
 
-		local style = vis.PlayerPathStyle or 1
+		local style = (vis.PlayerPathStyle or 0) + 1
 		local width = vis.Thickness.PlayerPath or 5
 
 		-- Skip every N points to reduce draw calls (performance)
@@ -1066,97 +1073,103 @@ function Visuals.draw(state)
 	end
 
 	-- Draw self-prediction (local player movement prediction - uses same style as player path)
+	-- Uses cache to avoid simulating every frame (expensive)
 	if vis.SelfPrediction and localPlayer then
 		local isAlive = localPlayer.IsAlive and localPlayer:IsAlive()
 		if isAlive then
-			local success, err = pcall(function()
-				local playerCtx = PredictionContext.createPlayerContext(localPlayer, 1.0)
-				local simCtx = PredictionContext.createSimulationContext()
+			local now = globals.RealTime()
+			local needsUpdate = (now - selfPredCache.lastUpdateTime) >= selfPredCache.updateInterval
 
-				if playerCtx and simCtx then
-					local selfPath = PlayerTick.simulatePath(playerCtx, simCtx, 2.0)
+			if needsUpdate then
+				local success, err = pcall(function()
+					local playerCtx = PredictionContext.createPlayerContext(localPlayer, 1.0)
+					local simCtx = PredictionContext.createSimulationContext()
+					if playerCtx and simCtx then
+						selfPredCache.path = PlayerTick.simulatePath(playerCtx, simCtx, 1.0)
+						selfPredCache.lastUpdateTime = now
+					end
+				end)
+				if not success then
+					printc(255, 100, 100, 255, "[Visuals] Self-prediction error: " .. tostring(err))
+				end
+			end
 
-					if selfPath and #selfPath > 1 then
-						local r, g, b, a = getColor(vis, "SelfPrediction", 300)
-						a = math.floor(a * alphaMul)
+			local selfPath = selfPredCache.path
+			if selfPath and #selfPath > 1 then
+				local r, g, b, a = getColor(vis, "SelfPrediction", 300)
+				a = math.floor(a * alphaMul)
 
-						local style = vis.PlayerPathStyle or 1
-						local width = vis.Thickness.SelfPrediction or 3
-						local step = math.max(1, math.floor(#selfPath / 40))
+				local style = (vis.PlayerPathStyle or 0) + 1
+				local width = vis.Thickness.SelfPrediction or 3
+				local step = math.max(1, math.floor(#selfPath / 30))
 
-						if style == 1 then
-							-- Pavement Style
-							local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
-							for i = 1, #selfPath - step, step do
-								local startPos = selfPath[i]
-								local endPos = selfPath[math.min(i + step, #selfPath)]
-								if startPos and endPos then
-									draw.Color(r, g, b, a)
-									local leftBase, rightBase = drawPavement(startPos, endPos, width)
-									if leftBase and rightBase then
-										local screenLeftBase = client.WorldToScreen(leftBase)
-										local screenRightBase = client.WorldToScreen(rightBase)
-										if screenLeftBase and screenRightBase then
-											if lastLeftBaseScreen and lastRightBaseScreen then
-												draw.Color(r, g, b, a)
-												draw.Line(
-													lastLeftBaseScreen[1],
-													lastLeftBaseScreen[2],
-													screenLeftBase[1],
-													screenLeftBase[2]
-												)
-												draw.Line(
-													lastRightBaseScreen[1],
-													lastRightBaseScreen[2],
-													screenRightBase[1],
-													screenRightBase[2]
-												)
-											end
-											lastLeftBaseScreen = screenLeftBase
-											lastRightBaseScreen = screenRightBase
-										end
+				if style == 1 then
+					-- Pavement Style
+					local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
+					for i = 1, #selfPath - step, step do
+						local startPos = selfPath[i]
+						local endPos = selfPath[math.min(i + step, #selfPath)]
+						if startPos and endPos then
+							draw.Color(r, g, b, a)
+							local leftBase, rightBase = drawPavement(startPos, endPos, width)
+							if leftBase and rightBase then
+								local screenLeftBase = client.WorldToScreen(leftBase)
+								local screenRightBase = client.WorldToScreen(rightBase)
+								if screenLeftBase and screenRightBase then
+									if lastLeftBaseScreen and lastRightBaseScreen then
+										draw.Color(r, g, b, a)
+										draw.Line(
+											lastLeftBaseScreen[1],
+											lastLeftBaseScreen[2],
+											screenLeftBase[1],
+											screenLeftBase[2]
+										)
+										draw.Line(
+											lastRightBaseScreen[1],
+											lastRightBaseScreen[2],
+											screenRightBase[1],
+											screenRightBase[2]
+										)
 									end
-								end
-							end
-						elseif style == 3 then
-							-- Arrows Style
-							for i = 1, #selfPath - step, step do
-								local startPos = selfPath[i]
-								local endPos = selfPath[math.min(i + step, #selfPath)]
-								if startPos and endPos then
-									draw.Color(r, g, b, a)
-									arrowPathArrow(startPos, endPos, width)
-								end
-							end
-						elseif style == 4 then
-							-- L Line Style
-							for i = 1, #selfPath - step, step do
-								local pos1 = selfPath[i]
-								local pos2 = selfPath[math.min(i + step, #selfPath)]
-								if pos1 and pos2 then
-									draw.Color(r, g, b, a)
-									L_line(pos1, pos2, width)
-								end
-							end
-						else
-							-- Simple Line Style (default)
-							for i = 1, #selfPath - step, step do
-								local pos1 = selfPath[i]
-								local pos2 = selfPath[math.min(i + step, #selfPath)]
-								local screenPos1 = client.WorldToScreen(pos1)
-								local screenPos2 = client.WorldToScreen(pos2)
-								if screenPos1 and screenPos2 then
-									draw.Color(r, g, b, a)
-									draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
+									lastLeftBaseScreen = screenLeftBase
+									lastRightBaseScreen = screenRightBase
 								end
 							end
 						end
 					end
+				elseif style == 3 then
+					-- Arrows Style
+					for i = 1, #selfPath - step, step do
+						local startPos = selfPath[i]
+						local endPos = selfPath[math.min(i + step, #selfPath)]
+						if startPos and endPos then
+							draw.Color(r, g, b, a)
+							arrowPathArrow(startPos, endPos, width)
+						end
+					end
+				elseif style == 4 then
+					-- L Line Style
+					for i = 1, #selfPath - step, step do
+						local pos1 = selfPath[i]
+						local pos2 = selfPath[math.min(i + step, #selfPath)]
+						if pos1 and pos2 then
+							draw.Color(r, g, b, a)
+							L_line(pos1, pos2, width)
+						end
+					end
+				else
+					-- Simple Line Style (default)
+					for i = 1, #selfPath - step, step do
+						local pos1 = selfPath[i]
+						local pos2 = selfPath[math.min(i + step, #selfPath)]
+						local screenPos1 = client.WorldToScreen(pos1)
+						local screenPos2 = client.WorldToScreen(pos2)
+						if screenPos1 and screenPos2 then
+							draw.Color(r, g, b, a)
+							draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
+						end
+					end
 				end
-			end)
-
-			if not success then
-				printc(255, 100, 100, 255, "[Visuals] Self-prediction error: " .. tostring(err))
 			end
 		end
 	end
