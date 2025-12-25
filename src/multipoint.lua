@@ -249,6 +249,45 @@ local function getAABBCorners(targetPos, mins, maxs)
 	}
 end
 
+---Quick visibility pre-check using traceline (rocket assumption - no ballistic solve)
+---Use this before expensive ballistic checks to skip completely occluded targets
+local function createQuickVisCheck(pLocal, pTarget, firePos, traceMask)
+	local pLocalIndex = pLocal:GetIndex()
+	local pTargetIndex = pTarget:GetIndex()
+
+	local function shouldHitEntity(ent, contentsMask)
+		if not ent then
+			return false
+		end
+		local idx = ent.GetIndex and ent:GetIndex() or nil
+		if idx == pLocalIndex then
+			return false
+		end
+		if idx == pTargetIndex then
+			return true
+		end
+		return false
+	end
+
+	return function(targetPoint)
+		local trace = engine.TraceLine(firePos, targetPoint, traceMask, shouldHitEntity)
+		if not trace then
+			return false
+		end
+		if trace.startsolid or trace.allsolid then
+			return false
+		end
+		if trace.fraction > VISIBILITY_THRESHOLD then
+			return true
+		end
+		local hitEnt = trace.entity
+		if hitEnt and hitEnt.GetIndex and hitEnt:GetIndex() == pTargetIndex then
+			return true
+		end
+		return false
+	end
+end
+
 ---Check if a point can be shot at (visibility + projectile path clear)
 local function createCanShootAt(pLocal, pTarget, firePos, speed, gravity, hullMins, hullMaxs, traceMask)
 	assert(pLocal, "createCanShootAt: missing pLocal")
@@ -280,13 +319,17 @@ local function createCanShootAt(pLocal, pTarget, firePos, speed, gravity, hullMi
 	end
 
 	local hasHull = (hullMins:Length() > 0.01 or hullMaxs:Length() > 0.01)
+	local hasGravity = math.abs(gravity) > 1e-8
 
 	return function(targetPoint)
 		assert(targetPoint, "canShootAt: missing targetPoint")
 
-		local aimAngle = utils.math.SolveBallisticArc(firePos, targetPoint, speed, gravity)
-		if not aimAngle then
-			return false
+		-- For ballistic projectiles, verify we can solve the arc
+		if hasGravity then
+			local aimAngle = utils.math.SolveBallisticArc(firePos, targetPoint, speed, gravity)
+			if not aimAngle then
+				return false
+			end
 		end
 
 		local trace
@@ -498,18 +541,16 @@ end
 ---@param pWeapon Entity
 ---@param weaponInfo WeaponInfo
 ---@param vHeadPos Vector3 shooter eye position
----@param vecPredictedPos Vector3 predicted target position
----@param drop number gravity drop compensation
+---@param vecPredictedPos Vector3 predicted target position (where target will be when projectile lands)
 ---@param speed number
 ---@param gravity number
 ---@return boolean visible, Vector3? finalPos
-function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos, drop, speed, gravity)
+function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos, speed, gravity)
 	assert(pTarget, "multipoint.Run: missing pTarget")
 	assert(pWeapon, "multipoint.Run: missing pWeapon")
 	assert(weaponInfo, "multipoint.Run: missing weaponInfo")
 	assert(vHeadPos, "multipoint.Run: missing vHeadPos")
 	assert(vecPredictedPos, "multipoint.Run: missing vecPredictedPos")
-	assert(type(drop) == "number", "multipoint.Run: drop must be number")
 	assert(type(speed) == "number", "multipoint.Run: speed must be number")
 	assert(type(gravity) == "number", "multipoint.Run: gravity must be number")
 
@@ -542,8 +583,9 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local maxs = pTarget:GetMaxs()
 	assert(mins and maxs, "multipoint.Run: target has no bounds")
 
-	-- Apply gravity drop to predicted position
-	local adjustedPos = vecPredictedPos + Vector3(0, 0, drop)
+	-- Use predicted position directly - ballistic solver handles gravity arc
+	-- Do NOT add drop offset here; we want projectile to LAND at this position
+	local adjustedPos = vecPredictedPos
 
 	-- Get AABB data
 	local corners = getAABBCorners(adjustedPos, mins, maxs)
@@ -666,7 +708,9 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	local centerTargetZ = (groundZ + topZ) * 0.5 -- center of AABB
 	local defaultTargetZ = clampNumber(intersectPoint.z, groundZ, topZ)
 
-	local preferFeetActive = preferFeet and isTargetOnGround and hasVerticalRayHit
+	-- For explosives (gravity > 0), always prefer feet when target is on ground
+	local isExplosive = math.abs(gravity) > 1e-8
+	local preferFeetActive = preferFeet and isTargetOnGround and (hasVerticalRayHit or isExplosive)
 	local feetPointShootable = false
 	if preferFeetActive then
 		local feetPoint = Vector3(intersectPoint.x, intersectPoint.y, feetTargetZ)
@@ -841,6 +885,48 @@ function multipoint.Run(pTarget, pWeapon, weaponInfo, vHeadPos, vecPredictedPos,
 	end
 
 	return true, finalPoint
+end
+
+---Quick visibility pre-check using traceline only (rocket assumption)
+---Use this BEFORE expensive ballistic checks to skip completely occluded targets
+---@param pTarget Entity
+---@param vHeadPos Vector3 shooter eye position
+---@param vecPredictedPos Vector3 predicted target position
+---@return boolean anyCornerVisible true if any corner is visible via traceline
+function multipoint.QuickVisibilityCheck(pTarget, vHeadPos, vecPredictedPos)
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal then
+		return false
+	end
+
+	local mins = pTarget:GetMins()
+	local maxs = pTarget:GetMaxs()
+	if not (mins and maxs) then
+		return false
+	end
+
+	local corners = getAABBCorners(vecPredictedPos, mins, maxs)
+	if not corners then
+		return false
+	end
+
+	local traceMask = MASK_SHOT
+	local quickCheck = createQuickVisCheck(pLocal, pTarget, vHeadPos, traceMask)
+
+	-- Check corners + center - if ANY is visible, target might be shootable
+	for i = 1, 8 do
+		if quickCheck(corners[i]) then
+			return true
+		end
+	end
+
+	-- Also check center
+	local center = getAABBCenter(vecPredictedPos, mins, maxs)
+	if quickCheck(center) then
+		return true
+	end
+
+	return false
 end
 
 function multipoint.CanShootAnyCornerNow(pTarget, pWeapon, weaponInfo, vHeadPos, speed, gravity)

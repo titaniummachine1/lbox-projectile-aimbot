@@ -531,12 +531,10 @@ local function onCreateMove(cmd)
 	if info.HasGravity and info:HasGravity() then
 		gravityScale = info:GetGravity(charge) or 0
 	end
-	-- CRITICAL: Gravity for ballistic solver must match TF2's actual drop
-	-- NEW_ARC uses drop = g*t^2 with g=400 for grenades
-	-- Our solver uses standard physics: drop = 0.5*g*t^2
-	-- To get same drop: 0.5*g_solver = g_tf2, so g_solver = 2*g_tf2 = 2*400 = 800
-	-- Current: sv_gravity(800) * gravityScale(0.25) = 200, need *4 to get 800
-	local gravity = (sv_gravity or 0) * gravityScale * 4
+	-- CRITICAL: Gravity for ballistic solver needs to match TF2's projectile physics
+	-- TF2 uses drop = g*t^2 (no 0.5), standard ballistics uses 0.5*g*t^2
+	-- So we double the gravity to compensate: 800*0.25*2 = 400 for grenades (matches NEW_ARC)
+	local gravity = (sv_gravity or 0) * gravityScale * 2
 	local weaponID = weapon:GetWeaponID()
 
 	-- Projectile hull for traces
@@ -1164,8 +1162,7 @@ local function onCreateMove(cmd)
 		local multipointHitbox, multipointPos = nil, nil
 		if entity.IsPlayer and entity:IsPlayer() then
 			TickProfiler.BeginSection("CM:Multipoint")
-			multipointHitbox, multipointPos =
-				multipoint.Run(entity, weapon, info, aimEyePos, lastPos, drop, speed, gravity)
+			multipointHitbox, multipointPos = multipoint.Run(entity, weapon, info, aimEyePos, lastPos, speed, gravity)
 			TickProfiler.EndSection("CM:Multipoint")
 		end
 
