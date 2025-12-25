@@ -429,11 +429,8 @@ local function onCreateMove(cmd)
 	PlayerTracker.UpdatePlayerList()
 	StrafePredictor.cleanupStalePlayers()
 
-	-- Update strafe predictor velocity history for all players (REQUIRED for yaw delta calculation)
-	local allPlayers = entities.FindByClass("CTFPlayer")
-	if allPlayers then
-		StrafePredictor.updateAll(allPlayers, 10)
-	end
+	-- NOTE: Strafe predictor updates moved to after target selection
+	-- Only update for top 2N tracked players to avoid crashes with large groups
 
 	-- Guard clauses
 	if not cfg.Enabled then
@@ -807,16 +804,22 @@ local function onCreateMove(cmd)
 		end
 	end
 
+	-- Tiered visibility checks:
+	-- Top N: Full corner traceline check (rocket assumption from shoot pos)
+	-- Next 2N: Simple COM visibility check
+	-- Rest: NO visibility check - only use weights (fov/distance)
+	-- RULE: Hidden targets can only GAIN weight (by not getting visibility bonus), never LOSE
 	TickProfiler.BeginSection("CM:Visibility")
+	local topNCount = trackedCount
+	local top2NCount = trackedCount * 2
 	for i = 1, #topK do
 		local entry = topK[i]
 		local ent = entry and entry.entity
 		if not ent then
 			entry.visible = false
-		elseif ent.IsPlayer and ent:IsPlayer() then
-			-- "for top n it does the canshoot check" -> top n is trackedCount
-			local isTopN = i <= trackedCount
-			if isTopN then
+		elseif i <= topNCount then
+			-- Top N: Full corner traceline check from shoot pos
+			if ent.IsPlayer and ent:IsPlayer() then
 				local idx = ent:GetIndex()
 				local cornerVisible = trackedCornerVisible[idx]
 				if cornerVisible == nil then
@@ -824,24 +827,30 @@ local function onCreateMove(cmd)
 					trackedCornerVisible[idx] = cornerVisible
 				end
 				entry.visible = cornerVisible
-				if cornerVisible then
-					entry.score = (entry.score or 0) - 10.0 -- Visibility weight
-				end
 			else
-				-- "rest of n2 are done with simple visibility check to COM"
-				local comVisible = canSeeTargetCom(ent)
-				entry.visible = comVisible
-				if comVisible then
-					entry.score = (entry.score or 0) - 10.0 -- Visibility weight
-				end
+				local entityCenter = ent:GetAbsOrigin() + (ent:GetMins() + ent:GetMaxs()) * 0.5
+				entry.visible = traceHitsTarget(ent, entityCenter)
+			end
+			-- Visible targets get bonus (hidden don't lose anything)
+			if entry.visible then
+				entry.score = (entry.score or 0) - 10.0
+			end
+		elseif i <= top2NCount then
+			-- Next 2N: Simple COM visibility check
+			if ent.IsPlayer and ent:IsPlayer() then
+				entry.visible = canSeeTargetCom(ent)
+			else
+				local entityCenter = ent:GetAbsOrigin() + (ent:GetMins() + ent:GetMaxs()) * 0.5
+				entry.visible = traceHitsTarget(ent, entityCenter)
+			end
+			-- Visible targets get bonus (hidden don't lose anything)
+			if entry.visible then
+				entry.score = (entry.score or 0) - 10.0
 			end
 		else
-			local entityCenter = ent:GetAbsOrigin() + (ent:GetMins() + ent:GetMaxs()) * 0.5
-			local isVisible = traceHitsTarget(ent, entityCenter)
-			entry.visible = isVisible
-			if isVisible then
-				entry.score = (entry.score or 0) - 10.0 -- Visibility weight
-			end
+			-- Rest: NO visibility check, just use fov/distance weights
+			-- They stay at their base score, neither penalized nor boosted
+			entry.visible = false
 		end
 	end
 	TickProfiler.EndSection("CM:Visibility")
@@ -903,19 +912,25 @@ local function onCreateMove(cmd)
 		return
 	end
 
+	-- Only store wishdir/strafe history for top 2N tracked players to avoid crashes with large groups
 	TickProfiler.BeginSection("CM:StrafeRecord")
 	local keepHistory = {}
-	for i = 1, #nextTracked do
+	local historyPlayers = {}
+	for i = 1, math.min(trackedCount * 2, #nextTracked) do
 		local entity = nextTracked[i]
 		if entity and entity.IsPlayer and entity:IsPlayer() then
 			local idx = entity:GetIndex()
 			keepHistory[idx] = true
-			local velocity = entity:EstimateAbsVelocity()
-			if velocity then
-				-- DISABLED: StrafePredictor.recordVelocity(idx, velocity, 10)
-			end
+			historyPlayers[#historyPlayers + 1] = entity
 		end
 	end
+	-- Update strafe predictor only for top 2N
+	if #historyPlayers > 0 then
+		StrafePredictor.updateAll(historyPlayers, 10)
+	end
+	-- Update wishdir tracker only for top 2N
+	WishdirTracker.updateTop(plocal, historyPlayers, trackedCount * 2)
+	-- Clear history for players not in top 2N
 	for _, player in pairs(entities.FindByClass("CTFPlayer")) do
 		if player and player:IsValid() then
 			local idx = player:GetIndex()

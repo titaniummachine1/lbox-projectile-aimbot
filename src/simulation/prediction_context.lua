@@ -110,7 +110,7 @@ end
 local function fallbackRelativeWishDir(velocity, yaw)
 	local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
 	-- CRITICAL: If player is standing still, return zero wishdir - don't predict movement!
-	if horizLen < 10 then
+	if horizLen < 50 then
 		return Vector3(0, 0, 0)
 	end
 
@@ -131,7 +131,7 @@ local function fallbackRelativeWishDir(velocity, yaw)
 		return Vector3(relX / relLen, relY / relLen, 0)
 	end
 
-	return Vector3(1, 0, 0)
+	return Vector3(0, 0, 0)
 end
 
 ---Creates a player context from entity

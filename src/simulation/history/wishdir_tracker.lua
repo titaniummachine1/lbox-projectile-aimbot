@@ -22,6 +22,10 @@ local state = {}
 local MAX_TRACKED = 4
 local EXPIRY_TICKS = 66
 
+local STILL_SPEED_THRESHOLD = 50
+local COAST_BIAS_SPEED_THRESHOLD = 50
+local COAST_ERROR_MULTIPLIER = 0.8
+
 -- 9 possible movement directions (relative to player yaw)
 -- x = forward/back component, y = left/right component
 local DIRECTIONS = {
@@ -75,7 +79,7 @@ end
 -- Clamp velocity to nearest of 8 directions (fallback when no prior prediction)
 local function clampVelocityTo8Directions(velocity, yaw)
 	local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
-	if horizLen < 10 then
+	if horizLen < STILL_SPEED_THRESHOLD then
 		return Vector3(0, 0, 0) -- Standing still
 	end
 
@@ -175,19 +179,33 @@ end
 
 -- Find which prediction best matches current state
 local function findBestMatchingPrediction(predictions, currentPos, currentVel)
+	assert(predictions, "findBestMatchingPrediction: predictions is nil")
+	assert(currentPos, "findBestMatchingPrediction: currentPos is nil")
+	assert(currentVel, "findBestMatchingPrediction: currentVel is nil")
+
 	if not predictions or #predictions == 0 then
 		return nil
 	end
+
+	local curHorizLen = math.sqrt(currentVel.x * currentVel.x + currentVel.y * currentVel.y)
 
 	local bestIdx = nil
 	local bestError = math.huge
 
 	for i, pred in ipairs(predictions) do
 		if pred and pred.pos and pred.vel then
-			-- Error = position difference + velocity difference (weighted)
-			local posDiff = (currentPos - pred.pos):Length()
-			local velDiff = (currentVel - pred.vel):Length()
+			local posDx = currentPos.x - pred.pos.x
+			local posDy = currentPos.y - pred.pos.y
+			local posDiff = math.sqrt(posDx * posDx + posDy * posDy)
+
+			local velDx = currentVel.x - pred.vel.x
+			local velDy = currentVel.y - pred.vel.y
+			local velDiff = math.sqrt(velDx * velDx + velDy * velDy)
+
 			local totalError = posDiff + velDiff * 0.1
+			if pred.dirName == "coast" and curHorizLen < COAST_BIAS_SPEED_THRESHOLD then
+				totalError = totalError * COAST_ERROR_MULTIPLIER
+			end
 
 			if totalError < bestError then
 				bestError = totalError
@@ -225,6 +243,9 @@ function WishdirTracker.update(entity)
 		return
 	end
 
+	s.detectedWishdir = nil
+	s.detectionError = nil
+
 	-- Step 1: If we have prior predictions, find which one matches best
 	if s.predictions and s.predictionTick == globals.TickCount() - 1 then
 		local bestWishdir, error = findBestMatchingPrediction(s.predictions, currentPos, currentVel)
@@ -232,6 +253,11 @@ function WishdirTracker.update(entity)
 			s.detectedWishdir = bestWishdir
 			s.detectionError = error
 		end
+	end
+
+	if not s.detectedWishdir then
+		s.detectedWishdir = clampVelocityTo8Directions(currentVel, currentYaw)
+		s.detectionError = nil
 	end
 
 	-- Step 2: Simulate all 9 directions for next tick comparison
@@ -264,7 +290,7 @@ function WishdirTracker.getRelativeWishdir(entity)
 	end
 
 	-- Fallback: clamp current velocity to 8 directions
-	if s and s.lastVel and s.lastYaw then
+	if s and s.lastVel and s.lastYaw and s.lastTick == globals.TickCount() then
 		return clampVelocityTo8Directions(s.lastVel, s.lastYaw)
 	end
 
