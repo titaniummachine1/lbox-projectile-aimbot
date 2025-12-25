@@ -173,6 +173,23 @@ local function drawMenu()
 		end
 		TimMenu.EndSector()
 
+		TimMenu.BeginSector("Path Styles")
+		vis.PathStyles = vis.PathStyles or { "Pavement", "ArrowPath", "Arrows", "L Line", "Dashed", "Line" }
+		if vis.DrawPlayerPath then
+			vis.PlayerPathStyle = TimMenu.Dropdown("Player Path", vis.PlayerPathStyle or 1, vis.PathStyles)
+			TimMenu.NextLine()
+		end
+		if vis.DrawProjectilePath then
+			vis.ProjectilePathStyle = TimMenu.Dropdown("Projectile Path", vis.ProjectilePathStyle or 6, vis.PathStyles)
+			TimMenu.NextLine()
+		end
+		if vis.SelfPrediction then
+			vis.SelfPredictionPathStyle =
+				TimMenu.Dropdown("Self Prediction", vis.SelfPredictionPathStyle or 6, vis.PathStyles)
+			TimMenu.NextLine()
+		end
+		TimMenu.EndSector()
+
 		TimMenu.BeginSector("Colors")
 		vis.ColorsRGBA = vis.ColorsRGBA or {}
 		vis.ColorsRGBA.PlayerPath =
@@ -212,10 +229,6 @@ local function drawMenu()
 		if vis.DrawMultipointTarget then
 			vis.Thickness.MultipointTarget = TimMenu.Slider("Multipoint", vis.Thickness.MultipointTarget, 1, 10, 0.5)
 			TimMenu.NextLine()
-		end
-		if vis.SelfPrediction then
-			vis.Thickness.SelfPrediction =
-				TimMenu.Slider("Self Prediction", vis.Thickness.SelfPrediction or 2.0, 0.5, 5, 0.5)
 		end
 		TimMenu.EndSector()
 		TimMenu.NextLine()

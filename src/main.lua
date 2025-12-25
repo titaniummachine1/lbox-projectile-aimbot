@@ -953,9 +953,6 @@ local function onCreateMove(cmd)
 		local simStartTime = globals.CurTime()
 		local isPlayer = entity.IsPlayer and entity:IsPlayer()
 		if isPlayer then
-			-- DISABLED: Enemy prediction completely removed per user request
-			error("ENEMY PREDICTION DISABLED - Only local player prediction should work")
-			--[[
 			TickProfiler.BeginSection("CM:SimPlayer")
 			local simCtx = PredictionContext.createSimulationContext()
 			assert(simCtx and simCtx.sv_gravity and simCtx.tickinterval, "Main: createSimulationContext failed")
@@ -964,9 +961,7 @@ local function onCreateMove(cmd)
 			local relWishDir = WishdirTracker.getRelativeWishdir(entity)
 			local playerCtx = PredictionContext.createPlayerContext(entity, lazyness, relWishDir)
 			assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
-			--]]
 
-			--[[
 			local maxTotalTime = math.max(0.0, outgoingLatency + lerp + maxFlightTime)
 			local tickinterval = simCtx.tickinterval
 			local clock = 0.0
@@ -990,7 +985,7 @@ local function onCreateMove(cmd)
 			end
 
 			local function stepSim()
-				if clock > 0.0 then
+				if clock >= maxTotalTime then
 					return
 				end
 				lastPos = PlayerTick.simulateTick(playerCtx, simCtx)
@@ -1008,24 +1003,19 @@ local function onCreateMove(cmd)
 					return
 				end
 				local goalCount = math.max(0, math.floor(count))
-				if (#rocketIndices < goalCount) and ((clock + 1e-6) < maxTotalTime) then
+				while (#rocketIndices < goalCount) and ((clock + 1e-6) < maxTotalTime) do
 					stepSim()
 				end
 			end
 
 			ensureSimulatedToTotal = function(total)
 				local goal = math.max(0.0, math.min(maxTotalTime, total))
-				if (clock + 1e-6) < goal then
+				while (clock + 1e-6) < goal do
 					stepSim()
 				end
 			end
 
 			TickProfiler.EndSection("CM:SimPlayer")
-			--]]
-
-			assert(path, "Main: SimulatePlayer returned nil path")
-			assert(lastPos, "Main: SimulatePlayer returned nil lastPos")
-			assert(#path > 0, "Main: SimulatePlayer returned empty path")
 		else
 			path = { entityCenter }
 			lastPos = entityCenter

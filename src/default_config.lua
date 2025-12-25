@@ -43,6 +43,12 @@ local DefaultConfig = {
 		SelfPrediction = false,
 		SelfPredictionDuration = 2.0,
 
+		-- Path style options (1=Pavement, 2=ArrowPath, 3=Arrows, 4=L Line, 5=Dashed, 6=Line)
+		PathStyles = { "Pavement", "ArrowPath", "Arrows", "L Line", "Dashed", "Line" },
+		PlayerPathStyle = 1, -- Pavement
+		ProjectilePathStyle = 6, -- Line
+		SelfPredictionPathStyle = 6, -- Line
+
 		-- Colors (HSV hue 0-360, or 360+ for white)
 		Colors = {
 			PlayerPath = 180, -- Cyan
@@ -63,11 +69,11 @@ local DefaultConfig = {
 
 		-- Line/element thickness
 		Thickness = {
-			PlayerPath = 1.5,
-			ProjectilePath = 1.5,
+			PlayerPath = 5,
+			ProjectilePath = 2,
 			BoundingBox = 1.5,
 			MultipointTarget = 4.0,
-			SelfPrediction = 2.0,
+			SelfPrediction = 3,
 		},
 	},
 }

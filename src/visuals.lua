@@ -114,6 +114,163 @@ local function drawCircle(x, y, radius)
 	end
 end
 
+-- Draw arrow at point
+local function drawArrow(texture, p1, p2, thickness, arrowSize)
+	if not (p1 and p2) then
+		return
+	end
+
+	-- Draw main line
+	drawLine(texture, p1, p2, thickness)
+
+	-- Calculate arrow head
+	local dx = p2[1] - p1[1]
+	local dy = p2[2] - p1[2]
+	local len = math.sqrt(dx * dx + dy * dy)
+	if len <= 0 then
+		return
+	end
+
+	dx = dx / len
+	dy = dy / len
+
+	local arrowLen = arrowSize or (thickness * 3)
+	local arrowWidth = arrowLen * 0.6
+
+	-- Arrow head points
+	local tipX = p2[1]
+	local tipY = p2[2]
+	local baseX = tipX - dx * arrowLen
+	local baseY = tipY - dy * arrowLen
+
+	local perpX = -dy * arrowWidth
+	local perpY = dx * arrowWidth
+
+	local verts = {
+		{ tipX, tipY },
+		{ baseX + perpX, baseY + perpY },
+		{ baseX - perpX, baseY - perpY },
+	}
+
+	draw.FilledPolygon(verts)
+end
+
+-- Draw dashed line
+local function drawDashedLine(texture, p1, p2, thickness, dashLength, gapLength)
+	if not (p1 and p2) then
+		return
+	end
+
+	dashLength = dashLength or 10
+	gapLength = gapLength or 5
+	local segmentLength = dashLength + gapLength
+
+	local dx = p2[1] - p1[1]
+	local dy = p2[2] - p1[2]
+	local totalLen = math.sqrt(dx * dx + dy * dy)
+	if totalLen <= 0 then
+		return
+	end
+
+	local dirX = dx / totalLen
+	local dirY = dy / totalLen
+
+	local currentLen = 0
+	while currentLen < totalLen do
+		local dashStart = currentLen
+		local dashEnd = math.min(currentLen + dashLength, totalLen)
+
+		local startX = p1[1] + dirX * dashStart
+		local startY = p1[2] + dirY * dashStart
+		local endX = p1[1] + dirX * dashEnd
+		local endY = p1[2] + dirY * dashEnd
+
+		drawLine(texture, { startX, startY }, { endX, endY }, thickness)
+
+		currentLen = currentLen + segmentLength
+	end
+end
+
+-- Draw pavement style (alternating blocks)
+local function drawPavementLine(texture, p1, p2, thickness, blockSize)
+	if not (p1 and p2) then
+		return
+	end
+
+	blockSize = blockSize or 8
+
+	local dx = p2[1] - p1[1]
+	local dy = p2[2] - p1[2]
+	local totalLen = math.sqrt(dx * dx + dy * dy)
+	if totalLen <= 0 then
+		return
+	end
+
+	local dirX = dx / totalLen
+	local dirY = dy / totalLen
+	local perpX = -dirY * thickness
+	local perpY = dirX * thickness
+
+	local currentLen = 0
+	local blockIndex = 0
+	while currentLen < totalLen do
+		local blockEnd = math.min(currentLen + blockSize, totalLen)
+
+		if blockIndex % 2 == 0 then
+			local startX = p1[1] + dirX * currentLen
+			local startY = p1[2] + dirY * currentLen
+			local endX = p1[1] + dirX * blockEnd
+			local endY = p1[2] + dirY * blockEnd
+
+			local verts = {
+				{ startX + perpX, startY + perpY, 0, 0 },
+				{ startX - perpX, startY - perpY, 0, 1 },
+				{ endX - perpX, endY - perpY, 1, 1 },
+				{ endX + perpX, endY + perpY, 1, 0 },
+			}
+
+			if texture then
+				draw.TexturedPolygon(texture, verts, false)
+			end
+		end
+
+		currentLen = currentLen + blockSize
+		blockIndex = blockIndex + 1
+	end
+end
+
+-- Draw styled line based on style index (matches swing prediction order)
+-- Styles: 1=Pavement, 2=ArrowPath, 3=Arrows, 4=L Line, 5=Dashed, 6=Line
+local function drawStyledLine(texture, p1, p2, thickness, style)
+	style = style or 6
+
+	if style == 1 then
+		-- Pavement
+		drawPavementLine(texture, p1, p2, thickness, 8)
+	elseif style == 2 then
+		-- ArrowPath (arrows along the path)
+		drawArrow(texture, p1, p2, thickness, thickness * 3)
+	elseif style == 3 then
+		-- Arrows (arrow at end only)
+		drawArrow(texture, p1, p2, thickness, thickness * 4)
+	elseif style == 4 then
+		-- L Line (right angle connection)
+		local midX = (p1[1] + p2[1]) * 0.5
+		drawLine(texture, p1, { midX, p1[2] }, thickness)
+		drawLine(texture, { midX, p1[2] }, { midX, p2[2] }, thickness)
+		drawLine(texture, { midX, p2[2] }, p2, thickness)
+	elseif style == 5 then
+		-- Dashed
+		drawDashedLine(texture, p1, p2, thickness, 10, 5)
+	elseif style == 6 then
+		-- Line
+		drawLine(texture, p1, p2, thickness)
+	else
+		-- Fallback to line
+		drawLine(texture, p1, p2, thickness)
+	end
+end
+
 local function buildBoxFaces(worldMins, worldMaxs)
 	local midX = (worldMins.x + worldMaxs.x) * 0.5
 	local midY = (worldMins.y + worldMaxs.y) * 0.5
@@ -740,7 +897,9 @@ function Visuals.draw(state)
 		a = math.floor(a * alphaMul)
 		draw.Color(r, g, b, a)
 
-		-- Draw the path line
+		local pathStyle = vis.PlayerPathStyle or 1
+
+		-- Draw the path line with selected style
 		if currentOrigin then
 			local lastWorld = currentOrigin
 			local last = client.WorldToScreen(currentOrigin)
@@ -754,7 +913,7 @@ function Visuals.draw(state)
 						local dz = curWorld.z - lastWorld.z
 						local distSq = (dx * dx) + (dy * dy) + (dz * dz)
 						if distSq <= PLAYER_PATH_GAP_SQ then
-							drawLine(texture, last, current, vis.Thickness.PlayerPath)
+							drawStyledLine(texture, last, current, vis.Thickness.PlayerPath, pathStyle)
 						end
 					end
 					lastWorld = curWorld
@@ -888,56 +1047,40 @@ function Visuals.draw(state)
 	end
 
 	-- Draw self-prediction (local player movement prediction for debugging)
-	if vis.SelfPrediction and localPlayer and localPlayer:IsAlive() then
-		local predictDuration = vis.SelfPredictionDuration or 2.0
+	if vis.SelfPrediction and localPlayer then
+		local isAlive = localPlayer.IsAlive and localPlayer:IsAlive()
+		if isAlive then
+			local predictDuration = vis.SelfPredictionDuration or 2.0
+			local selfPathStyle = vis.SelfPredictionPathStyle or 6
 
-		local success, err = pcall(function()
-			local playerCtx = PredictionContext.createPlayerContext(localPlayer, 1.0)
-			local simCtx = PredictionContext.createSimulationContext()
+			local success, err = pcall(function()
+				local playerCtx = PredictionContext.createPlayerContext(localPlayer, 1.0)
+				local simCtx = PredictionContext.createSimulationContext()
 
-			if playerCtx and simCtx then
-				local path, lastPos, timetable = PlayerTick.simulatePath(playerCtx, simCtx, predictDuration)
+				if playerCtx and simCtx then
+					local selfPath = PlayerTick.simulatePath(playerCtx, simCtx, predictDuration)
 
-				if path and #path > 1 then
-					local r, g, b, a = getColor(vis, "SelfPrediction", 300)
-					draw.Color(r, g, b, a)
+					if selfPath and #selfPath > 1 then
+						local r, g, b, a = getColor(vis, "SelfPrediction", 300)
+						a = math.floor(a * alphaMul)
+						draw.Color(r, g, b, a)
 
-					-- Draw the path line
-					local last = nil
-					for i = 1, #path do
-						local curWorld = path[i]
-						local current = curWorld and client.WorldToScreen(curWorld)
-						if current and last then
-							drawLine(texture, last, current, vis.Thickness.SelfPrediction or 2.0)
-						end
-						last = current
-					end
-
-					-- Draw self-prediction points with purple gradient
-					for i = 1, #path, PREDICTION_POINT_INTERVAL do
-						local pointWorld = path[i]
-						local pointScreen = pointWorld and client.WorldToScreen(pointWorld)
-						if pointScreen then
-							-- Purple to white gradient for self-prediction
-							local progress = i / #path
-							local brightness = 0.5 + progress * 0.5
-							draw.Color(
-								math.floor(200 * brightness),
-								math.floor(100 * brightness),
-								math.floor(255 * brightness),
-								a
-							)
-							drawCircle(pointScreen[1], pointScreen[2], PREDICTION_POINT_SIZE * 0.8)
+						local last = nil
+						for i = 1, #selfPath do
+							local curWorld = selfPath[i]
+							local current = curWorld and client.WorldToScreen(curWorld)
+							if current and last then
+								drawStyledLine(texture, last, current, vis.Thickness.SelfPrediction or 3, selfPathStyle)
+							end
+							last = current
 						end
 					end
 				end
-			else
-				printc(255, 100, 100, 255, "[Visuals] Self-prediction: context creation failed")
-			end
-		end)
+			end)
 
-		if not success then
-			printc(255, 100, 100, 255, "[Visuals] Self-prediction error: " .. tostring(err))
+			if not success then
+				printc(255, 100, 100, 255, "[Visuals] Self-prediction error: " .. tostring(err))
+			end
 		end
 	end
 end
