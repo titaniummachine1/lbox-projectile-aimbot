@@ -177,6 +177,9 @@ local function drawMenu()
 			vis.ProjectilePathStyle = TimMenu.Dropdown("Projectile Path", vis.ProjectilePathStyle or 6, vis.PathStyles)
 			TimMenu.NextLine()
 		end
+		vis.PathWidth = TimMenu.Slider("Path Width", vis.PathWidth or 5, 1, 20, 1)
+		TimMenu.Tooltip("Width of the drawn path (affects Pavement, ArrowPath, Arrows, L Line styles)")
+		TimMenu.NextLine()
 		TimMenu.EndSector()
 
 		TimMenu.BeginSector("Colors")

@@ -862,63 +862,33 @@ function Visuals.draw(state)
 		local r, g, b, a = getColor(vis, "PlayerPath", 180)
 		a = math.floor(a * alphaMul)
 
-		local rawStyle = vis.PlayerPathStyle or 0
-		-- Dropdown is 0-indexed (0-5), convert to 1-indexed (1-6) for style checks
-		local style = rawStyle + 1
-		-- Clamp to valid range
-		if style < 1 then
-			style = 1
+		local style = (vis.PlayerPathStyle or 1) - 2
+		-- Validate style is in range 1-6
+		if type(style) ~= "number" or style < 1 or style > 6 then
+			style = 6 -- Default to simple line
 		end
-		if style > 6 then
-			style = 6
-		end
-		local width = vis.Thickness.PlayerPath or 5
+		local width = vis.PathWidth or vis.Thickness.PlayerPath or 5
+
+		-- DEBUG: Print style value
+		printc(
+			255,
+			255,
+			0,
+			255,
+			"[DEBUG] PlayerPathStyle raw=" .. tostring(vis.PlayerPathStyle) .. " final=" .. tostring(style)
+		)
 
 		-- Skip every N points to reduce draw calls (performance)
 		local step = math.max(1, math.floor(#playerPath / 60))
 
 		if style == 1 then
-			-- Pavement Style
-			local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
+			-- Arrows Style (was style 3)
 			for i = 1, #playerPath - step, step do
 				local startPos = playerPath[i]
 				local endPos = playerPath[math.min(i + step, #playerPath)]
 				if startPos and endPos then
 					draw.Color(r, g, b, a)
-					local leftBase, rightBase = drawPavement(startPos, endPos, width)
-					if leftBase and rightBase then
-						local screenLeftBase = client.WorldToScreen(leftBase)
-						local screenRightBase = client.WorldToScreen(rightBase)
-						if screenLeftBase and screenRightBase then
-							if lastLeftBaseScreen and lastRightBaseScreen then
-								draw.Color(r, g, b, a)
-								draw.Line(
-									lastLeftBaseScreen[1],
-									lastLeftBaseScreen[2],
-									screenLeftBase[1],
-									screenLeftBase[2]
-								)
-								draw.Line(
-									lastRightBaseScreen[1],
-									lastRightBaseScreen[2],
-									screenRightBase[1],
-									screenRightBase[2]
-								)
-							end
-							lastLeftBaseScreen = screenLeftBase
-							lastRightBaseScreen = screenRightBase
-						end
-					end
-				end
-			end
-			-- Draw final line segment
-			if lastLeftBaseScreen and lastRightBaseScreen then
-				local finalPos = playerPath[#playerPath]
-				local screenFinalPos = client.WorldToScreen(finalPos)
-				if screenFinalPos then
-					draw.Color(r, g, b, a)
-					draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
-					draw.Line(lastRightBaseScreen[1], lastRightBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
+					arrowPathArrow(startPos, endPos, width)
 				end
 			end
 		elseif style == 2 then
@@ -956,13 +926,46 @@ function Visuals.draw(state)
 				end
 			end
 		elseif style == 3 then
-			-- Arrows Style
+			-- Pavement Style (was style 1)
+			local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
 			for i = 1, #playerPath - step, step do
 				local startPos = playerPath[i]
 				local endPos = playerPath[math.min(i + step, #playerPath)]
 				if startPos and endPos then
 					draw.Color(r, g, b, a)
-					arrowPathArrow(startPos, endPos, width)
+					local leftBase, rightBase = drawPavement(startPos, endPos, width)
+					if leftBase and rightBase then
+						local screenLeftBase = client.WorldToScreen(leftBase)
+						local screenRightBase = client.WorldToScreen(rightBase)
+						if screenLeftBase and screenRightBase then
+							if lastLeftBaseScreen and lastRightBaseScreen then
+								draw.Color(r, g, b, a)
+								draw.Line(
+									lastLeftBaseScreen[1],
+									lastLeftBaseScreen[2],
+									screenLeftBase[1],
+									screenLeftBase[2]
+								)
+								draw.Line(
+									lastRightBaseScreen[1],
+									lastRightBaseScreen[2],
+									screenRightBase[1],
+									screenRightBase[2]
+								)
+							end
+							lastLeftBaseScreen = screenLeftBase
+							lastRightBaseScreen = screenRightBase
+						end
+					end
+				end
+			end
+			if lastLeftBaseScreen and lastRightBaseScreen then
+				local finalPos = playerPath[#playerPath]
+				local screenFinalPos = client.WorldToScreen(finalPos)
+				if screenFinalPos then
+					draw.Color(r, g, b, a)
+					draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
+					draw.Line(lastRightBaseScreen[1], lastRightBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
 				end
 			end
 		elseif style == 4 then
@@ -976,14 +979,14 @@ function Visuals.draw(state)
 				end
 			end
 		elseif style == 5 then
-			-- Dashed Line Style
+			-- Dashed Line Style (draw odd lines only)
 			local dashIdx = 0
 			for i = 1, #playerPath - step, step do
 				local pos1 = playerPath[i]
 				local pos2 = playerPath[math.min(i + step, #playerPath)]
 				local screenPos1 = client.WorldToScreen(pos1)
 				local screenPos2 = client.WorldToScreen(pos2)
-				if screenPos1 and screenPos2 and dashIdx % 2 == 0 then
+				if screenPos1 and screenPos2 and dashIdx % 2 == 1 then
 					draw.Color(r, g, b, a)
 					draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
 				end
@@ -1108,19 +1111,59 @@ function Visuals.draw(state)
 				local r, g, b, a = getColor(vis, "SelfPrediction", 300)
 				a = math.floor(a * alphaMul)
 
-				local rawStyle = vis.PlayerPathStyle or 0
-				local style = rawStyle + 1
-				if style < 1 then
-					style = 1
+				local style = (vis.PlayerPathStyle or 1) - 2
+				if type(style) ~= "number" or style < 1 or style > 6 then
+					style = 6 -- Default to simple line
 				end
-				if style > 6 then
-					style = 6
-				end
-				local width = vis.Thickness.SelfPrediction or 3
+				local width = vis.PathWidth or vis.Thickness.SelfPrediction or 3
 				local step = math.max(1, math.floor(#selfPath / 30))
 
 				if style == 1 then
-					-- Pavement Style
+					-- Arrows Style (swapped with style 3)
+					for i = 1, #selfPath - step, step do
+						local startPos = selfPath[i]
+						local endPos = selfPath[math.min(i + step, #selfPath)]
+						if startPos and endPos then
+							draw.Color(r, g, b, a)
+							arrowPathArrow(startPos, endPos, width)
+						end
+					end
+				elseif style == 2 then
+					-- ArrowPath Style
+					local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
+					for i = 1, #selfPath - step, step do
+						local startPos = selfPath[i]
+						local endPos = selfPath[math.min(i + step, #selfPath)]
+						if startPos and endPos then
+							draw.Color(r, g, b, a)
+							local leftBase, rightBase = arrowPathArrow2(startPos, endPos, width)
+							if leftBase and rightBase then
+								local screenLeftBase = client.WorldToScreen(leftBase)
+								local screenRightBase = client.WorldToScreen(rightBase)
+								if screenLeftBase and screenRightBase then
+									if lastLeftBaseScreen and lastRightBaseScreen then
+										draw.Color(r, g, b, a)
+										draw.Line(
+											lastLeftBaseScreen[1],
+											lastLeftBaseScreen[2],
+											screenLeftBase[1],
+											screenLeftBase[2]
+										)
+										draw.Line(
+											lastRightBaseScreen[1],
+											lastRightBaseScreen[2],
+											screenRightBase[1],
+											screenRightBase[2]
+										)
+									end
+									lastLeftBaseScreen = screenLeftBase
+									lastRightBaseScreen = screenRightBase
+								end
+							end
+						end
+					end
+				elseif style == 3 then
+					-- Pavement Style (swapped with style 1)
 					local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
 					for i = 1, #selfPath - step, step do
 						local startPos = selfPath[i]
@@ -1153,16 +1196,6 @@ function Visuals.draw(state)
 							end
 						end
 					end
-				elseif style == 3 then
-					-- Arrows Style
-					for i = 1, #selfPath - step, step do
-						local startPos = selfPath[i]
-						local endPos = selfPath[math.min(i + step, #selfPath)]
-						if startPos and endPos then
-							draw.Color(r, g, b, a)
-							arrowPathArrow(startPos, endPos, width)
-						end
-					end
 				elseif style == 4 then
 					-- L Line Style
 					for i = 1, #selfPath - step, step do
@@ -1173,8 +1206,22 @@ function Visuals.draw(state)
 							L_line(pos1, pos2, width)
 						end
 					end
+				elseif style == 5 then
+					-- Dashed Line Style (draw odd lines only)
+					local dashIdx = 0
+					for i = 1, #selfPath - step, step do
+						local pos1 = selfPath[i]
+						local pos2 = selfPath[math.min(i + step, #selfPath)]
+						local screenPos1 = client.WorldToScreen(pos1)
+						local screenPos2 = client.WorldToScreen(pos2)
+						if screenPos1 and screenPos2 and dashIdx % 2 == 1 then
+							draw.Color(r, g, b, a)
+							draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
+						end
+						dashIdx = dashIdx + 1
+					end
 				else
-					-- Simple Line Style (default)
+					-- Simple Line Style (style == 6 or default)
 					for i = 1, #selfPath - step, step do
 						local pos1 = selfPath[i]
 						local pos2 = selfPath[math.min(i + step, #selfPath)]
