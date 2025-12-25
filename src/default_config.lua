@@ -9,22 +9,20 @@ local DefaultConfig = {
 	Aimbot = {
 		Enabled = true,
 		AimKey = 0, -- KEY_NONE
-		ActivationMode = 0, -- 0=Always, 1=On Hold, 2=Toggle
-		OnAttack = false, -- Activate when cmd has attack input (combines with mode)
+		ActivationMode = 1, -- 0=Always, 1=On Hold, 2=Toggle
+		OnAttack = true, -- Activate when cmd has attack input (combines with mode)
 		AimFOV = 15,
 		AimMethod = "silent +", -- "silent +", "silent", "normal"
 		AimMode = 0, -- 0=Legit, 1=Blatant
 		DrawOnly = false, -- Visualize targeting without shooting
 		MaxDistance = 3000,
-		MaxSimTime = 3.0,
-		MinAccuracy = 2,
-		MaxAccuracy = 12,
+		MaxSimTime = 1.5,
 		MinConfidence = 40,
 		AimSentry = true,
 		AimOtherBuildings = false,
-		TrackedTargets = 4, -- how many enemies to keep movement history for
+		TrackedTargets = 2, -- how many enemies to keep movement history for
 		PreferFeet = true, -- prioritize shooting ~5 units above ground to launch enemies
-		AutoFlipViewmodels = false,
+		AutoFlipViewmodels = true,
 	},
 
 	-- Visual settings

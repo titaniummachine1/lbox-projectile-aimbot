@@ -136,10 +136,9 @@ end
 
 ---Creates a player context from entity
 ---@param entity Entity
----@param lazyness number? Optional tick multiplier
 ---@param relativeWishDir Vector3? Optional override for relative wish direction
 ---@return PlayerContext
-function PredictionContext.createPlayerContext(entity, lazyness, relativeWishDir)
+function PredictionContext.createPlayerContext(entity, relativeWishDir)
 	assert(entity, "createPlayerContext: entity is nil")
 
 	local velocity = entity:EstimateAbsVelocity()
@@ -177,7 +176,6 @@ function PredictionContext.createPlayerContext(entity, lazyness, relativeWishDir
 		maxspeed = maxspeed,
 		index = index,
 		stepheight = 18,
-		lazyness = lazyness or 1,
 		yaw = yaw,
 		yawDeltaPerTick = yawDeltaPerTick,
 		relativeWishDir = relativeWishDir,

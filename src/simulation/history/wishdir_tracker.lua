@@ -144,7 +144,6 @@ local function simulateOneDirection(entity, simCtx, dirX, dirY)
 		maxspeed = maxspeed,
 		index = entity:GetIndex(),
 		stepheight = 18,
-		lazyness = 1,
 		yaw = yaw,
 		yawDeltaPerTick = 0,
 		relativeWishDir = wishdir,

@@ -622,6 +622,7 @@ local function onCreateMove(cmd)
 		return out
 	end
 
+	-- Trace from viewpos (aimEyePos) to target - used for initial filtering
 	local function traceHitsTarget(target, endPos)
 		if not (target and endPos) then
 			return false
@@ -652,6 +653,82 @@ local function onCreateMove(cmd)
 		end
 		local hitEnt = trace.entity
 		if hitEnt and hitEnt.GetIndex and hitEnt:GetIndex() == targetIndex then
+			return true
+		end
+		return false
+	end
+
+	-- Trace from shootpos to target - used for best player final check (rocket flies straight)
+	local function traceFromShootPos(target, shootPos, endPos)
+		if not (target and shootPos and endPos) then
+			return false
+		end
+		local targetIndex = target.GetIndex and target:GetIndex() or nil
+		if not targetIndex then
+			return false
+		end
+		local function shouldHitEntity(ent, contentsMask)
+			if not ent then
+				return false
+			end
+			local idx = ent.GetIndex and ent:GetIndex() or nil
+			if idx == localIndex then
+				return false
+			end
+			if idx == targetIndex then
+				return true
+			end
+			return false
+		end
+		local trace = engine.TraceLine(shootPos, endPos, MASK_SHOT, shouldHitEntity)
+		if not trace then
+			return false
+		end
+		if trace.fraction >= 0.999 then
+			return true
+		end
+		local hitEnt = trace.entity
+		if hitEnt and hitEnt.GetIndex and hitEnt:GetIndex() == targetIndex then
+			return true
+		end
+		return false
+	end
+
+	-- Check if any corner of simulated position is visible from shootpos (rocket assumption)
+	local function canShootAnyCornerFromPos(target, shootPos, predictedPos)
+		if not (target and shootPos and predictedPos) then
+			return false
+		end
+		local mins = target.GetMins and target:GetMins() or nil
+		local maxs = target.GetMaxs and target:GetMaxs() or nil
+		if not (mins and maxs) then
+			return false
+		end
+		local worldMins = predictedPos + mins
+		local worldMaxs = predictedPos + maxs
+		-- Check all 8 corners - rocket flies straight so just traceline
+		if traceFromShootPos(target, shootPos, Vector3(worldMins.x, worldMins.y, worldMins.z)) then
+			return true
+		end
+		if traceFromShootPos(target, shootPos, Vector3(worldMins.x, worldMaxs.y, worldMins.z)) then
+			return true
+		end
+		if traceFromShootPos(target, shootPos, Vector3(worldMaxs.x, worldMaxs.y, worldMins.z)) then
+			return true
+		end
+		if traceFromShootPos(target, shootPos, Vector3(worldMaxs.x, worldMins.y, worldMins.z)) then
+			return true
+		end
+		if traceFromShootPos(target, shootPos, Vector3(worldMins.x, worldMins.y, worldMaxs.z)) then
+			return true
+		end
+		if traceFromShootPos(target, shootPos, Vector3(worldMins.x, worldMaxs.y, worldMaxs.z)) then
+			return true
+		end
+		if traceFromShootPos(target, shootPos, Vector3(worldMaxs.x, worldMaxs.y, worldMaxs.z)) then
+			return true
+		end
+		if traceFromShootPos(target, shootPos, Vector3(worldMaxs.x, worldMins.y, worldMaxs.z)) then
 			return true
 		end
 		return false
@@ -913,7 +990,7 @@ local function onCreateMove(cmd)
 	end
 
 	-- Only store wishdir/strafe history for top 2N tracked players to avoid crashes with large groups
-	TickProfiler.BeginSection("CM:StrafeRecord")
+	TickProfiler.BeginSection("CM:HistorySetup")
 	local keepHistory = {}
 	local historyPlayers = {}
 	for i = 1, math.min(trackedCount * 2, #nextTracked) do
@@ -924,13 +1001,22 @@ local function onCreateMove(cmd)
 			historyPlayers[#historyPlayers + 1] = entity
 		end
 	end
+	TickProfiler.EndSection("CM:HistorySetup")
+
 	-- Update strafe predictor only for top 2N
+	TickProfiler.BeginSection("CM:StrafeUpdate")
 	if #historyPlayers > 0 then
 		StrafePredictor.updateAll(historyPlayers, 10)
 	end
+	TickProfiler.EndSection("CM:StrafeUpdate")
+
 	-- Update wishdir tracker only for top 2N
+	TickProfiler.BeginSection("CM:WishdirUpdate")
 	WishdirTracker.updateTop(plocal, historyPlayers, trackedCount * 2)
+	TickProfiler.EndSection("CM:WishdirUpdate")
+
 	-- Clear history for players not in top 2N
+	TickProfiler.BeginSection("CM:HistoryCleanup")
 	for _, player in pairs(entities.FindByClass("CTFPlayer")) do
 		if player and player:IsValid() then
 			local idx = player:GetIndex()
@@ -939,7 +1025,7 @@ local function onCreateMove(cmd)
 			end
 		end
 	end
-	TickProfiler.EndSection("CM:StrafeRecord")
+	TickProfiler.EndSection("CM:HistoryCleanup")
 
 	TickProfiler.BeginSection("CM:PredictionLoop")
 	repeat
@@ -960,7 +1046,6 @@ local function onCreateMove(cmd)
 		end
 		flightTime = math.max(0.0, math.min(maxFlightTime, flightTime))
 		local totalTime = outgoingLatency + lerp + flightTime
-		local lazyness = 1
 
 		local path, lastPos, timetable
 		local coastOrigin = nil
@@ -979,7 +1064,7 @@ local function onCreateMove(cmd)
 			simStartTime = simCtx.curtime
 
 			local relWishDir = WishdirTracker.getRelativeWishdir(entity)
-			local playerCtx = PredictionContext.createPlayerContext(entity, lazyness, relWishDir)
+			local playerCtx = PredictionContext.createPlayerContext(entity, relWishDir)
 			assert(playerCtx and playerCtx.origin and playerCtx.velocity, "Main: createPlayerContext failed")
 
 			local maxTotalTime = math.max(0.0, outgoingLatency + lerp + maxFlightTime)
@@ -1172,7 +1257,17 @@ local function onCreateMove(cmd)
 		local drop = 0.5 * gravity * flightTime * flightTime
 		local predictedOriginVis = predictedOrigin + Vector3(0, 0, drop)
 
-		-- REMOVED: Polluted strafe prediction integration - only visuals.lua prediction allowed
+		-- Quick visibility check from approx shootpos before expensive multipoint
+		-- Rocket flies straight - if no corner visible from shootpos, bail immediately
+		if isPlayer then
+			TickProfiler.BeginSection("CM:QuickVis")
+			local quickShootPos = aimEyePos + (angle:Forward() * 23.5) -- Approximate offset
+			local anyCornerVis = canShootAnyCornerFromPos(entity, quickShootPos, predictedOrigin)
+			TickProfiler.EndSection("CM:QuickVis")
+			if not anyCornerVis then
+				break -- All corners hidden from shootpos, bail
+			end
+		end
 
 		local multipointHitbox, multipointPos = nil, nil
 		if entity.IsPlayer and entity:IsPlayer() then
