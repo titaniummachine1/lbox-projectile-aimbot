@@ -92,192 +92,141 @@ local function drawLine(texture, p1, p2, thickness)
 	draw.TexturedPolygon(tex, verts, false)
 end
 
--- Draw a filled circle for prediction points using TexturedPolygon
-local function drawCircle(x, y, radius)
-	if not x or not y or radius <= 0 then
+-- Normalize a Vector3
+local function Normalize(v)
+	local len = v:Length()
+	if len == 0 then
+		return Vector3(0, 0, 0)
+	end
+	return v / len
+end
+
+-- World-space path drawing functions from swing prediction
+
+-- Pavement style - draws triangular pattern in world space
+local function drawPavement(startPos, endPos, width)
+	if not (startPos and endPos) then
+		return nil, nil
+	end
+
+	local direction = endPos - startPos
+	local length = direction:Length()
+	if length == 0 then
+		return nil, nil
+	end
+	direction = Normalize(direction)
+
+	local perpDir = Vector3(-direction.y, direction.x, 0)
+	local leftBase = startPos + perpDir * width
+	local rightBase = startPos - perpDir * width
+
+	local screenStartPos = client.WorldToScreen(startPos)
+	local screenEndPos = client.WorldToScreen(endPos)
+	local screenLeftBase = client.WorldToScreen(leftBase)
+	local screenRightBase = client.WorldToScreen(rightBase)
+
+	if screenStartPos and screenEndPos and screenLeftBase and screenRightBase then
+		draw.Line(screenStartPos[1], screenStartPos[2], screenEndPos[1], screenEndPos[2])
+		draw.Line(screenStartPos[1], screenStartPos[2], screenLeftBase[1], screenLeftBase[2])
+		draw.Line(screenStartPos[1], screenStartPos[2], screenRightBase[1], screenRightBase[2])
+	end
+
+	return leftBase, rightBase
+end
+
+-- ArrowPath style 2 - arrows along path with connecting lines
+local function arrowPathArrow2(startPos, endPos, width)
+	if not (startPos and endPos) then
+		return nil, nil
+	end
+
+	local direction = endPos - startPos
+	local length = direction:Length()
+	if length == 0 then
+		return nil, nil
+	end
+	direction = Normalize(direction)
+
+	local perpDir = Vector3(-direction.y, direction.x, 0)
+	local leftBase = startPos + perpDir * width
+	local rightBase = startPos - perpDir * width
+
+	local screenStartPos = client.WorldToScreen(startPos)
+	local screenEndPos = client.WorldToScreen(endPos)
+	local screenLeftBase = client.WorldToScreen(leftBase)
+	local screenRightBase = client.WorldToScreen(rightBase)
+
+	if screenStartPos and screenEndPos and screenLeftBase and screenRightBase then
+		draw.Line(screenStartPos[1], screenStartPos[2], screenEndPos[1], screenEndPos[2])
+		draw.Line(screenLeftBase[1], screenLeftBase[2], screenEndPos[1], screenEndPos[2])
+		draw.Line(screenRightBase[1], screenRightBase[2], screenEndPos[1], screenEndPos[2])
+	end
+
+	return leftBase, rightBase
+end
+
+-- Arrows style - arrow fins at each segment
+local function arrowPathArrow(startPos, endPos, arrowWidth)
+	if not startPos or not endPos then
 		return
 	end
 
-	local tex = getWhiteTexture()
-	if not tex then
+	local direction = endPos - startPos
+	if direction:Length() == 0 then
 		return
 	end
 
-	-- Draw filled circle using triangle fan approximation
-	local segments = math.max(8, math.floor(radius * 2))
-	local verts = {}
+	direction = Normalize(direction)
+	local perpendicular = Vector3(-direction.y, direction.x, 0) * arrowWidth
 
-	for i = 0, segments do
-		local angle = (i / segments) * math.pi * 2
-		local vx = x + math.cos(angle) * radius
-		local vy = y + math.sin(angle) * radius
-		table.insert(verts, { vx, vy, 0, 0 })
-	end
+	local finPoint1 = startPos + perpendicular
+	local finPoint2 = startPos - perpendicular
 
-	if #verts >= 3 then
-		draw.TexturedPolygon(tex, verts, false)
+	local screenEndPos = client.WorldToScreen(endPos)
+	local screenFinPoint1 = client.WorldToScreen(finPoint1)
+	local screenFinPoint2 = client.WorldToScreen(finPoint2)
+
+	if screenEndPos and screenFinPoint1 and screenFinPoint2 then
+		draw.Line(screenEndPos[1], screenEndPos[2], screenFinPoint1[1], screenFinPoint1[2])
+		draw.Line(screenEndPos[1], screenEndPos[2], screenFinPoint2[1], screenFinPoint2[2])
+		draw.Line(screenFinPoint1[1], screenFinPoint1[2], screenFinPoint2[1], screenFinPoint2[2])
 	end
 end
 
--- Draw arrow at point
-local function drawArrow(texture, p1, p2, thickness, arrowSize)
-	if not (p1 and p2) then
+-- L Line style - perpendicular line at start
+local function L_line(start_pos, end_pos, secondary_line_size)
+	if not (start_pos and end_pos) then
 		return
 	end
-
-	local tex = texture or getWhiteTexture()
-	if not tex then
+	local direction = end_pos - start_pos
+	local direction_length = direction:Length()
+	if direction_length == 0 then
 		return
 	end
-
-	-- Draw main line
-	drawLine(texture, p1, p2, thickness)
-
-	-- Calculate arrow head
-	local dx = p2[1] - p1[1]
-	local dy = p2[2] - p1[2]
-	local len = math.sqrt(dx * dx + dy * dy)
-	if len <= 0 then
+	local normalized_direction = Normalize(direction)
+	local perpendicular = Vector3(normalized_direction.y, -normalized_direction.x, 0) * secondary_line_size
+	local w2s_start_pos = client.WorldToScreen(start_pos)
+	local w2s_end_pos = client.WorldToScreen(end_pos)
+	if not (w2s_start_pos and w2s_end_pos) then
 		return
 	end
-
-	dx = dx / len
-	dy = dy / len
-
-	local arrowLen = arrowSize or (thickness * 3)
-	local arrowWidth = arrowLen * 0.6
-
-	-- Arrow head points
-	local tipX = p2[1]
-	local tipY = p2[2]
-	local baseX = tipX - dx * arrowLen
-	local baseY = tipY - dy * arrowLen
-
-	local perpX = -dy * arrowWidth
-	local perpY = dx * arrowWidth
-
-	local verts = {
-		{ tipX, tipY, 0, 0 },
-		{ baseX + perpX, baseY + perpY, 0, 0 },
-		{ baseX - perpX, baseY - perpY, 0, 0 },
-	}
-
-	draw.TexturedPolygon(tex, verts, false)
-end
-
--- Draw dashed line
-local function drawDashedLine(texture, p1, p2, thickness, dashLength, gapLength)
-	if not (p1 and p2) then
-		return
-	end
-
-	dashLength = dashLength or 10
-	gapLength = gapLength or 5
-	local segmentLength = dashLength + gapLength
-
-	local dx = p2[1] - p1[1]
-	local dy = p2[2] - p1[2]
-	local totalLen = math.sqrt(dx * dx + dy * dy)
-	if totalLen <= 0 then
-		return
-	end
-
-	local dirX = dx / totalLen
-	local dirY = dy / totalLen
-
-	local currentLen = 0
-	while currentLen < totalLen do
-		local dashStart = currentLen
-		local dashEnd = math.min(currentLen + dashLength, totalLen)
-
-		local startX = p1[1] + dirX * dashStart
-		local startY = p1[2] + dirY * dashStart
-		local endX = p1[1] + dirX * dashEnd
-		local endY = p1[2] + dirY * dashEnd
-
-		drawLine(texture, { startX, startY }, { endX, endY }, thickness)
-
-		currentLen = currentLen + segmentLength
+	local secondary_line_end_pos = start_pos + perpendicular
+	local w2s_secondary_line_end_pos = client.WorldToScreen(secondary_line_end_pos)
+	if w2s_secondary_line_end_pos then
+		draw.Line(w2s_start_pos[1], w2s_start_pos[2], w2s_end_pos[1], w2s_end_pos[2])
+		draw.Line(w2s_start_pos[1], w2s_start_pos[2], w2s_secondary_line_end_pos[1], w2s_secondary_line_end_pos[2])
 	end
 end
 
--- Draw pavement style (alternating blocks)
-local function drawPavementLine(texture, p1, p2, thickness, blockSize)
-	if not (p1 and p2) then
+-- Simple line between two world positions
+local function drawSimpleLine(startPos, endPos)
+	if not (startPos and endPos) then
 		return
 	end
-
-	blockSize = blockSize or 8
-
-	local dx = p2[1] - p1[1]
-	local dy = p2[2] - p1[2]
-	local totalLen = math.sqrt(dx * dx + dy * dy)
-	if totalLen <= 0 then
-		return
-	end
-
-	local dirX = dx / totalLen
-	local dirY = dy / totalLen
-	local perpX = -dirY * thickness
-	local perpY = dirX * thickness
-
-	local currentLen = 0
-	local blockIndex = 0
-	while currentLen < totalLen do
-		local blockEnd = math.min(currentLen + blockSize, totalLen)
-
-		if blockIndex % 2 == 0 then
-			local startX = p1[1] + dirX * currentLen
-			local startY = p1[2] + dirY * currentLen
-			local endX = p1[1] + dirX * blockEnd
-			local endY = p1[2] + dirY * blockEnd
-
-			local verts = {
-				{ startX + perpX, startY + perpY, 0, 0 },
-				{ startX - perpX, startY - perpY, 0, 1 },
-				{ endX - perpX, endY - perpY, 1, 1 },
-				{ endX + perpX, endY + perpY, 1, 0 },
-			}
-
-			if texture then
-				draw.TexturedPolygon(texture, verts, false)
-			end
-		end
-
-		currentLen = currentLen + blockSize
-		blockIndex = blockIndex + 1
-	end
-end
-
--- Draw styled line based on style index (matches swing prediction order)
--- Styles: 1=Pavement, 2=ArrowPath, 3=Arrows, 4=L Line, 5=Dashed, 6=Line
-local function drawStyledLine(texture, p1, p2, thickness, style)
-	style = style or 6
-
-	if style == 1 then
-		-- Pavement
-		drawPavementLine(texture, p1, p2, thickness, 8)
-	elseif style == 2 then
-		-- ArrowPath (arrows along the path)
-		drawArrow(texture, p1, p2, thickness, thickness * 3)
-	elseif style == 3 then
-		-- Arrows (arrow at end only)
-		drawArrow(texture, p1, p2, thickness, thickness * 4)
-	elseif style == 4 then
-		-- L Line (right angle connection)
-		local midX = (p1[1] + p2[1]) * 0.5
-		drawLine(texture, p1, { midX, p1[2] }, thickness)
-		drawLine(texture, { midX, p1[2] }, { midX, p2[2] }, thickness)
-		drawLine(texture, { midX, p2[2] }, p2, thickness)
-	elseif style == 5 then
-		-- Dashed
-		drawDashedLine(texture, p1, p2, thickness, 10, 5)
-	elseif style == 6 then
-		-- Line
-		drawLine(texture, p1, p2, thickness)
-	else
-		-- Fallback to line
-		drawLine(texture, p1, p2, thickness)
+	local screenStart = client.WorldToScreen(startPos)
+	local screenEnd = client.WorldToScreen(endPos)
+	if screenStart and screenEnd then
+		draw.Line(screenStart[1], screenStart[2], screenEnd[1], screenEnd[2])
 	end
 end
 
@@ -901,61 +850,124 @@ function Visuals.draw(state)
 	local currentOrigin = (targetEntity and targetEntity.GetAbsOrigin and targetEntity:GetAbsOrigin()) or nil
 	local targetPos = predictedOrigin or lastVec(playerPath) or currentOrigin
 
-	-- Draw player path with enhanced visualization
+	-- Draw player path with swing prediction style (world-space drawing)
 	if vis.DrawPlayerPath and playerPath and #playerPath > 1 then
 		local r, g, b, a = getColor(vis, "PlayerPath", 180)
 		a = math.floor(a * alphaMul)
 		draw.Color(r, g, b, a)
 
-		local pathStyle = vis.PlayerPathStyle or 1
+		local style = vis.PlayerPathStyle or 1
+		local width = vis.Thickness.PlayerPath or 5
 
-		-- Draw the path line with selected style
-		if currentOrigin then
-			local lastWorld = currentOrigin
-			local last = client.WorldToScreen(currentOrigin)
-			if last then
-				for i = 1, #playerPath do
-					local curWorld = playerPath[i]
-					local current = curWorld and client.WorldToScreen(curWorld)
-					if curWorld and lastWorld and current and last then
-						local dx = curWorld.x - lastWorld.x
-						local dy = curWorld.y - lastWorld.y
-						local dz = curWorld.z - lastWorld.z
-						local distSq = (dx * dx) + (dy * dy) + (dz * dz)
-						if distSq <= PLAYER_PATH_GAP_SQ then
-							drawStyledLine(texture, last, current, vis.Thickness.PlayerPath, pathStyle)
+		if style == 1 then
+			-- Pavement Style
+			local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
+			for i = 1, #playerPath - 1 do
+				local startPos = playerPath[i]
+				local endPos = playerPath[i + 1]
+				if startPos and endPos then
+					local leftBase, rightBase = drawPavement(startPos, endPos, width)
+					if leftBase and rightBase then
+						local screenLeftBase = client.WorldToScreen(leftBase)
+						local screenRightBase = client.WorldToScreen(rightBase)
+						if screenLeftBase and screenRightBase then
+							if lastLeftBaseScreen and lastRightBaseScreen then
+								draw.Line(
+									lastLeftBaseScreen[1],
+									lastLeftBaseScreen[2],
+									screenLeftBase[1],
+									screenLeftBase[2]
+								)
+								draw.Line(
+									lastRightBaseScreen[1],
+									lastRightBaseScreen[2],
+									screenRightBase[1],
+									screenRightBase[2]
+								)
+							end
+							lastLeftBaseScreen = screenLeftBase
+							lastRightBaseScreen = screenRightBase
 						end
 					end
-					lastWorld = curWorld
-					last = current
 				end
-			else
-				drawPlayerPath(texture, playerPath, vis.Thickness.PlayerPath)
 			end
-		else
-			drawPlayerPath(texture, playerPath, vis.Thickness.PlayerPath)
-		end
-
-		-- Draw prediction points with gradient colors
-		for i = 1, #playerPath, PREDICTION_POINT_INTERVAL do
-			local pointWorld = playerPath[i]
-			local pointScreen = pointWorld and client.WorldToScreen(pointWorld)
-			if pointScreen then
-				-- Color gradient from start (green) to end (red)
-				local progress = i / #playerPath
-				local hue = progress * 120 -- 0 = red, 120 = green
-				local pr, pg, pb = hsvToRgb(120 - hue, 0.8, 1)
-				draw.Color(math.floor(pr * 255), math.floor(pg * 255), math.floor(pb * 255), a)
-				drawCircle(pointScreen[1], pointScreen[2], PREDICTION_POINT_SIZE)
+			-- Draw final line segment
+			if lastLeftBaseScreen and lastRightBaseScreen and #playerPath > 0 then
+				local finalPos = playerPath[#playerPath]
+				local screenFinalPos = client.WorldToScreen(finalPos)
+				if screenFinalPos then
+					draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
+					draw.Line(lastRightBaseScreen[1], lastRightBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
+				end
 			end
-		end
-
-		-- Always draw the final prediction point (larger, different color)
-		local finalPoint = playerPath[#playerPath]
-		local finalScreen = finalPoint and client.WorldToScreen(finalPoint)
-		if finalScreen then
-			draw.Color(255, 100, 100, a) -- Red for final point
-			drawCircle(finalScreen[1], finalScreen[2], PREDICTION_POINT_SIZE * 1.5)
+		elseif style == 2 then
+			-- ArrowPath Style
+			local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
+			for i = 2, #playerPath - 1 do
+				local startPos = playerPath[i]
+				local endPos = playerPath[i + 1]
+				if startPos and endPos then
+					local leftBase, rightBase = arrowPathArrow2(startPos, endPos, width)
+					if leftBase and rightBase then
+						local screenLeftBase = client.WorldToScreen(leftBase)
+						local screenRightBase = client.WorldToScreen(rightBase)
+						if screenLeftBase and screenRightBase then
+							if lastLeftBaseScreen and lastRightBaseScreen then
+								draw.Line(
+									lastLeftBaseScreen[1],
+									lastLeftBaseScreen[2],
+									screenLeftBase[1],
+									screenLeftBase[2]
+								)
+								draw.Line(
+									lastRightBaseScreen[1],
+									lastRightBaseScreen[2],
+									screenRightBase[1],
+									screenRightBase[2]
+								)
+							end
+							lastLeftBaseScreen = screenLeftBase
+							lastRightBaseScreen = screenRightBase
+						end
+					end
+				end
+			end
+		elseif style == 3 then
+			-- Arrows Style
+			for i = 1, #playerPath - 1 do
+				local startPos = playerPath[i]
+				local endPos = playerPath[i + 1]
+				if startPos and endPos then
+					arrowPathArrow(startPos, endPos, width)
+				end
+			end
+		elseif style == 4 then
+			-- L Line Style
+			for i = 1, #playerPath - 1 do
+				local pos1 = playerPath[i]
+				local pos2 = playerPath[i + 1]
+				if pos1 and pos2 then
+					L_line(pos1, pos2, width)
+				end
+			end
+		elseif style == 5 then
+			-- Dashed Line Style
+			for i = 1, #playerPath - 1 do
+				local pos1 = playerPath[i]
+				local pos2 = playerPath[i + 1]
+				local screenPos1 = client.WorldToScreen(pos1)
+				local screenPos2 = client.WorldToScreen(pos2)
+				if screenPos1 and screenPos2 and i % 2 == 1 then
+					draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
+				end
+			end
+		elseif style == 6 then
+			-- Simple Line Style
+			for i = 1, #playerPath - 1 do
+				local pos1 = playerPath[i]
+				local pos2 = playerPath[i + 1]
+				drawSimpleLine(pos1, pos2)
+			end
 		end
 	end
 
@@ -975,7 +987,7 @@ function Visuals.draw(state)
 		)
 	end
 
-	-- Draw projectile path with enhanced visualization
+	-- Draw projectile path with simple line style
 	if vis.DrawProjectilePath and projPath and #projPath > 0 then
 		local startR, startG, startB, startA = getColor(vis, "ProjectilePathStart", 60)
 		local endR, endG, endB, endA = getColor(vis, "ProjectilePathEnd", 60)
@@ -992,26 +1004,6 @@ function Visuals.draw(state)
 			endA,
 		}
 		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath, startColor, endColor, alphaMul)
-
-		-- Draw projectile path points with different interval
-		local projPointInterval = math.max(2, math.floor(#projPath / 20)) -- Show ~20 points max
-		for i = 1, #projPath, projPointInterval do
-			local pointWorld = projPath[i]
-			local pointScreen = pointWorld and client.WorldToScreen(pointWorld)
-			if pointScreen then
-				-- Gradient from cyan (start) to yellow (end)
-				local progress = i / #projPath
-				local hue = 180 - progress * 60 -- 180 = cyan, 120 = yellow
-				local pr, pg, pb = hsvToRgb(hue, 1.0, 1)
-				draw.Color(
-					math.floor(pr * 255),
-					math.floor(pg * 255),
-					math.floor(pb * 255),
-					math.floor(startA * alphaMul)
-				)
-				drawCircle(pointScreen[1], pointScreen[2], PREDICTION_POINT_SIZE * 0.75)
-			end
-		end
 	end
 
 	local debugDuration = (vis.ShowMultipointDebug and (vis.MultipointDebugDuration or 0)) or 0
@@ -1060,8 +1052,6 @@ function Visuals.draw(state)
 	if vis.SelfPrediction and localPlayer then
 		local isAlive = localPlayer.IsAlive and localPlayer:IsAlive()
 		if isAlive then
-			local pathStyle = vis.PlayerPathStyle or 1
-
 			local success, err = pcall(function()
 				local playerCtx = PredictionContext.createPlayerContext(localPlayer, 1.0)
 				local simCtx = PredictionContext.createSimulationContext()
@@ -1074,14 +1064,67 @@ function Visuals.draw(state)
 						a = math.floor(a * alphaMul)
 						draw.Color(r, g, b, a)
 
-						local last = nil
-						for i = 1, #selfPath do
-							local curWorld = selfPath[i]
-							local current = curWorld and client.WorldToScreen(curWorld)
-							if current and last then
-								drawStyledLine(texture, last, current, vis.Thickness.SelfPrediction or 3, pathStyle)
+						local style = vis.PlayerPathStyle or 1
+						local width = vis.Thickness.SelfPrediction or 3
+
+						-- Use same style logic as player path
+						if style == 1 then
+							-- Pavement Style
+							local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
+							for i = 1, #selfPath - 1 do
+								local startPos = selfPath[i]
+								local endPos = selfPath[i + 1]
+								if startPos and endPos then
+									local leftBase, rightBase = drawPavement(startPos, endPos, width)
+									if leftBase and rightBase then
+										local screenLeftBase = client.WorldToScreen(leftBase)
+										local screenRightBase = client.WorldToScreen(rightBase)
+										if screenLeftBase and screenRightBase then
+											if lastLeftBaseScreen and lastRightBaseScreen then
+												draw.Line(
+													lastLeftBaseScreen[1],
+													lastLeftBaseScreen[2],
+													screenLeftBase[1],
+													screenLeftBase[2]
+												)
+												draw.Line(
+													lastRightBaseScreen[1],
+													lastRightBaseScreen[2],
+													screenRightBase[1],
+													screenRightBase[2]
+												)
+											end
+											lastLeftBaseScreen = screenLeftBase
+											lastRightBaseScreen = screenRightBase
+										end
+									end
+								end
 							end
-							last = current
+						elseif style == 3 then
+							-- Arrows Style
+							for i = 1, #selfPath - 1 do
+								local startPos = selfPath[i]
+								local endPos = selfPath[i + 1]
+								if startPos and endPos then
+									arrowPathArrow(startPos, endPos, width)
+								end
+							end
+						elseif style == 4 then
+							-- L Line Style
+							for i = 1, #selfPath - 1 do
+								local pos1 = selfPath[i]
+								local pos2 = selfPath[i + 1]
+								if pos1 and pos2 then
+									L_line(pos1, pos2, width)
+								end
+							end
+						else
+							-- Simple Line Style (default)
+							for i = 1, #selfPath - 1 do
+								local pos1 = selfPath[i]
+								local pos2 = selfPath[i + 1]
+								drawSimpleLine(pos1, pos2)
+							end
 						end
 					end
 				end
