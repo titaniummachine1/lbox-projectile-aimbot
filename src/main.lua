@@ -523,13 +523,20 @@ local function onCreateMove(cmd)
 	-- Auto flip viewmodels will be handled after we have target + projectile info
 
 	local charge = info.m_bCharges and weapon:GetCurrentCharge() or 0.0
-	local speed = info:GetVelocity(charge):Length()
+	-- CRITICAL: Use Length2D for horizontal speed - ballistic calculations need horizontal component only
+	-- The Z component of velocity is initial upward velocity, not part of horizontal travel speed
+	local speed = info:GetVelocity(charge):Length2D()
 	local _, sv_gravity = client.GetConVar("sv_gravity")
 	local gravityScale = 0
 	if info.HasGravity and info:HasGravity() then
 		gravityScale = info:GetGravity(charge) or 0
 	end
-	local gravity = (sv_gravity or 0) * gravityScale
+	-- CRITICAL: Gravity for ballistic solver must match TF2's actual drop
+	-- NEW_ARC uses drop = g*t^2 with g=400 for grenades
+	-- Our solver uses standard physics: drop = 0.5*g*t^2
+	-- To get same drop: 0.5*g_solver = g_tf2, so g_solver = 2*g_tf2 = 2*400 = 800
+	-- Current: sv_gravity(800) * gravityScale(0.25) = 200, need *4 to get 800
+	local gravity = (sv_gravity or 0) * gravityScale * 4
 	local weaponID = weapon:GetWeaponID()
 
 	-- Projectile hull for traces

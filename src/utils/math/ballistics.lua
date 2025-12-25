@@ -91,7 +91,7 @@ function Ballistics.estimateTravelTime(shootPos, targetPos, speed)
 	return distance / speed
 end
 
----Gets ballistic flight time
+---Gets ballistic flight time using correct formula: time = horizontal_dist / (cos(pitch) * speed)
 function Ballistics.getBallisticFlightTime(p0, p1, speed, gravity)
 	local diff = p1 - p0
 	local dx = math.sqrt(diff.x ^ 2 + diff.y ^ 2)
@@ -101,20 +101,27 @@ function Ballistics.getBallisticFlightTime(p0, p1, speed, gravity)
 	if dx < 1e-8 then
 		return nil
 	end
+	-- No gravity case: simple distance/speed
 	if math.abs(g) < 1e-8 then
 		return diff:Length() / speed
 	end
 
+	-- Solve for pitch angle first
 	local discriminant = speed2 * speed2 - g * (g * dx * dx + 2 * dy * speed2)
 	if discriminant < 0 then
 		return nil
 	end
 
 	local sqrt_discriminant = math.sqrt(discriminant)
-	local angle = math.atan((speed2 - sqrt_discriminant) / (g * dx))
+	local pitch_angle = math.atan((speed2 - sqrt_discriminant) / (g * dx))
 
-	local vz = speed * math.sin(angle)
-	local flight_time = (vz + math.sqrt(vz * vz + 2 * g * dy)) / g
+	-- Correct formula: time = horizontal_distance / horizontal_velocity
+	-- horizontal_velocity = cos(pitch) * speed
+	local cos_pitch = math.cos(pitch_angle)
+	if math.abs(cos_pitch) < 1e-8 then
+		return nil
+	end
+	local flight_time = dx / (cos_pitch * speed)
 
 	return flight_time
 end
