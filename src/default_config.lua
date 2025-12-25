@@ -41,13 +41,11 @@ local DefaultConfig = {
 		MultipointDebugDuration = 1.0,
 		DrawQuads = false,
 		SelfPrediction = false,
-		SelfPredictionDuration = 2.0,
 
 		-- Path style options (1=Pavement, 2=ArrowPath, 3=Arrows, 4=L Line, 5=Dashed, 6=Line)
 		PathStyles = { "Pavement", "ArrowPath", "Arrows", "L Line", "Dashed", "Line" },
 		PlayerPathStyle = 1, -- Pavement
 		ProjectilePathStyle = 6, -- Line
-		SelfPredictionPathStyle = 6, -- Line
 
 		-- Colors (HSV hue 0-360, or 360+ for white)
 		Colors = {

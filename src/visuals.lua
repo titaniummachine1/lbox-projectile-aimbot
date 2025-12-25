@@ -92,9 +92,14 @@ local function drawLine(texture, p1, p2, thickness)
 	draw.TexturedPolygon(tex, verts, false)
 end
 
--- Draw a filled circle for prediction points
+-- Draw a filled circle for prediction points using TexturedPolygon
 local function drawCircle(x, y, radius)
 	if not x or not y or radius <= 0 then
+		return
+	end
+
+	local tex = getWhiteTexture()
+	if not tex then
 		return
 	end
 
@@ -106,17 +111,22 @@ local function drawCircle(x, y, radius)
 		local angle = (i / segments) * math.pi * 2
 		local vx = x + math.cos(angle) * radius
 		local vy = y + math.sin(angle) * radius
-		table.insert(verts, { vx, vy })
+		table.insert(verts, { vx, vy, 0, 0 })
 	end
 
 	if #verts >= 3 then
-		draw.FilledPolygon(verts)
+		draw.TexturedPolygon(tex, verts, false)
 	end
 end
 
 -- Draw arrow at point
 local function drawArrow(texture, p1, p2, thickness, arrowSize)
 	if not (p1 and p2) then
+		return
+	end
+
+	local tex = texture or getWhiteTexture()
+	if not tex then
 		return
 	end
 
@@ -147,12 +157,12 @@ local function drawArrow(texture, p1, p2, thickness, arrowSize)
 	local perpY = dx * arrowWidth
 
 	local verts = {
-		{ tipX, tipY },
-		{ baseX + perpX, baseY + perpY },
-		{ baseX - perpX, baseY - perpY },
+		{ tipX, tipY, 0, 0 },
+		{ baseX + perpX, baseY + perpY, 0, 0 },
+		{ baseX - perpX, baseY - perpY, 0, 0 },
 	}
 
-	draw.FilledPolygon(verts)
+	draw.TexturedPolygon(tex, verts, false)
 end
 
 -- Draw dashed line
@@ -1046,19 +1056,18 @@ function Visuals.draw(state)
 		drawImpactDot(texture, impactPos, vis.Thickness.ProjectilePath * 2)
 	end
 
-	-- Draw self-prediction (local player movement prediction for debugging)
+	-- Draw self-prediction (local player movement prediction - uses same style as player path)
 	if vis.SelfPrediction and localPlayer then
 		local isAlive = localPlayer.IsAlive and localPlayer:IsAlive()
 		if isAlive then
-			local predictDuration = vis.SelfPredictionDuration or 2.0
-			local selfPathStyle = vis.SelfPredictionPathStyle or 6
+			local pathStyle = vis.PlayerPathStyle or 1
 
 			local success, err = pcall(function()
 				local playerCtx = PredictionContext.createPlayerContext(localPlayer, 1.0)
 				local simCtx = PredictionContext.createSimulationContext()
 
 				if playerCtx and simCtx then
-					local selfPath = PlayerTick.simulatePath(playerCtx, simCtx, predictDuration)
+					local selfPath = PlayerTick.simulatePath(playerCtx, simCtx, 2.0)
 
 					if selfPath and #selfPath > 1 then
 						local r, g, b, a = getColor(vis, "SelfPrediction", 300)
@@ -1070,7 +1079,7 @@ function Visuals.draw(state)
 							local curWorld = selfPath[i]
 							local current = curWorld and client.WorldToScreen(curWorld)
 							if current and last then
-								drawStyledLine(texture, last, current, vis.Thickness.SelfPrediction or 3, selfPathStyle)
+								drawStyledLine(texture, last, current, vis.Thickness.SelfPrediction or 3, pathStyle)
 							end
 							last = current
 						end

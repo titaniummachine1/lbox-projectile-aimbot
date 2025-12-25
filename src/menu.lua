@@ -163,14 +163,8 @@ local function drawMenu()
 		end
 
 		vis.SelfPrediction = TimMenu.Checkbox("Self Prediction", vis.SelfPrediction or false)
-		TimMenu.Tooltip("Visualize local player movement prediction (debug)")
+		TimMenu.Tooltip("Visualize local player movement prediction (uses Player Path style)")
 		TimMenu.NextLine()
-		if vis.SelfPrediction then
-			vis.SelfPredictionDuration =
-				TimMenu.Slider("Predict Time", vis.SelfPredictionDuration or 2.0, 0.5, 5.0, 0.1)
-			TimMenu.Tooltip("How many seconds ahead to predict")
-			TimMenu.NextLine()
-		end
 		TimMenu.EndSector()
 
 		TimMenu.BeginSector("Path Styles")
@@ -181,11 +175,6 @@ local function drawMenu()
 		end
 		if vis.DrawProjectilePath then
 			vis.ProjectilePathStyle = TimMenu.Dropdown("Projectile Path", vis.ProjectilePathStyle or 6, vis.PathStyles)
-			TimMenu.NextLine()
-		end
-		if vis.SelfPrediction then
-			vis.SelfPredictionPathStyle =
-				TimMenu.Dropdown("Self Prediction", vis.SelfPredictionPathStyle or 6, vis.PathStyles)
 			TimMenu.NextLine()
 		end
 		TimMenu.EndSector()
