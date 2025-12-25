@@ -862,16 +862,17 @@ function Visuals.draw(state)
 		local r, g, b, a = getColor(vis, "PlayerPath", 180)
 		a = math.floor(a * alphaMul)
 
-		local rawStyle = vis.PlayerPathStyle
-		local style = rawStyle or 1
-		-- Validate style is in range 1-6
-		if type(style) ~= "number" or style < 1 or style > 6 then
-			style = 6 -- Default to simple line
+		local rawStyle = vis.PlayerPathStyle or 0
+		-- Dropdown is 0-indexed (0-5), convert to 1-indexed (1-6) for style checks
+		local style = rawStyle + 1
+		-- Clamp to valid range
+		if style < 1 then
+			style = 1
+		end
+		if style > 6 then
+			style = 6
 		end
 		local width = vis.Thickness.PlayerPath or 5
-
-		-- DEBUG: Print style value (remove after testing)
-		printc(255, 255, 0, 255, "[DEBUG] PlayerPathStyle raw=" .. tostring(rawStyle) .. " final=" .. tostring(style))
 
 		-- Skip every N points to reduce draw calls (performance)
 		local step = math.max(1, math.floor(#playerPath / 60))
@@ -1107,7 +1108,14 @@ function Visuals.draw(state)
 				local r, g, b, a = getColor(vis, "SelfPrediction", 300)
 				a = math.floor(a * alphaMul)
 
-				local style = vis.PlayerPathStyle or 1
+				local rawStyle = vis.PlayerPathStyle or 0
+				local style = rawStyle + 1
+				if style < 1 then
+					style = 1
+				end
+				if style > 6 then
+					style = 6
+				end
 				local width = vis.Thickness.SelfPrediction or 3
 				local step = math.max(1, math.floor(#selfPath / 30))
 
