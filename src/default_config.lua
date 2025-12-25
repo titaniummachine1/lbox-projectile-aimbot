@@ -38,6 +38,7 @@ local DefaultConfig = {
 		ShowMultipointDebug = false,
 		MultipointDebugDuration = 1.0,
 		DrawQuads = false,
+
 		SelfPrediction = false,
 
 		-- Path style options (dropdown index -2 = style: 3=Pavement, 4=ArrowPath, 5=Arrows, 6=L Line, 7=Dashed, 8=Line)

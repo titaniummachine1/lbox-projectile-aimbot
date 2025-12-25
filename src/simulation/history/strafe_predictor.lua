@@ -44,10 +44,13 @@ end
 
 -- Cleans up stale history entries (players no longer in game)
 -- Call this once per tick to prevent memory leaks
-function StrafePredictor.cleanupStalePlayers()
+-- Pass FastPlayers module to avoid redundant entity scans
+---@param fastPlayers table? Optional FastPlayers module with GetAll()
+function StrafePredictor.cleanupStalePlayers(fastPlayers)
 	local validIndices = {}
-	for _, player in pairs(entities.FindByClass("CTFPlayer")) do
-		if player then
+	local players = fastPlayers and fastPlayers.GetAll() or entities.FindByClass("CTFPlayer")
+	for _, player in pairs(players) do
+		if player and player.GetIndex then
 			validIndices[player:GetIndex()] = true
 		end
 	end

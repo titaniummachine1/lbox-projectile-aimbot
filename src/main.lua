@@ -15,6 +15,7 @@ local WishdirTracker = require("simulation.history.wishdir_tracker")
 local TickProfiler = require("tick_profiler")
 local PlayerTracker = require("player_tracker")
 local ViewmodelManager = require("targeting.viewmodel_manager")
+local FastPlayers = require("utils.fast_players")
 
 -- Local constants / utilities -----
 local DEFAULT_MAX_DISTANCE = 3000
@@ -425,9 +426,14 @@ local function onCreateMove(cmd)
 	-- Reset auto-flip decision for this tick
 	autoFlipDecided = false
 
+	-- Update FastPlayers cache ONCE at start of tick - all player lookups use this
+	TickProfiler.BeginSection("CM:FastPlayers")
+	FastPlayers.Update()
+	TickProfiler.EndSection("CM:FastPlayers")
+
 	-- Update player list (detect disconnects/joins) and clean stale data
 	PlayerTracker.UpdatePlayerList()
-	StrafePredictor.cleanupStalePlayers()
+	StrafePredictor.cleanupStalePlayers(FastPlayers)
 
 	-- NOTE: Strafe predictor updates moved to after target selection
 	-- Only update for top 2N tracked players to avoid crashes with large groups
@@ -1015,14 +1021,14 @@ local function onCreateMove(cmd)
 	WishdirTracker.updateTop(plocal, historyPlayers, trackedCount * 2)
 	TickProfiler.EndSection("CM:WishdirUpdate")
 
-	-- Clear history for players not in top 2N
+	-- Clear history for players not in top 2N (use cached FastPlayers list)
 	TickProfiler.BeginSection("CM:HistoryCleanup")
-	for _, player in pairs(entities.FindByClass("CTFPlayer")) do
-		if player and player:IsValid() then
-			local idx = player:GetIndex()
-			if not keepHistory[idx] then
-				StrafePredictor.clearHistory(idx)
-			end
+	local allPlayers = FastPlayers.GetAll()
+	for i = 1, #allPlayers do
+		local player = allPlayers[i]
+		local idx = player:GetIndex()
+		if not keepHistory[idx] then
+			StrafePredictor.clearHistory(idx)
 		end
 	end
 	TickProfiler.EndSection("CM:HistoryCleanup")

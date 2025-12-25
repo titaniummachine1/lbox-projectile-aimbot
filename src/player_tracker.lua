@@ -164,12 +164,12 @@ function PlayerTracker.UpdatePlayerList()
 	end
 	lastUpdateTick = currentTick
 
-	-- Build set of current player indices
+	-- Build set of current player indices from FastPlayers cache (already validated)
 	local currentIndices = {}
-	for _, entity in pairs(entities.FindByClass("CTFPlayer")) do
-		if entity and entity:IsValid() then
-			currentIndices[entity:GetIndex()] = true
-		end
+	local FastPlayers = require("utils.fast_players")
+	local players = FastPlayers.GetAll()
+	for i = 1, #players do
+		currentIndices[players[i]:GetIndex()] = true
 	end
 
 	-- Remove data for players who left
