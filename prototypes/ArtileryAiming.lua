@@ -1748,7 +1748,7 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 
 		-- Calculate yaw to target position
 		if bombardAim.targetDistance > 0 then
-			bombardAim.targetYaw = math.deg(math.atan2(bombardAim.targetPosY, bombardAim.targetPosX))
+			bombardAim.targetYaw = math.deg(math.atan(bombardAim.targetPosY, bombardAim.targetPosX))
 		end
 	end
 
