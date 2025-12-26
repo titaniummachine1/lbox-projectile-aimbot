@@ -78,6 +78,8 @@ local projCamState = {
 	lastKeyState = false,
 	storedImpactPos = nil,
 	storedImpactPlane = nil,
+	storedFlagOffset = Vector3(0, 0, 0),
+	storedPolygonTexture = nil,
 }
 
 -------------------------------
@@ -559,6 +561,18 @@ local function projectToCamera(worldPos, camOrigin, camAngles, fov, winX, winY, 
 	return { pixelX, pixelY }
 end
 
+-- Draw an outlined line for better visibility.
+local function drawOutlinedLine(from, to)
+	setColor(config.outline.r, config.outline.g, config.outline.b, config.outline.a)
+	if math.abs(from[1] - to[1]) > math.abs(from[2] - to[2]) then
+		drawLine(math.floor(from[1]), math.floor(from[2] - 1), math.floor(to[1]), math.floor(to[2] - 1))
+		drawLine(math.floor(from[1]), math.floor(from[2] + 1), math.floor(to[1]), math.floor(to[2] + 1))
+	else
+		drawLine(math.floor(from[1] - 1), math.floor(from[2]), math.floor(to[1] - 1), math.floor(to[2]))
+		drawLine(math.floor(from[1] + 1), math.floor(from[2]), math.floor(to[1] + 1), math.floor(to[2]))
+	end
+end
+
 local function drawProjCamTrajectory()
 	local positions = projCamState.storedPositions
 	if #positions < 2 then
@@ -573,18 +587,16 @@ local function drawProjCamTrajectory()
 
 	local lastScreen = nil
 	for i = #positions, 1, -1 do
-		local screenPos = projectToCamera(positions[i], camOrigin, camAngles, fov, winX, winY, winW, winH)
+		local worldPos = positions[i]
+		local screenPos = projectToCamera(worldPos, camOrigin, camAngles, fov, winX, winY, winW, winH)
+		local flagScreenPos =
+			projectToCamera(worldPos + projCamState.storedFlagOffset, camOrigin, camAngles, fov, winX, winY, winW, winH)
+
 		if lastScreen and screenPos then
-			if
-				screenPos[1] >= winX
-				and screenPos[1] <= winX + winW
-				and screenPos[2] >= winY
-				and screenPos[2] <= winY + winH
-				and lastScreen[1] >= winX
-				and lastScreen[1] <= winX + winW
-				and lastScreen[2] >= winY
-				and lastScreen[2] <= winY + winH
-			then
+			if config.line.enabled then
+				if config.outline.line_and_flags then
+					drawOutlinedLine(lastScreen, screenPos)
+				end
 				setColor(config.line.r, config.line.g, config.line.b, config.line.a)
 				drawLine(
 					math.floor(lastScreen[1]),
@@ -593,23 +605,102 @@ local function drawProjCamTrajectory()
 					math.floor(screenPos[2])
 				)
 			end
+			if config.flags.enabled and flagScreenPos then
+				if config.outline.line_and_flags then
+					drawOutlinedLine(flagScreenPos, screenPos)
+				end
+				setColor(config.flags.r, config.flags.g, config.flags.b, config.flags.a)
+				drawLine(
+					math.floor(flagScreenPos[1]),
+					math.floor(flagScreenPos[2]),
+					math.floor(screenPos[1]),
+					math.floor(screenPos[2])
+				)
+			end
 		end
 		lastScreen = screenPos
 	end
 
-	if projCamState.storedImpactPos then
-		local impactScreen =
-			projectToCamera(projCamState.storedImpactPos, camOrigin, camAngles, fov, winX, winY, winW, winH)
-		if
-			impactScreen
-			and impactScreen[1] >= winX
-			and impactScreen[1] <= winX + winW
-			and impactScreen[2] >= winY
-			and impactScreen[2] <= winY + winH
-		then
-			setColor(config.polygon.r or 255, config.polygon.g or 100, config.polygon.b or 100, 255)
-			local cx, cy = math.floor(impactScreen[1]), math.floor(impactScreen[2])
-			draw.FilledRect(cx - 4, cy - 4, cx + 4, cy + 4)
+	if projCamState.storedImpactPos and projCamState.storedImpactPlane and config.polygon.enabled then
+		local origin = projCamState.storedImpactPos
+		local plane = projCamState.storedImpactPlane
+		local polygonPositions = {}
+		local radius = config.polygon.size
+		local segments = config.polygon.segments
+		local segAngleOffset = math.pi / segments
+		local segAngle = (math.pi / segments) * 2
+
+		if math.abs(plane.z) >= 0.99 then
+			for i = 1, segments do
+				local ang = i * segAngle + segAngleOffset
+				local pos = projectToCamera(
+					origin + Vector3(radius * math.cos(ang), radius * math.sin(ang), 0),
+					camOrigin,
+					camAngles,
+					fov,
+					winX,
+					winY,
+					winW,
+					winH
+				)
+				if not pos then
+					return
+				end
+				polygonPositions[i] = pos
+			end
+		else
+			local right = Vector3(-plane.y, plane.x, 0)
+			local up = Vector3(plane.z * right.y, -plane.z * right.x, (plane.y * right.x) - (plane.x * right.y))
+			radius = radius / math.cos(math.asin(plane.z))
+			for i = 1, segments do
+				local ang = i * segAngle + segAngleOffset
+				local pos = projectToCamera(
+					origin + (right * (radius * math.cos(ang))) + (up * (radius * math.sin(ang))),
+					camOrigin,
+					camAngles,
+					fov,
+					winX,
+					winY,
+					winW,
+					winH
+				)
+				if not pos then
+					return
+				end
+				polygonPositions[i] = pos
+			end
+		end
+
+		if config.outline.polygon then
+			setColor(config.outline.r, config.outline.g, config.outline.b, config.outline.a)
+			local last = polygonPositions[#polygonPositions]
+			for i = 1, #polygonPositions do
+				local cur = polygonPositions[i]
+				drawLine(math.floor(last[1]), math.floor(last[2]), math.floor(cur[1]), math.floor(cur[2]))
+				last = cur
+			end
+		end
+
+		setColor(config.polygon.r, config.polygon.g, config.polygon.b, 255)
+		local pts, ptsReversed = {}, {}
+		local sum = 0
+		for i, pos in ipairs(polygonPositions) do
+			local pt = { pos[1], pos[2], 0, 0 }
+			pts[i] = pt
+			ptsReversed[#polygonPositions - i + 1] = pt
+			local nextPos = polygonPositions[(i % #polygonPositions) + 1]
+			sum = sum + cross(pos, nextPos, polygonPositions[1])
+		end
+		local polyPts = (sum < 0) and ptsReversed or pts
+		if texturedPolygon and projCamState.storedPolygonTexture then
+			texturedPolygon(projCamState.storedPolygonTexture, polyPts, true)
+		end
+
+		local last = polygonPositions[#polygonPositions]
+		for i = 1, #polygonPositions do
+			local cur = polygonPositions[i]
+			drawLine(math.floor(last[1]), math.floor(last[2]), math.floor(cur[1]), math.floor(cur[2]))
+			last = cur
 		end
 	end
 end
@@ -878,18 +969,6 @@ function TrajectoryLine:insert(pos)
 	table.insert(self.positions, pos)
 end
 
--- Draw an outlined line for better visibility.
-local function drawOutlinedLine(from, to)
-	setColor(config.outline.r, config.outline.g, config.outline.b, config.outline.a)
-	if math.abs(from[1] - to[1]) > math.abs(from[2] - to[2]) then
-		drawLine(from[1], from[2] - 1, to[1], to[2] - 1)
-		drawLine(from[1], from[2] + 1, to[1], to[2] + 1)
-	else
-		drawLine(from[1] - 1, from[2], to[1] - 1, to[2])
-		drawLine(from[1] + 1, from[2], to[1] + 1, to[2])
-	end
-end
-
 function TrajectoryLine:render()
 	local num = #self.positions
 	if num < 2 then
@@ -1117,6 +1196,7 @@ if not physicsEnv then
 end
 local trajectoryLine = TrajectoryLine:new()
 local impactPolygon = ImpactPolygon:new()
+projCamState.storedPolygonTexture = impactPolygon.texture
 
 local g_fTraceInterval = clamp(config.measure_segment_size, 0.5, 8) / 66
 local g_fFlagInterval = g_fTraceInterval * 1320
@@ -1205,6 +1285,7 @@ callbacks.Register("CreateMove", "LoadPhysicsObjects", function()
 
 		local vVelocity = (vStartAngle:Forward() * fForwardVelocity) + (vStartAngle:Up() * fUpwardVelocity)
 		trajectoryLine.flagOffset = vStartAngle:Right() * -config.flags.size
+		projCamState.storedFlagOffset = trajectoryLine.flagOffset
 		trajectoryLine:insert(vStartPosition)
 
 		projCamState.storedPositions = {}
