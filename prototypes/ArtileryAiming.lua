@@ -181,6 +181,14 @@ local function clamp(val, minVal, maxVal)
 	return val
 end
 
+-- Safe division to prevent crashes
+local function safeDivide(numerator, denominator, fallback)
+	if math.abs(denominator) < 0.0001 then
+		return fallback or 0
+	end
+	return numerator / denominator
+end
+
 -- Sticky bomb physics constants
 local STICKY_BASE_SPEED = 900
 local STICKY_MAX_SPEED = 2400
@@ -247,8 +255,8 @@ local function solvePitchForDistanceAndHeight(speed, targetDistance, heightOffse
 		end
 	end
 
-	local tan1 = (v2 - sqrt_disc) / (g * d)
-	local tan2 = (v2 + sqrt_disc) / (g * d)
+	local tan1 = safeDivide(v2 - sqrt_disc, g * d, 0)
+	local tan2 = safeDivide(v2 + sqrt_disc, g * d, 0)
 
 	-- Convert to pitch angles (negative because pitch is downward)
 	local pitch1 = -math.deg(math.atan(tan1))
@@ -276,7 +284,8 @@ local function solvePitchForDistance(speed, targetDistance, gravity, upwardVel)
 
 	-- This is a quadratic in terms of tan(θ)
 	-- Let's solve it directly using the quadratic formula
-	local discriminant = speed * speed - g * (g * d * d - 4 * d * u * speed) / (4 * d * d)
+	local denom = 4 * d * d
+	local discriminant = speed * speed - safeDivide(g * (g * d * d - 4 * d * u * speed), denom, 0)
 
 	if discriminant < 0 then
 		return nil, nil -- No solution
@@ -285,8 +294,8 @@ local function solvePitchForDistance(speed, targetDistance, gravity, upwardVel)
 	local sqrt_disc = math.sqrt(discriminant)
 
 	-- Two solutions: low arc and high arc
-	local tan1 = (speed * speed - sqrt_disc) / (g * d)
-	local tan2 = (speed * speed + sqrt_disc) / (g * d)
+	local tan1 = safeDivide(speed * speed - sqrt_disc, g * d, 0)
+	local tan2 = safeDivide(speed * speed + sqrt_disc, g * d, 0)
 
 	-- Convert to pitch angles (negative because pitch is downward)
 	local pitch1 = -math.deg(math.atan(tan1))
@@ -613,8 +622,8 @@ local function drawProjCamWindow()
 	local controls
 	if bombardAim.enabled then
 		controls = {
-			"Mouse=Move Pos SHIFT+Mouse=Height",
-			"Scroll=CamPos M1=Fire",
+			"MouseX=Rotate MouseY=Distance",
+			"SHIFT+Y=Height C=Arc Scroll=Cam",
 		}
 	else
 		controls = {
@@ -831,7 +840,9 @@ local function drawProjCamTrajectory()
 		else
 			local right = Vector3(-plane.y, plane.x, 0)
 			local up = Vector3(plane.z * right.y, -plane.z * right.x, (plane.y * right.x) - (plane.x * right.y))
-			radius = radius / math.cos(math.asin(plane.z))
+			local clampedZ = math.max(-0.98, math.min(0.98, plane.z))
+			local cosVal = math.cos(math.asin(clampedZ))
+			radius = safeDivide(radius, cosVal, radius)
 			for i = 1, segments do
 				local ang = i * segAngle + segAngleOffset
 				local pos = projectToCamera(
@@ -1709,47 +1720,23 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 
 	-- Calculate max range based on max speed with safety margin
 	local maxRangeSpeed = hasCharge and maxSpeed or baseSpeed
-	-- Dynamic max range calculation with safety factor to prevent crashes
 	local theoreticalMax = (maxRangeSpeed * maxRangeSpeed) / g
-	bombardAim.maxDistance = theoreticalMax * 0.95 -- 95% of theoretical max for safety
+	bombardAim.maxDistance = theoreticalMax * 0.95
 
-	-- Mouse movement controls target position in world space
+	-- WoT-style simple mouse control:
+	-- Mouse X = rotate aim left/right (yaw)
+	-- Mouse Y = push aim further/closer (distance)
+	-- SHIFT + Mouse Y = adjust height offset
 	local bShiftDown = input.IsButtonDown(KEY_SHIFT)
+
 	if bShiftDown then
-		-- Vertical control when holding shift
-		bombardAim.targetHeightOffset = clamp(
-			bombardAim.targetHeightOffset - mouseY * bombardAim.heightStep,
-			-2000, -- Can aim 2000 units below
-			2000 -- Can aim 2000 units above
-		)
+		-- SHIFT held: vertical control
+		bombardAim.targetHeightOffset = clamp(bombardAim.targetHeightOffset - mouseY * 2, -2000, 2000)
 	else
-		-- Position control - use TF2 sensitivity for consistent movement
-		-- Convert mouse movement to world space at current target distance
-		local worldMoveX, worldMoveY = mouseToWorldSpace(mouseX, mouseY, bombardAim.targetDistance)
-
-		-- Get player view angles to calculate movement direction
-		local viewAngles = engine.GetViewAngles()
-		local yawRad = math.rad(viewAngles.y)
-
-		-- Calculate right and forward vectors for movement
-		local rightX = math.cos(yawRad + math.pi / 2)
-		local rightY = math.sin(yawRad + math.pi / 2)
-		local forwardX = math.cos(yawRad)
-		local forwardY = math.sin(yawRad)
-
-		-- Apply world space movement in player's local space
-		bombardAim.targetPosX = bombardAim.targetPosX + (worldMoveX * rightX - worldMoveY * forwardX)
-		bombardAim.targetPosY = bombardAim.targetPosY + (worldMoveX * rightY - worldMoveY * forwardY)
-
-		-- Calculate distance and yaw from new position
+		-- Normal: mouseY controls distance, mouseX controls yaw
 		bombardAim.targetDistance =
-			math.sqrt(bombardAim.targetPosX * bombardAim.targetPosX + bombardAim.targetPosY * bombardAim.targetPosY)
-		bombardAim.targetDistance = clamp(bombardAim.targetDistance, bombardAim.minDistance, bombardAim.maxDistance)
-
-		-- Calculate yaw to target position
-		if bombardAim.targetDistance > 0 then
-			bombardAim.targetYaw = math.deg(math.atan(bombardAim.targetPosY, bombardAim.targetPosX))
-		end
+			clamp(bombardAim.targetDistance - mouseY * 3, bombardAim.minDistance, bombardAim.maxDistance)
+		bombardAim.targetYaw = bombardAim.targetYaw - mouseX * 0.15
 	end
 
 	local d = bombardAim.targetDistance
@@ -1759,65 +1746,17 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 	local bestError = 999999
 
 	if hasCharge then
-		-- Binary search for optimal charge with epsilon
-		local minCharge = 0
-		local maxCharge = 1.0
-		local iteration = 0
-		local lastMidCharge = 0
-
-		while iteration < bombardAim.maxIterations and (maxCharge - minCharge) > bombardAim.epsilon do
-			local midCharge = (minCharge + maxCharge) / 2
-
-			-- Check if we're converging (optional early exit)
-			if iteration > 0 and math.abs(midCharge - lastMidCharge) < bombardAim.epsilon then
-				break
-			end
-
-			local speed = baseSpeed + midCharge * (maxSpeed - baseSpeed)
-			local v2 = speed * speed
-
-			-- Use height-aware trajectory calculation
+		-- Simple linear sweep: try 11 charge levels, pick first that works
+		for i = 0, 10 do
+			local testCharge = i * 0.1
+			local speed = baseSpeed + testCharge * (maxSpeed - baseSpeed)
 			local pitchLow, pitchHigh = solvePitchForDistanceAndHeight(speed, d, h, g, upwardVel)
 
 			if pitchLow then
-				local pitch, actualRange, error
-				if bombardAim.useHighArc then
-					pitch = pitchHigh
-				else
-					pitch = pitchLow
-				end
-
-				-- Calculate error based on height difference at impact
-				-- For now, just use the mathematical solution
-				error = 0
-
-				if error < bestError then
-					bestError = error
-					bestCharge = midCharge
-					bestPitch = pitch
-				end
-
-				-- Narrow search range based on distance
-				if d > 0 then
-					-- For positive distance, we found a solution
-					minCharge = midCharge - 0.001
-					maxCharge = midCharge + 0.001
-				else
-					-- For zero/negative distance, use minimum charge
-					maxCharge = midCharge
-				end
-
-				lastMidCharge = midCharge
-			else
-				-- No solution, adjust charge range
-				if d > 0 then
-					minCharge = midCharge
-				else
-					maxCharge = midCharge
-				end
+				bestCharge = testCharge
+				bestPitch = bombardAim.useHighArc and pitchHigh or pitchLow
+				break
 			end
-
-			iteration = iteration + 1
 		end
 	else
 		-- No charge weapon - calculate pitch directly
@@ -1825,34 +1764,26 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 		local pitchLow, pitchHigh = solvePitchForDistanceAndHeight(speed, d, h, g, upwardVel)
 
 		if pitchLow then
-			if bombardAim.useHighArc then
-				bestPitch = pitchHigh
-			else
-				bestPitch = pitchLow
-			end
+			bestPitch = bombardAim.useHighArc and pitchHigh or pitchLow
 			bestCharge = 0
 		end
 	end
 
+	-- ALWAYS zero mouse so we fully control view (prevents jittering)
+	cmd.mousedx = 0
+	cmd.mousedy = 0
+
+	-- Use best pitch if found, otherwise keep last calculated pitch
 	if bestPitch then
 		bombardMode.chargeLevel = bestCharge
 		bombardAim.calculatedPitch = bestPitch
-
-		-- Zero mouse so we fully control view
-		cmd.mousedx = 0
-		cmd.mousedy = 0
-
-		-- Set view - allow full pitch range (-90 to +90)
-		local aimAngles = EulerAngles(bombardAim.calculatedPitch, bombardAim.targetYaw, 0)
-
-		-- Ensure pitch is within valid engine range but allow full downward aim
-		local clampedPitch = clamp(bombardAim.calculatedPitch, -90, 90)
-
-		engine.SetViewAngles(EulerAngles(clampedPitch, bombardAim.targetYaw, 0))
-		cmd.viewangles = Vector3(clampedPitch, bombardAim.targetYaw, 0)
-
 		bombardMode.useStoredCharge = hasCharge
 	end
+
+	-- Always set view angles (use last good pitch if current failed)
+	local clampedPitch = clamp(bombardAim.calculatedPitch, -90, 90)
+	engine.SetViewAngles(EulerAngles(clampedPitch, bombardAim.targetYaw, 0))
+	cmd.viewangles = Vector3(clampedPitch, bombardAim.targetYaw, 0)
 end)
 
 -------------------------------
