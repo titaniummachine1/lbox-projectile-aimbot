@@ -220,20 +220,17 @@ local function initProjCamMaterials()
 	end
 
 	if not materials or not materials.CreateTextureRenderTarget then
-		projCamState.materialsReady = false
-		return false
+		error("Materials API not available")
 	end
 
 	local texName = "projCamTexture"
 	projCamState.texture = materials.CreateTextureRenderTarget(texName, projCamConfig.width, projCamConfig.height)
 	if not projCamState.texture then
-		projCamState.materialsReady = false
-		return false
+		error("Failed to create render texture")
 	end
 
 	if not materials.Create then
-		projCamState.materialsReady = false
-		return false
+		error("Materials.Create API not available")
 	end
 
 	projCamState.material = materials.Create(
@@ -252,8 +249,7 @@ local function initProjCamMaterials()
 	)
 
 	if not projCamState.material then
-		projCamState.materialsReady = false
-		return false
+		error("Failed to create projectile camera material")
 	end
 
 	projCamState.materialsReady = true
@@ -499,18 +495,6 @@ local function updateProjCamSmoothing()
 	)
 end
 
-local function projectToCamera(worldPos, camView)
-	-- Create a ViewSetup object for the camera
-	local viewSetup = {
-		origin = camView.origin,
-		angles = camView.angles,
-		fov = camView.fov,
-	}
-
-	-- Use client.WorldToScreen with the camera view
-	return client.WorldToScreen(worldPos, viewSetup)
-end
-
 local function renderProjCamView(view)
 	if not view or #projCamState.storedPositions < 2 then
 		return
@@ -524,7 +508,6 @@ local function renderProjCamView(view)
 		return
 	end
 
-	-- Use the original view and modify it
 	local savedOrigin = view.origin
 	local savedAngles = view.angles
 	local savedFov = view.fov
@@ -533,15 +516,102 @@ local function renderProjCamView(view)
 	view.angles = projCamState.smoothedAngles
 	view.fov = projCamConfig.fov
 
-	-- Render the 3D scene to texture with proper flags
-	render.Push3DView(view, 7, projCamState.texture) -- VIEW_CLEAR_COLOR | VIEW_CLEAR_DEPTH | VIEW_CLEAR_STENCIL
+	render.Push3DView(view, E_ClearFlags.VIEW_CLEAR_COLOR | E_ClearFlags.VIEW_CLEAR_DEPTH, projCamState.texture)
 	render.ViewDrawScene(true, true, view)
 	render.PopView()
 
-	-- Restore original view
 	view.origin = savedOrigin
 	view.angles = savedAngles
 	view.fov = savedFov
+end
+
+local function projectToCamera(worldPos, camOrigin, camAngles, fov, winX, winY, winW, winH)
+	local diff = worldPos - camOrigin
+	local pitch = math.rad(camAngles.x)
+	local yaw = math.rad(camAngles.y)
+
+	local cosPitch = math.cos(pitch)
+	local sinPitch = math.sin(pitch)
+	local cosYaw = math.cos(yaw)
+	local sinYaw = math.sin(yaw)
+
+	local forward = Vector3(cosPitch * cosYaw, cosPitch * sinYaw, -sinPitch)
+	local right = Vector3(-sinYaw, cosYaw, 0)
+	local up = Vector3(sinPitch * cosYaw, sinPitch * sinYaw, cosPitch)
+
+	local dotForward = diff.x * forward.x + diff.y * forward.y + diff.z * forward.z
+	if dotForward <= 0 then
+		return nil
+	end
+
+	local dotRight = diff.x * right.x + diff.y * right.y + diff.z * right.z
+	local dotUp = diff.x * up.x + diff.y * up.y + diff.z * up.z
+
+	local tanHalfFov = math.tan(math.rad(fov * 0.5))
+	local aspect = winW / winH
+
+	local screenX = (dotRight / dotForward) / (tanHalfFov * aspect)
+	local screenY = (dotUp / dotForward) / tanHalfFov
+
+	local pixelX = winX + winW * 0.5 * (1 + screenX)
+	local pixelY = winY + winH * 0.5 * (1 - screenY)
+
+	return { pixelX, pixelY }
+end
+
+local function drawProjCamTrajectory()
+	local positions = projCamState.storedPositions
+	if #positions < 2 then
+		return
+	end
+
+	local camOrigin = projCamState.smoothedPos
+	local camAngles = projCamState.smoothedAngles
+	local fov = projCamConfig.fov
+	local winX, winY = projCamConfig.x, projCamConfig.y
+	local winW, winH = projCamConfig.width, projCamConfig.height
+
+	local lastScreen = nil
+	for i = #positions, 1, -1 do
+		local screenPos = projectToCamera(positions[i], camOrigin, camAngles, fov, winX, winY, winW, winH)
+		if lastScreen and screenPos then
+			if
+				screenPos[1] >= winX
+				and screenPos[1] <= winX + winW
+				and screenPos[2] >= winY
+				and screenPos[2] <= winY + winH
+				and lastScreen[1] >= winX
+				and lastScreen[1] <= winX + winW
+				and lastScreen[2] >= winY
+				and lastScreen[2] <= winY + winH
+			then
+				setColor(config.line.r, config.line.g, config.line.b, config.line.a)
+				drawLine(
+					math.floor(lastScreen[1]),
+					math.floor(lastScreen[2]),
+					math.floor(screenPos[1]),
+					math.floor(screenPos[2])
+				)
+			end
+		end
+		lastScreen = screenPos
+	end
+
+	if projCamState.storedImpactPos then
+		local impactScreen =
+			projectToCamera(projCamState.storedImpactPos, camOrigin, camAngles, fov, winX, winY, winW, winH)
+		if
+			impactScreen
+			and impactScreen[1] >= winX
+			and impactScreen[1] <= winX + winW
+			and impactScreen[2] >= winY
+			and impactScreen[2] <= winY + winH
+		then
+			setColor(config.polygon.r or 255, config.polygon.g or 100, config.polygon.b or 100, 255)
+			local cx, cy = math.floor(impactScreen[1]), math.floor(impactScreen[2])
+			draw.FilledRect(cx - 4, cy - 4, cx + 4, cy + 4)
+		end
+	end
 end
 
 local function drawProjCamTexture()
@@ -557,7 +627,6 @@ local function drawProjCamTexture()
 		return
 	end
 
-	-- Draw the 3D scene texture
 	render.DrawScreenSpaceRectangle(
 		projCamState.material,
 		projCamConfig.x,
@@ -572,154 +641,7 @@ local function drawProjCamTexture()
 		projCamConfig.height
 	)
 
-	-- Overlay trajectory and polygon as 2D elements
-	local winX, winY = projCamConfig.x, projCamConfig.y
-	local winW, winH = projCamConfig.width, projCamConfig.height
-
-	-- Create proper camera ViewSetup with normalized coordinates
-	local cameraViewSetup = {
-		origin = projCamState.smoothedPos,
-		angles = projCamState.smoothedAngles,
-		fov = projCamConfig.fov,
-		x = 0,
-		y = 0,
-		width = projCamConfig.width,
-		height = projCamConfig.height,
-	}
-
-	-- Draw trajectory lines from camera perspective
-	local positions = projCamState.storedPositions
-	local lastScreen = nil
-
-	for i = #positions, 1, -1 do
-		local screenPos = client.WorldToScreen(positions[i], cameraViewSetup)
-		if screenPos and lastScreen then
-			-- Check if within camera view bounds
-			if
-				screenPos[1] >= 0
-				and screenPos[1] <= projCamConfig.width
-				and screenPos[2] >= 0
-				and screenPos[2] <= projCamConfig.height
-				and lastScreen[1] >= 0
-				and lastScreen[1] <= projCamConfig.width
-				and lastScreen[2] >= 0
-				and lastScreen[2] <= projCamConfig.height
-			then
-				setColor(config.line.r, config.line.g, config.line.b, config.line.a)
-				drawLine(
-					math.floor(winX + lastScreen[1]),
-					math.floor(winY + lastScreen[2]),
-					math.floor(winX + screenPos[1]),
-					math.floor(winY + screenPos[2])
-				)
-			end
-		end
-		lastScreen = screenPos
-	end
-
-	-- Draw impact position from camera perspective
-	if projCamState.storedImpactPos then
-		local impactScreen = client.WorldToScreen(projCamState.storedImpactPos, cameraViewSetup)
-		if
-			impactScreen
-			and impactScreen[1] >= 0
-			and impactScreen[1] <= projCamConfig.width
-			and impactScreen[2] >= 0
-			and impactScreen[2] <= projCamConfig.height
-		then
-			setColor(255, 100, 100, 255)
-			local cx = winX + impactScreen[1]
-			local cy = winY + impactScreen[2]
-			draw.FilledRect(cx - 3, cy - 3, cx + 3, cy + 3)
-			draw.OutlinedRect(cx - 4, cy - 4, cx + 4, cy + 4)
-		end
-	end
-
-	-- Draw impact polygon
-	if projCamState.storedImpactPos and projCamState.storedImpactPlane and config.polygon.enabled then
-		local plane = projCamState.storedImpactPlane
-		local origin = projCamState.storedImpactPos
-		local radius = config.polygon.size
-		local segments = config.polygon.segments
-
-		-- Generate polygon world positions
-		local worldPositions = {}
-		local angleStep = (2 * math.pi) / segments
-		local segAngleOffset = math.pi / segments
-
-		if math.abs(plane.z) >= 0.99 then
-			-- Horizontal surface
-			for i = 1, segments do
-				local ang = i * angleStep + segAngleOffset
-				worldPositions[i] = origin + Vector3(radius * math.cos(ang), radius * math.sin(ang), 0)
-			end
-		else
-			-- Angled surface
-			local right = Vector3(-plane.y, plane.x, 0)
-			local up = Vector3(plane.z * right.y, -plane.z * right.x, (plane.y * right.x) - (plane.x * right.y))
-			radius = radius / math.cos(math.asin(plane.z))
-			for i = 1, segments do
-				local ang = i * angleStep + segAngleOffset
-				worldPositions[i] = origin + (right * (radius * math.cos(ang))) + (up * (radius * math.sin(ang)))
-			end
-		end
-
-		-- Convert to camera screen coordinates and draw
-		local screenPositions = {}
-		local validCount = 0
-
-		for i = 1, #worldPositions do
-			local screenPos = client.WorldToScreen(worldPositions[i], cameraViewSetup)
-			if
-				screenPos
-				and screenPos[1] >= 0
-				and screenPos[1] <= projCamConfig.width
-				and screenPos[2] >= 0
-				and screenPos[2] <= projCamConfig.height
-			then
-				screenPositions[i] = screenPos
-				validCount = validCount + 1
-			end
-		end
-
-		if validCount >= 3 then
-			-- Draw filled polygon from camera perspective
-			local polyPts = {}
-			for i, pos in ipairs(screenPositions) do
-				if pos then
-					polyPts[#polyPts + 1] = { winX + pos[1], winY + pos[2], 0, 0 }
-				end
-			end
-
-			if #polyPts >= 3 then
-				local whiteTexture = draw.CreateTextureRGBA(string.char(0xff, 0xff, 0xff, 255), 1, 1)
-				if whiteTexture then
-					setColor(config.polygon.r, config.polygon.g, config.polygon.b, config.polygon.a)
-					texturedPolygon(whiteTexture, polyPts, false)
-					draw.DeleteTexture(whiteTexture)
-				end
-
-				-- Draw polygon outline from camera perspective
-				if config.outline.polygon then
-					setColor(config.outline.r, config.outline.g, config.outline.b, config.outline.a)
-					local lastPos = nil
-					for i = 1, #screenPositions do
-						if screenPositions[i] then
-							if lastPos then
-								drawLine(
-									winX + lastPos[1],
-									winY + lastPos[2],
-									winX + screenPositions[i][1],
-									winY + screenPositions[i][2]
-								)
-							end
-							lastPos = screenPositions[i]
-						end
-					end
-				end
-			end
-		end
-	end
+	drawProjCamTrajectory()
 end
 
 -------------------------------
@@ -1040,30 +962,16 @@ function ImpactPolygon:draw(plane, origin)
 	if not config.polygon.enabled then
 		return
 	end
-	if not plane or not origin then
-		return
-	end
-	if not self.texture or not texturedPolygon or not worldToScreen then
-		return
-	end
-
-	-- Store world positions for camera view rendering
-	self.positions = {}
-	local screenPositions = {}
+	local positions = {}
 	local radius = config.polygon.size
-	if radius <= 0 then
-		return
-	end
-
 	if math.abs(plane.z) >= 0.99 then
 		for i = 1, self.segments do
 			local ang = i * self.segAngle + self.segAngleOffset
-			local worldPos = origin + Vector3(radius * math.cos(ang), radius * math.sin(ang), 0)
-			self.positions[i] = worldPos
-			local screenPos = worldToScreen(worldPos)
-			if screenPos then
-				screenPositions[i] = screenPos
+			local pos = worldToScreen(origin + Vector3(radius * math.cos(ang), radius * math.sin(ang), 0))
+			if not pos then
+				return
 			end
+			positions[i] = pos
 		end
 	else
 		local right = Vector3(-plane.y, plane.x, 0)
@@ -1071,43 +979,47 @@ function ImpactPolygon:draw(plane, origin)
 		radius = radius / math.cos(math.asin(plane.z))
 		for i = 1, self.segments do
 			local ang = i * self.segAngle + self.segAngleOffset
-			local worldPos = origin + (right * (radius * math.cos(ang))) + (up * (radius * math.sin(ang)))
-			self.positions[i] = worldPos
-			local screenPos = worldToScreen(worldPos)
-			if screenPos then
-				screenPositions[i] = screenPos
+			local pos = worldToScreen(origin + (right * (radius * math.cos(ang))) + (up * (radius * math.sin(ang))))
+			if not pos then
+				return
 			end
+			positions[i] = pos
 		end
 	end
 
-	if #screenPositions < 3 then
-		return
-	end
-
-	-- Draw filled polygon using TexturedPolygon
-	local polyPts = {}
-	for i, pos in ipairs(screenPositions) do
-		if pos and pos[1] and pos[2] then
-			polyPts[i] = { pos[1], pos[2], 0, 0 }
-		end
-	end
-
-	if #polyPts >= 3 then
-		setColor(config.polygon.r, config.polygon.g, config.polygon.b, 180)
-		texturedPolygon(self.texture, polyPts, false)
-	end
-
-	-- Draw outline if enabled
-	if config.outline.polygon and #screenPositions >= 3 then
+	-- Draw outline if enabled.
+	if config.outline.polygon then
 		setColor(config.outline.r, config.outline.g, config.outline.b, config.outline.a)
-		local last = screenPositions[#screenPositions]
-		for i = 1, #screenPositions do
-			local cur = screenPositions[i]
-			if last and cur then
-				drawLine(last[1], last[2], cur[1], cur[2])
-			end
+		local last = positions[#positions]
+		for i = 1, #positions do
+			local cur = positions[i]
+			drawLine(last[1], last[2], cur[1], cur[2])
 			last = cur
 		end
+	end
+
+	-- Draw filled polygon.
+	setColor(config.polygon.r, config.polygon.g, config.polygon.b, 255)
+	local pts, ptsReversed = {}, {}
+	local sum = 0
+	for i, pos in ipairs(positions) do
+		local pt = { pos[1], pos[2], 0, 0 }
+		pts[i] = pt
+		ptsReversed[#positions - i + 1] = pt
+		local nextPos = positions[(i % #positions) + 1]
+		sum = sum + cross(pos, nextPos, positions[1])
+	end
+	local polyPts = (sum < 0) and ptsReversed or pts
+	if texturedPolygon and self.texture then
+		texturedPolygon(self.texture, polyPts, true)
+	end
+
+	-- Draw final outline.
+	local last = positions[#positions]
+	for i = 1, #positions do
+		local cur = positions[i]
+		drawLine(last[1], last[2], cur[1], cur[2])
+		last = cur
 	end
 end
 
@@ -1199,13 +1111,12 @@ end
 -------------------------------
 -- GLOBALS & INITIALIZATION
 -------------------------------
-local trajectoryLine = TrajectoryLine:new()
-local impactPolygon = ImpactPolygon:new()
-
 local physicsEnv = PhysicsEnv:new()
 if not physicsEnv then
 	return -- Physics API unavailable, disable script
 end
+local trajectoryLine = TrajectoryLine:new()
+local impactPolygon = ImpactPolygon:new()
 
 local g_fTraceInterval = clamp(config.measure_segment_size, 0.5, 8) / 66
 local g_fFlagInterval = g_fTraceInterval * 1320
@@ -1385,8 +1296,6 @@ callbacks.Register("CreateMove", "LoadPhysicsObjects", function()
 		if results and results.plane then
 			projCamState.storedImpactPos = results.endpos
 			projCamState.storedImpactPlane = results.plane
-			assert(results.endpos, "main: results.endpos is nil")
-			assert(results.plane, "main: results.plane is nil")
 			impactPolygon:draw(results.plane, results.endpos)
 		else
 			projCamState.storedImpactPos = nil
@@ -1431,7 +1340,10 @@ callbacks.Register("DoPostScreenSpaceEffects", "ProjCamRender", function()
 		return
 	end
 
-	initProjCamMaterials()
+	if not initProjCamMaterials() then
+		return
+	end
+
 	renderProjCamView(projCamState.lastView)
 end)
 
