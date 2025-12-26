@@ -219,87 +219,94 @@ local function calculateRange(speed, pitchRad, gravity, upwardVel)
 end
 
 -- Direct mathematical solution for pitch angles with height offset
+-- Returns nil, nil if no valid solution exists
 local function solvePitchForDistanceAndHeight(speed, targetDistance, heightOffset, gravity, upwardVel)
+	-- Guard against invalid inputs
+	if not speed or not targetDistance or not gravity then
+		return nil, nil
+	end
+	if speed <= 0 or gravity <= 0 then
+		return nil, nil
+	end
+
 	local g = gravity
 	local d = targetDistance
-	local h = heightOffset
-	local u = upwardVel
+	local h = heightOffset or 0
+	local u = upwardVel or 0
 
-	-- For height-adjusted trajectory, we use the full ballistic equation
-	-- Horizontal: d = v*cos(θ)*t
-	-- Vertical: h = v*sin(θ)*t + 0.5*g*t² + u*t
-	-- Eliminating t gives us a quadratic in tan(θ)
+	-- Handle d == 0 case first (vertical shot)
+	if d == 0 or math.abs(d) < 1 then
+		if h < 0 then
+			return -89, -89
+		else
+			return 89, 89
+		end
+	end
 
 	local v2 = speed * speed
-	local g2 = g * g
 	local d2 = d * d
 
-	-- Calculate discriminant for the quadratic equation
-	-- (v²)² - g*(g*d² + 2*h*v² - 4*d*u*v)
+	-- Calculate discriminant
 	local discriminant = v2 * v2 - g * (g * d2 + 2 * h * v2 - 4 * d * u * speed)
 
-	if discriminant < 0 then
-		return nil, nil -- No solution
+	-- Check for invalid discriminant (no solution or math error)
+	if discriminant < 0 or discriminant ~= discriminant then -- NaN check
+		return nil, nil
 	end
 
 	local sqrt_disc = math.sqrt(discriminant)
 
-	-- Two solutions for tan(θ)
-	-- Avoid division by zero
-	if d == 0 then
-		-- Vertical shot
-		if h < 0 then
-			return -89, -89 -- Shooting straight down
-		else
-			return 89, 89 -- Shooting straight up
-		end
-	end
-
 	local tan1 = safeDivide(v2 - sqrt_disc, g * d, 0)
 	local tan2 = safeDivide(v2 + sqrt_disc, g * d, 0)
 
-	-- Convert to pitch angles (negative because pitch is downward)
 	local pitch1 = -math.deg(math.atan(tan1))
 	local pitch2 = -math.deg(math.atan(tan2))
+
+	-- Check for NaN results
+	if pitch1 ~= pitch1 or pitch2 ~= pitch2 then
+		return nil, nil
+	end
 
 	return pitch1, pitch2
 end
 
 -- Direct mathematical solution for pitch angles (no iterations)
 local function solvePitchForDistance(speed, targetDistance, gravity, upwardVel)
-	-- Using the quartic equation from "Cannons that Never Miss"
-	-- |ΔP - ½gt²|² = (st)² where ΔP is horizontal distance, g is gravity
-
-	-- For sticky bombs with upward velocity, we need to account for it
-	-- Modified equation: (v*cos(θ))*t = distance, where t = 2*(v*sin(θ) + upwardVel)/gravity
-
-	-- This gives us: distance = v*cos(θ) * 2*(v*sin(θ) + upwardVel)/gravity
-	-- Simplifying: distance*gravity = 2*v²*cos(θ)*sin(θ) + 2*v*cos(θ)*upwardVel
-	-- Using trig identity: 2*cos(θ)*sin(θ) = sin(2θ)
-	-- distance*gravity = v²*sin(2θ) + 2*v*cos(θ)*upwardVel
+	-- Guard against invalid inputs
+	if not speed or not targetDistance or not gravity then
+		return nil, nil
+	end
+	if speed <= 0 or gravity <= 0 then
+		return nil, nil
+	end
+	if targetDistance == 0 or math.abs(targetDistance) < 1 then
+		return 89, 89 -- Vertical shot
+	end
 
 	local g = gravity
 	local d = targetDistance
-	local u = upwardVel
+	local u = upwardVel or 0
 
-	-- This is a quadratic in terms of tan(θ)
-	-- Let's solve it directly using the quadratic formula
 	local denom = 4 * d * d
 	local discriminant = speed * speed - safeDivide(g * (g * d * d - 4 * d * u * speed), denom, 0)
 
-	if discriminant < 0 then
-		return nil, nil -- No solution
+	-- Check for invalid discriminant
+	if discriminant < 0 or discriminant ~= discriminant then
+		return nil, nil
 	end
 
 	local sqrt_disc = math.sqrt(discriminant)
 
-	-- Two solutions: low arc and high arc
 	local tan1 = safeDivide(speed * speed - sqrt_disc, g * d, 0)
 	local tan2 = safeDivide(speed * speed + sqrt_disc, g * d, 0)
 
-	-- Convert to pitch angles (negative because pitch is downward)
 	local pitch1 = -math.deg(math.atan(tan1))
 	local pitch2 = -math.deg(math.atan(tan2))
+
+	-- Check for NaN results
+	if pitch1 ~= pitch1 or pitch2 ~= pitch2 then
+		return nil, nil
+	end
 
 	return pitch1, pitch2
 end
@@ -1119,7 +1126,7 @@ end
 
 function PhysicsEnv:getObject(index)
 	if index < 1 or index > #self.objects then
-		error("Invalid physics object index: " .. tostring(index))
+		return nil -- Invalid index, let caller handle
 	end
 	if index ~= self.activeIndex then
 		local currentObj = self.objects[self.activeIndex]
@@ -1128,7 +1135,7 @@ function PhysicsEnv:getObject(index)
 		end
 		local newObj = self.objects[index]
 		if not newObj then
-			error("Physics object at index " .. tostring(index) .. " is nil")
+			return nil -- Object unavailable, let caller handle
 		end
 		newObj:Wake()
 		self.activeIndex = index
@@ -1545,17 +1552,20 @@ callbacks.Register("CreateMove", "LoadPhysicsObjects", function()
 			end
 		else
 			local obj = physicsEnv:getObject(iItemDefinitionType)
+			if not obj then
+				return -- Physics object unavailable, skip
+			end
 			obj:SetPosition(vStartPosition, vStartAngle, true)
 			obj:SetVelocity(vVelocity, Vector3(0, 0, 0))
 			local prevPos = vStartPosition
 			for i = 2, 330 do
 				local curPos = obj:GetPosition()
 				if not curPos then
-					error("Physics object position is nil")
+					break -- Physics object position unavailable, stop simulation
 				end
 				results = traceHull(results.endpos, curPos, vCollisionMin, vCollisionMax, 100679691)
 				if not results then
-					error("TraceHull returned nil in physics simulation")
+					break -- Trace failed, stop simulation
 				end
 				trajectoryLine:insert(results.endpos)
 
@@ -1746,16 +1756,40 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 	local bestError = 999999
 
 	if hasCharge then
-		-- Simple linear sweep: try 11 charge levels, pick first that works
-		for i = 0, 10 do
-			local testCharge = i * 0.1
-			local speed = baseSpeed + testCharge * (maxSpeed - baseSpeed)
-			local pitchLow, pitchHigh = solvePitchForDistanceAndHeight(speed, d, h, g, upwardVel)
+		-- Binary search for MINIMUM charge that reaches target (flatter arc = through doorways)
+		-- Try 0% charge first (prefer flattest trajectory)
+		local minChargeSpeed = baseSpeed
+		local minPitchLow, minPitchHigh = solvePitchForDistanceAndHeight(minChargeSpeed, d, h, g, upwardVel)
 
-			if pitchLow then
-				bestCharge = testCharge
-				bestPitch = bombardAim.useHighArc and pitchHigh or pitchLow
-				break
+		if minPitchLow then
+			-- 0% charge works, use it (flattest arc)
+			bestCharge = 0
+			bestPitch = bombardAim.useHighArc and minPitchHigh or minPitchLow
+		else
+			-- Binary search for minimum charge that works (max 7 iterations)
+			local lo, hi = 0, 1
+			local foundCharge = nil
+			local foundPitch = nil
+
+			for iter = 1, 7 do
+				local mid = (lo + hi) / 2
+				local speed = baseSpeed + mid * (maxSpeed - baseSpeed)
+				local pitchLow, pitchHigh = solvePitchForDistanceAndHeight(speed, d, h, g, upwardVel)
+
+				if pitchLow then
+					-- This charge works, try lower
+					foundCharge = mid
+					foundPitch = bombardAim.useHighArc and pitchHigh or pitchLow
+					hi = mid
+				else
+					-- This charge doesn't work, need higher
+					lo = mid
+				end
+			end
+
+			if foundCharge then
+				bestCharge = foundCharge
+				bestPitch = foundPitch
 			end
 		end
 	else
