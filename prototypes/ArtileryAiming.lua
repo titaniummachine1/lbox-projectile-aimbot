@@ -103,18 +103,24 @@ local bombardAim = {
 	lastCKeyState = false,
 	targetDistance = 500, -- Distance in units we want to hit
 	targetHeightOffset = 0, -- Vertical offset from player position (negative = below)
+	targetPosX = 0, -- Target position X offset from player
+	targetPosY = 0, -- Target position Y offset from player
 	targetYaw = 0, -- Yaw offset from player view
 	scrollMode = 0, -- 0=position, 1=charge, 2=distance
-	minDistance = 0.1, -- Allow very close targets
+	minDistance = 10, -- Minimum distance to prevent division issues
 	maxDistance = 3000, -- Will be calculated dynamically
 	distanceStep = 50,
 	heightStep = 50, -- How much height changes per mouse movement
+	positionStep = 5, -- How much position changes with mouse movement
 	useHighArc = false, -- false = low arc (direct), true = high arc (lob)
 	calculatedPitch = -45,
 	lastMouseX = 0,
 	lastMouseY = 0,
 	sensitivity = 1.0, -- Increased sensitivity
 	useTopAngle = false, -- C key toggles between top angle and dynamic angle
+	-- Binary search settings
+	maxIterations = 35, -- Maximum iterations for binary search
+	epsilon = 0.01, -- Accuracy threshold for early termination
 	-- Caching to prevent expensive recalculation
 	lastCalculatedDistance = -1,
 	cachedCharge = 0,
@@ -123,6 +129,40 @@ local bombardAim = {
 }
 
 local projCamFont = draw.CreateFont("Tahoma", 12, 800, FONTFLAG_OUTLINE)
+
+-------------------------------
+-- TF2 SENSITIVITY CALCULATIONS
+-------------------------------
+local function getTF2Sensitivity()
+	-- Default TF2 sensitivity if not available
+	return client.GetConVar("sensitivity") or 3.0
+end
+
+local function getTF2Yaw()
+	-- Default m_yaw for TF2
+	return client.GetConVar("m_yaw") or 0.022
+end
+
+-- Convert mouse movement to world space movement based on TF2 sensitivity
+local function mouseToWorldSpace(mouseX, mouseY, distance)
+	local sensitivity = getTF2Sensitivity()
+	local m_yaw = getTF2Yaw()
+
+	-- Calculate how many degrees the mouse would rotate
+	local yawDegrees = mouseX * sensitivity * m_yaw
+	local pitchDegrees = mouseY * sensitivity * m_yaw
+
+	-- Convert to radians
+	local yawRad = math.rad(yawDegrees)
+	local pitchRad = math.rad(pitchDegrees)
+
+	-- Calculate world space movement at the given distance
+	-- This keeps movement consistent regardless of distance
+	local worldX = distance * math.tan(yawRad)
+	local worldY = distance * math.tan(pitchRad)
+
+	return worldX, worldY
+end
 
 -------------------------------
 -- UTILITY FUNCTIONS
@@ -309,14 +349,12 @@ local function initProjCamMaterials()
 	return true
 end
 
+local function normalizeAngle(angle)
+	return ((angle + 180) % 360) - 180
+end
+
 local function lerpAngle(a, b, t)
-	local diff = b - a
-	while diff > 180 do
-		diff = diff - 360
-	end
-	while diff < -180 do
-		diff = diff + 360
-	end
+	local diff = normalizeAngle(b - a)
 	return a + diff * t
 end
 
@@ -333,6 +371,17 @@ local function getVelocityAngles(vel)
 	local pitch = -math.deg(math.asin(vel.z / speed))
 	local yaw = math.deg(math.atan(vel.y, vel.x))
 	return EulerAngles(pitch, yaw, 0)
+end
+
+local function resetTargetPosition()
+	-- Reset target position to be in front of player
+	local viewAngles = engine.GetViewAngles()
+	local yawRad = math.rad(viewAngles.y)
+
+	-- Start with target at default distance in front of player
+	bombardAim.targetPosX = math.cos(yawRad) * bombardAim.targetDistance
+	bombardAim.targetPosY = math.sin(yawRad) * bombardAim.targetDistance
+	bombardAim.targetYaw = viewAngles.y
 end
 
 local function isMouseInWindow()
@@ -352,10 +401,17 @@ local function handleProjCamToggle()
 			if wasActive and not projCamState.active then
 				bombardMode.useStoredCharge = false
 			end
+			-- Initialize target position when activating
+			if not wasActive and projCamState.active then
+				resetTargetPosition()
+			end
 		end
 		projCamState.lastKeyState = keyDown
 	else
 		projCamState.active = keyDown
+		if keyDown and not projCamState.lastKeyState then
+			resetTargetPosition()
+		end
 	end
 end
 
@@ -420,12 +476,48 @@ local function handleProjCamInput()
 		projCamState.isDragging = false
 	end
 
-	-- Scroll only controls camera position % on trajectory
+	-- Scroll only controls camera position % on trajectory (now 0-100%)
 	if input.IsButtonPressed(MOUSE_WHEEL_UP) then
-		projCamState.pathPercent = clamp(projCamState.pathPercent + projCamConfig.scrollStep, 0, 0.9)
+		projCamState.pathPercent = clamp(projCamState.pathPercent + projCamConfig.scrollStep, 0, 1)
 	elseif input.IsButtonPressed(MOUSE_WHEEL_DOWN) then
-		projCamState.pathPercent = clamp(projCamState.pathPercent - projCamConfig.scrollStep, 0, 0.9)
+		projCamState.pathPercent = clamp(projCamState.pathPercent - projCamConfig.scrollStep, 0, 1)
 	end
+end
+
+-- Anti-clipping trace hull check
+local function findSafeCameraPosition(positions, velocities, targetIndex, desiredPos, desiredAngles)
+	local hullSize = 5
+	local hullMin = Vector3(-hullSize, -hullSize, -hullSize)
+	local hullMax = Vector3(hullSize, hullSize, hullSize)
+
+	-- Check if desired position is safe
+	local trace = traceHull(desiredPos, desiredPos, hullMin, hullMax, 100679691)
+	if not trace.startsolid then
+		return desiredPos, desiredAngles
+	end
+
+	-- Move backwards along the path to find safe position
+	for i = targetIndex, 2, -1 do
+		local testPos = positions[i]
+		local testVel = velocities[i] or positions[i] - positions[i - 1]
+		local testAngles = getVelocityAngles(testVel)
+
+		-- Apply inverse shoot offset (opposite of projectile visualization)
+		local rightOffset = testAngles:Right() * (projCamState.storedFlagOffset.x * -1)
+		local upOffset = testAngles:Up() * (projCamState.storedFlagOffset.z * -1)
+		local offsetPos = testPos + rightOffset + upOffset
+
+		-- Trace from offset position
+		local offsetTrace = traceHull(offsetPos, offsetPos, hullMin, hullMax, 100679691)
+		if not offsetTrace.startsolid then
+			return offsetPos, testAngles
+		end
+	end
+
+	-- Fallback to first position
+	local firstPos = positions[1]
+	local firstAngles = getVelocityAngles(velocities[1] or Vector3(0, 0, 0))
+	return firstPos, firstAngles
 end
 
 local function getPathDataAtPercent(positions, velocities, percent)
@@ -490,34 +582,38 @@ local function drawProjCamWindow()
 	-- Show calculated values when camera is active
 	if projCamState.active then
 		setColor(0, 200, 255, 255)
-		local distText = string.format("Target: %.0f / %.0f", bombardAim.targetDistance, bombardAim.maxDistance)
+		local distText = string.format("Range: %.0f", bombardAim.targetDistance)
 		draw.Text(x + 5, y + 35, distText)
+
+		-- Show position coordinates
+		setColor(100, 255, 100, 255)
+		local posText = string.format("Pos: %.0f, %.0f", bombardAim.targetPosX, bombardAim.targetPosY)
+		draw.Text(x + 5, y + 50, posText)
 
 		-- Show height offset
 		local heightColor = bombardAim.targetHeightOffset < 0 and 255 or 0
 		setColor(heightColor, 255, heightColor, 255)
 		local heightText = string.format("Height: %+.0f", bombardAim.targetHeightOffset)
-		draw.Text(x + 5, y + 50, heightText)
+		draw.Text(x + 5, y + 65, heightText)
 
 		setColor(255, 200, 0, 255)
 		local chargeText = string.format("Charge: %.0f%%", bombardMode.chargeLevel * 100)
-		draw.Text(x + 5, y + 65, chargeText)
+		draw.Text(x + 5, y + 80, chargeText)
 
 		setColor(255, 255, 0, 255)
 		local pitchText = string.format("Pitch: %.1f°", bombardAim.calculatedPitch)
-		draw.Text(x + 5, y + 80, pitchText)
+		draw.Text(x + 5, y + 95, pitchText)
 
 		setColor(150, 255, 150, 255)
 		local arcDesc = bombardAim.useHighArc and "Lob (over obstacles)" or "Direct (faster)"
-		draw.Text(x + 5, y + 95, arcDesc)
+		draw.Text(x + 5, y + 110, arcDesc)
 	end
 
 	setColor(255, 255, 255, 180)
 	local controls
 	if bombardAim.enabled then
 		controls = {
-			"MouseY=Dist MouseX=Dir",
-			"SHIFT+MouseY=Height",
+			"Mouse=Move Pos SHIFT+Mouse=Height",
 			"Scroll=CamPos M1=Fire",
 		}
 	else
@@ -539,18 +635,27 @@ local function updateProjCamSmoothing()
 		return
 	end
 
-	local targetPos, targetVel = getPathDataAtPercent(positions, velocities, projCamState.pathPercent)
-	if not targetPos or not targetVel then
+	-- Convert path percent to index
+	local targetIndex = math.floor(projCamState.pathPercent * (#positions - 1)) + 1
+	targetIndex = clamp(targetIndex, 1, #positions)
+
+	local targetPos = positions[targetIndex]
+	local targetVel = velocities[targetIndex] or Vector3(0, 0, 0)
+
+	if not targetPos then
 		return
 	end
 
 	local targetAngles = getVelocityAngles(targetVel)
 	targetAngles.x = targetAngles.x + 5
 
-	projCamState.smoothedPos = lerpVector(projCamState.smoothedPos, targetPos, projCamConfig.interpSpeed)
+	-- Find safe camera position to prevent clipping
+	local safePos, safeAngles = findSafeCameraPosition(positions, velocities, targetIndex, targetPos, targetAngles)
+
+	projCamState.smoothedPos = lerpVector(projCamState.smoothedPos, safePos, projCamConfig.interpSpeed)
 	projCamState.smoothedAngles = EulerAngles(
-		lerpAngle(projCamState.smoothedAngles.x, targetAngles.x, projCamConfig.interpSpeed),
-		lerpAngle(projCamState.smoothedAngles.y, targetAngles.y, projCamConfig.interpSpeed),
+		lerpAngle(projCamState.smoothedAngles.x, safeAngles.x, projCamConfig.interpSpeed),
+		lerpAngle(projCamState.smoothedAngles.y, safeAngles.y, projCamConfig.interpSpeed),
 		0
 	)
 end
@@ -1598,16 +1703,17 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 		baseSpeed = maxSpeed
 	end
 
-	-- Mouse input like WoT artillery
+	-- Mouse input like WoT artillery - controls actual impact position
 	local mouseX = cmd.mousedx or 0
 	local mouseY = cmd.mousedy or 0
 
-	-- Calculate max range based on max speed
+	-- Calculate max range based on max speed with safety margin
 	local maxRangeSpeed = hasCharge and maxSpeed or baseSpeed
-	bombardAim.maxDistance = (maxRangeSpeed * maxRangeSpeed) / g
+	-- Dynamic max range calculation with safety factor to prevent crashes
+	local theoreticalMax = (maxRangeSpeed * maxRangeSpeed) / g
+	bombardAim.maxDistance = theoreticalMax * 0.95 -- 95% of theoretical max for safety
 
-	-- Mouse Y moves target point distance, Mouse X rotates yaw
-	-- Hold SHIFT for vertical control
+	-- Mouse movement controls target position in world space
 	local bShiftDown = input.IsButtonDown(KEY_SHIFT)
 	if bShiftDown then
 		-- Vertical control when holding shift
@@ -1617,14 +1723,34 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 			2000 -- Can aim 2000 units above
 		)
 	else
-		-- Normal distance control
-		bombardAim.targetDistance = clamp(
-			bombardAim.targetDistance - mouseY * bombardAim.sensitivity,
-			bombardAim.minDistance,
-			bombardAim.maxDistance
-		)
+		-- Position control - use TF2 sensitivity for consistent movement
+		-- Convert mouse movement to world space at current target distance
+		local worldMoveX, worldMoveY = mouseToWorldSpace(mouseX, mouseY, bombardAim.targetDistance)
+
+		-- Get player view angles to calculate movement direction
+		local viewAngles = engine.GetViewAngles()
+		local yawRad = math.rad(viewAngles.y)
+
+		-- Calculate right and forward vectors for movement
+		local rightX = math.cos(yawRad + math.pi / 2)
+		local rightY = math.sin(yawRad + math.pi / 2)
+		local forwardX = math.cos(yawRad)
+		local forwardY = math.sin(yawRad)
+
+		-- Apply world space movement in player's local space
+		bombardAim.targetPosX = bombardAim.targetPosX + (worldMoveX * rightX - worldMoveY * forwardX)
+		bombardAim.targetPosY = bombardAim.targetPosY + (worldMoveX * rightY - worldMoveY * forwardY)
+
+		-- Calculate distance and yaw from new position
+		bombardAim.targetDistance =
+			math.sqrt(bombardAim.targetPosX * bombardAim.targetPosX + bombardAim.targetPosY * bombardAim.targetPosY)
+		bombardAim.targetDistance = clamp(bombardAim.targetDistance, bombardAim.minDistance, bombardAim.maxDistance)
+
+		-- Calculate yaw to target position
+		if bombardAim.targetDistance > 0 then
+			bombardAim.targetYaw = math.deg(math.atan2(bombardAim.targetPosY, bombardAim.targetPosX))
+		end
 	end
-	bombardAim.targetYaw = bombardAim.targetYaw - mouseX * 0.05
 
 	local d = bombardAim.targetDistance
 	local h = bombardAim.targetHeightOffset
@@ -1633,13 +1759,20 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 	local bestError = 999999
 
 	if hasCharge then
-		-- Binary search for optimal charge
+		-- Binary search for optimal charge with epsilon
 		local minCharge = 0
 		local maxCharge = 1.0
-		local iterations = 20
+		local iteration = 0
+		local lastMidCharge = 0
 
-		for i = 1, iterations do
+		while iteration < bombardAim.maxIterations and (maxCharge - minCharge) > bombardAim.epsilon do
 			local midCharge = (minCharge + maxCharge) / 2
+
+			-- Check if we're converging (optional early exit)
+			if iteration > 0 and math.abs(midCharge - lastMidCharge) < bombardAim.epsilon then
+				break
+			end
+
 			local speed = baseSpeed + midCharge * (maxSpeed - baseSpeed)
 			local v2 = speed * speed
 
@@ -1664,9 +1797,17 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 					bestPitch = pitch
 				end
 
-				-- Always accept the first valid solution
-				minCharge = midCharge - 0.01
-				maxCharge = midCharge + 0.01
+				-- Narrow search range based on distance
+				if d > 0 then
+					-- For positive distance, we found a solution
+					minCharge = midCharge - 0.001
+					maxCharge = midCharge + 0.001
+				else
+					-- For zero/negative distance, use minimum charge
+					maxCharge = midCharge
+				end
+
+				lastMidCharge = midCharge
 			else
 				-- No solution, adjust charge range
 				if d > 0 then
@@ -1675,6 +1816,8 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 					maxCharge = midCharge
 				end
 			end
+
+			iteration = iteration + 1
 		end
 	else
 		-- No charge weapon - calculate pitch directly
