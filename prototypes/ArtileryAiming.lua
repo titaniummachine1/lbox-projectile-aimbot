@@ -41,8 +41,6 @@ local config = {
 -- CONSTANTS
 -------------------------------
 local IN_ATTACK = 1
-local Vector3 = Vector3 or _G.Vector3
-local KEY_SHIFT = KEY_SHIFT or 16
 
 -------------------------------
 -- PROJECTILE CAMERA CONFIG
@@ -102,25 +100,17 @@ local bombardAim = {
 	enabled = true, -- Always active when preview visible
 	lastCKeyState = false,
 	targetDistance = 500, -- Distance in units we want to hit
-	targetHeightOffset = 0, -- Vertical offset from player position (negative = below)
-	targetPosX = 0, -- Target position X offset from player
-	targetPosY = 0, -- Target position Y offset from player
 	targetYaw = 0, -- Yaw offset from player view
 	scrollMode = 0, -- 0=position, 1=charge, 2=distance
-	minDistance = 10, -- Minimum distance to prevent division issues
+	minDistance = 0.1, -- Allow very close targets
 	maxDistance = 3000, -- Will be calculated dynamically
 	distanceStep = 50,
-	heightStep = 50, -- How much height changes per mouse movement
-	positionStep = 5, -- How much position changes with mouse movement
 	useHighArc = false, -- false = low arc (direct), true = high arc (lob)
 	calculatedPitch = -45,
 	lastMouseX = 0,
 	lastMouseY = 0,
 	sensitivity = 1.0, -- Increased sensitivity
 	useTopAngle = false, -- C key toggles between top angle and dynamic angle
-	-- Binary search settings
-	maxIterations = 35, -- Maximum iterations for binary search
-	epsilon = 0.01, -- Accuracy threshold for early termination
 	-- Caching to prevent expensive recalculation
 	lastCalculatedDistance = -1,
 	cachedCharge = 0,
@@ -129,40 +119,6 @@ local bombardAim = {
 }
 
 local projCamFont = draw.CreateFont("Tahoma", 12, 800, FONTFLAG_OUTLINE)
-
--------------------------------
--- TF2 SENSITIVITY CALCULATIONS
--------------------------------
-local function getTF2Sensitivity()
-	-- Default TF2 sensitivity if not available
-	return client.GetConVar("sensitivity") or 3.0
-end
-
-local function getTF2Yaw()
-	-- Default m_yaw for TF2
-	return client.GetConVar("m_yaw") or 0.022
-end
-
--- Convert mouse movement to world space movement based on TF2 sensitivity
-local function mouseToWorldSpace(mouseX, mouseY, distance)
-	local sensitivity = getTF2Sensitivity()
-	local m_yaw = getTF2Yaw()
-
-	-- Calculate how many degrees the mouse would rotate
-	local yawDegrees = mouseX * sensitivity * m_yaw
-	local pitchDegrees = mouseY * sensitivity * m_yaw
-
-	-- Convert to radians
-	local yawRad = math.rad(yawDegrees)
-	local pitchRad = math.rad(pitchDegrees)
-
-	-- Calculate world space movement at the given distance
-	-- This keeps movement consistent regardless of distance
-	local worldX = distance * math.tan(yawRad)
-	local worldY = distance * math.tan(pitchRad)
-
-	return worldX, worldY
-end
 
 -------------------------------
 -- UTILITY FUNCTIONS
@@ -179,14 +135,6 @@ local function clamp(val, minVal, maxVal)
 		return maxVal
 	end
 	return val
-end
-
--- Safe division to prevent crashes
-local function safeDivide(numerator, denominator, fallback)
-	if math.abs(denominator) < 0.0001 then
-		return fallback or 0
-	end
-	return numerator / denominator
 end
 
 -- Sticky bomb physics constants
@@ -218,95 +166,40 @@ local function calculateRange(speed, pitchRad, gravity, upwardVel)
 	end
 end
 
--- Direct mathematical solution for pitch angles with height offset
--- Returns nil, nil if no valid solution exists
-local function solvePitchForDistanceAndHeight(speed, targetDistance, heightOffset, gravity, upwardVel)
-	-- Guard against invalid inputs
-	if not speed or not targetDistance or not gravity then
-		return nil, nil
-	end
-	if speed <= 0 or gravity <= 0 then
-		return nil, nil
-	end
-
-	local g = gravity
-	local d = targetDistance
-	local h = heightOffset or 0
-	local u = upwardVel or 0
-
-	-- Handle d == 0 case first (vertical shot)
-	if d == 0 or math.abs(d) < 1 then
-		if h < 0 then
-			return -89, -89
-		else
-			return 89, 89
-		end
-	end
-
-	local v2 = speed * speed
-	local d2 = d * d
-
-	-- Calculate discriminant
-	local discriminant = v2 * v2 - g * (g * d2 + 2 * h * v2 - 4 * d * u * speed)
-
-	-- Check for invalid discriminant (no solution or math error)
-	if discriminant < 0 or discriminant ~= discriminant then -- NaN check
-		return nil, nil
-	end
-
-	local sqrt_disc = math.sqrt(discriminant)
-
-	local tan1 = safeDivide(v2 - sqrt_disc, g * d, 0)
-	local tan2 = safeDivide(v2 + sqrt_disc, g * d, 0)
-
-	local pitch1 = -math.deg(math.atan(tan1))
-	local pitch2 = -math.deg(math.atan(tan2))
-
-	-- Check for NaN results
-	if pitch1 ~= pitch1 or pitch2 ~= pitch2 then
-		return nil, nil
-	end
-
-	return pitch1, pitch2
-end
-
 -- Direct mathematical solution for pitch angles (no iterations)
 local function solvePitchForDistance(speed, targetDistance, gravity, upwardVel)
-	-- Guard against invalid inputs
-	if not speed or not targetDistance or not gravity then
-		return nil, nil
-	end
-	if speed <= 0 or gravity <= 0 then
-		return nil, nil
-	end
-	if targetDistance == 0 or math.abs(targetDistance) < 1 then
-		return 89, 89 -- Vertical shot
-	end
+	-- Using the quartic equation from "Cannons that Never Miss"
+	-- |ΔP - ½gt²|² = (st)² where ΔP is horizontal distance, g is gravity
+
+	-- For sticky bombs with upward velocity, we need to account for it
+	-- Modified equation: (v*cos(θ))*t = distance, where t = 2*(v*sin(θ) + upwardVel)/gravity
+
+	-- This gives us: distance = v*cos(θ) * 2*(v*sin(θ) + upwardVel)/gravity
+	-- Simplifying: distance*gravity = 2*v²*cos(θ)*sin(θ) + 2*v*cos(θ)*upwardVel
+	-- Using trig identity: 2*cos(θ)*sin(θ) = sin(2θ)
+	-- distance*gravity = v²*sin(2θ) + 2*v*cos(θ)*upwardVel
 
 	local g = gravity
 	local d = targetDistance
-	local u = upwardVel or 0
+	local u = upwardVel
 
-	local denom = 4 * d * d
-	local discriminant = speed * speed - safeDivide(g * (g * d * d - 4 * d * u * speed), denom, 0)
+	-- This is a quadratic in terms of tan(θ)
+	-- Let's solve it directly using the quadratic formula
+	local discriminant = speed * speed - g * (g * d * d - 4 * d * u * speed) / (4 * d * d)
 
-	-- Check for invalid discriminant
-	if discriminant < 0 or discriminant ~= discriminant then
-		return nil, nil
+	if discriminant < 0 then
+		return nil, nil -- No solution
 	end
 
 	local sqrt_disc = math.sqrt(discriminant)
 
-	local tan1 = safeDivide(speed * speed - sqrt_disc, g * d, 0)
-	local tan2 = safeDivide(speed * speed + sqrt_disc, g * d, 0)
+	-- Two solutions: low arc and high arc
+	local tan1 = (speed * speed - sqrt_disc) / (g * d)
+	local tan2 = (speed * speed + sqrt_disc) / (g * d)
 
+	-- Convert to pitch angles (negative because pitch is downward)
 	local pitch1 = -math.deg(math.atan(tan1))
 	local pitch2 = -math.deg(math.atan(tan2))
-
-	-- Check for NaN results
-	if pitch1 ~= pitch1 or pitch2 ~= pitch2 then
-		return nil, nil
-	end
 
 	return pitch1, pitch2
 end
@@ -365,12 +258,14 @@ local function initProjCamMaterials()
 	return true
 end
 
-local function normalizeAngle(angle)
-	return ((angle + 180) % 360) - 180
-end
-
 local function lerpAngle(a, b, t)
-	local diff = normalizeAngle(b - a)
+	local diff = b - a
+	while diff > 180 do
+		diff = diff - 360
+	end
+	while diff < -180 do
+		diff = diff + 360
+	end
 	return a + diff * t
 end
 
@@ -387,17 +282,6 @@ local function getVelocityAngles(vel)
 	local pitch = -math.deg(math.asin(vel.z / speed))
 	local yaw = math.deg(math.atan(vel.y, vel.x))
 	return EulerAngles(pitch, yaw, 0)
-end
-
-local function resetTargetPosition()
-	-- Reset target position to be in front of player
-	local viewAngles = engine.GetViewAngles()
-	local yawRad = math.rad(viewAngles.y)
-
-	-- Start with target at default distance in front of player
-	bombardAim.targetPosX = math.cos(yawRad) * bombardAim.targetDistance
-	bombardAim.targetPosY = math.sin(yawRad) * bombardAim.targetDistance
-	bombardAim.targetYaw = viewAngles.y
 end
 
 local function isMouseInWindow()
@@ -417,17 +301,10 @@ local function handleProjCamToggle()
 			if wasActive and not projCamState.active then
 				bombardMode.useStoredCharge = false
 			end
-			-- Initialize target position when activating
-			if not wasActive and projCamState.active then
-				resetTargetPosition()
-			end
 		end
 		projCamState.lastKeyState = keyDown
 	else
 		projCamState.active = keyDown
-		if keyDown and not projCamState.lastKeyState then
-			resetTargetPosition()
-		end
 	end
 end
 
@@ -492,48 +369,12 @@ local function handleProjCamInput()
 		projCamState.isDragging = false
 	end
 
-	-- Scroll only controls camera position % on trajectory (now 0-100%)
+	-- Scroll only controls camera position % on trajectory
 	if input.IsButtonPressed(MOUSE_WHEEL_UP) then
-		projCamState.pathPercent = clamp(projCamState.pathPercent + projCamConfig.scrollStep, 0, 1)
+		projCamState.pathPercent = clamp(projCamState.pathPercent + projCamConfig.scrollStep, 0, 0.9)
 	elseif input.IsButtonPressed(MOUSE_WHEEL_DOWN) then
-		projCamState.pathPercent = clamp(projCamState.pathPercent - projCamConfig.scrollStep, 0, 1)
+		projCamState.pathPercent = clamp(projCamState.pathPercent - projCamConfig.scrollStep, 0, 0.9)
 	end
-end
-
--- Anti-clipping trace hull check
-local function findSafeCameraPosition(positions, velocities, targetIndex, desiredPos, desiredAngles)
-	local hullSize = 5
-	local hullMin = Vector3(-hullSize, -hullSize, -hullSize)
-	local hullMax = Vector3(hullSize, hullSize, hullSize)
-
-	-- Check if desired position is safe
-	local trace = traceHull(desiredPos, desiredPos, hullMin, hullMax, 100679691)
-	if not trace.startsolid then
-		return desiredPos, desiredAngles
-	end
-
-	-- Move backwards along the path to find safe position
-	for i = targetIndex, 2, -1 do
-		local testPos = positions[i]
-		local testVel = velocities[i] or positions[i] - positions[i - 1]
-		local testAngles = getVelocityAngles(testVel)
-
-		-- Apply inverse shoot offset (opposite of projectile visualization)
-		local rightOffset = testAngles:Right() * (projCamState.storedFlagOffset.x * -1)
-		local upOffset = testAngles:Up() * (projCamState.storedFlagOffset.z * -1)
-		local offsetPos = testPos + rightOffset + upOffset
-
-		-- Trace from offset position
-		local offsetTrace = traceHull(offsetPos, offsetPos, hullMin, hullMax, 100679691)
-		if not offsetTrace.startsolid then
-			return offsetPos, testAngles
-		end
-	end
-
-	-- Fallback to first position
-	local firstPos = positions[1]
-	local firstAngles = getVelocityAngles(velocities[1] or Vector3(0, 0, 0))
-	return firstPos, firstAngles
 end
 
 local function getPathDataAtPercent(positions, velocities, percent)
@@ -598,39 +439,28 @@ local function drawProjCamWindow()
 	-- Show calculated values when camera is active
 	if projCamState.active then
 		setColor(0, 200, 255, 255)
-		local distText = string.format("Range: %.0f", bombardAim.targetDistance)
+		local distText = string.format("Target: %.0f / %.0f", bombardAim.targetDistance, bombardAim.maxDistance)
 		draw.Text(x + 5, y + 35, distText)
-
-		-- Show position coordinates
-		setColor(100, 255, 100, 255)
-		local posText = string.format("Pos: %.0f, %.0f", bombardAim.targetPosX, bombardAim.targetPosY)
-		draw.Text(x + 5, y + 50, posText)
-
-		-- Show height offset
-		local heightColor = bombardAim.targetHeightOffset < 0 and 255 or 0
-		setColor(heightColor, 255, heightColor, 255)
-		local heightText = string.format("Height: %+.0f", bombardAim.targetHeightOffset)
-		draw.Text(x + 5, y + 65, heightText)
 
 		setColor(255, 200, 0, 255)
 		local chargeText = string.format("Charge: %.0f%%", bombardMode.chargeLevel * 100)
-		draw.Text(x + 5, y + 80, chargeText)
+		draw.Text(x + 5, y + 50, chargeText)
 
 		setColor(255, 255, 0, 255)
 		local pitchText = string.format("Pitch: %.1f°", bombardAim.calculatedPitch)
-		draw.Text(x + 5, y + 95, pitchText)
+		draw.Text(x + 5, y + 65, pitchText)
 
 		setColor(150, 255, 150, 255)
 		local arcDesc = bombardAim.useHighArc and "Lob (over obstacles)" or "Direct (faster)"
-		draw.Text(x + 5, y + 110, arcDesc)
+		draw.Text(x + 5, y + 80, arcDesc)
 	end
 
 	setColor(255, 255, 255, 180)
 	local controls
 	if bombardAim.enabled then
 		controls = {
-			"MouseX=Rotate MouseY=Distance",
-			"SHIFT+Y=Height C=Arc Scroll=Cam",
+			"MouseY=Dist MouseX=Dir",
+			"Scroll=CamPos M1=Fire",
 		}
 	else
 		controls = {
@@ -651,27 +481,18 @@ local function updateProjCamSmoothing()
 		return
 	end
 
-	-- Convert path percent to index
-	local targetIndex = math.floor(projCamState.pathPercent * (#positions - 1)) + 1
-	targetIndex = clamp(targetIndex, 1, #positions)
-
-	local targetPos = positions[targetIndex]
-	local targetVel = velocities[targetIndex] or Vector3(0, 0, 0)
-
-	if not targetPos then
+	local targetPos, targetVel = getPathDataAtPercent(positions, velocities, projCamState.pathPercent)
+	if not targetPos or not targetVel then
 		return
 	end
 
 	local targetAngles = getVelocityAngles(targetVel)
 	targetAngles.x = targetAngles.x + 5
 
-	-- Find safe camera position to prevent clipping
-	local safePos, safeAngles = findSafeCameraPosition(positions, velocities, targetIndex, targetPos, targetAngles)
-
-	projCamState.smoothedPos = lerpVector(projCamState.smoothedPos, safePos, projCamConfig.interpSpeed)
+	projCamState.smoothedPos = lerpVector(projCamState.smoothedPos, targetPos, projCamConfig.interpSpeed)
 	projCamState.smoothedAngles = EulerAngles(
-		lerpAngle(projCamState.smoothedAngles.x, safeAngles.x, projCamConfig.interpSpeed),
-		lerpAngle(projCamState.smoothedAngles.y, safeAngles.y, projCamConfig.interpSpeed),
+		lerpAngle(projCamState.smoothedAngles.x, targetAngles.x, projCamConfig.interpSpeed),
+		lerpAngle(projCamState.smoothedAngles.y, targetAngles.y, projCamConfig.interpSpeed),
 		0
 	)
 end
@@ -777,8 +598,8 @@ local function drawProjCamTrajectory()
 			projectToCamera(worldPos + projCamState.storedFlagOffset, camOrigin, camAngles, fov, winX, winY, winW, winH)
 
 		if lastScreen and screenPos then
-			-- Only draw if BOTH points are within bounds
-			if isInBounds(screenPos, winX, winY, winW, winH) and isInBounds(lastScreen, winX, winY, winW, winH) then
+			-- Only draw if both points are within bounds
+			if isInBounds(screenPos, winX, winY, winW, winH) or isInBounds(lastScreen, winX, winY, winW, winH) then
 				if config.line.enabled then
 					if config.outline.line_and_flags then
 						drawOutlinedLine(lastScreen, screenPos, winX, winY, winW, winH)
@@ -792,19 +613,16 @@ local function drawProjCamTrajectory()
 					)
 				end
 				if config.flags.enabled and flagScreenPos then
-					-- Also check if flag position is in bounds
-					if isInBounds(flagScreenPos, winX, winY, winW, winH) then
-						if config.outline.line_and_flags then
-							drawOutlinedLine(flagScreenPos, screenPos, winX, winY, winW, winH)
-						end
-						setColor(config.flags.r, config.flags.g, config.flags.b, config.flags.a)
-						drawLine(
-							math.floor(flagScreenPos[1]),
-							math.floor(flagScreenPos[2]),
-							math.floor(screenPos[1]),
-							math.floor(screenPos[2])
-						)
+					if config.outline.line_and_flags then
+						drawOutlinedLine(flagScreenPos, screenPos, winX, winY, winW, winH)
 					end
+					setColor(config.flags.r, config.flags.g, config.flags.b, config.flags.a)
+					drawLine(
+						math.floor(flagScreenPos[1]),
+						math.floor(flagScreenPos[2]),
+						math.floor(screenPos[1]),
+						math.floor(screenPos[2])
+					)
 				end
 			end
 		end
@@ -814,12 +632,6 @@ local function drawProjCamTrajectory()
 	if projCamState.storedImpactPos and projCamState.storedImpactPlane and config.polygon.enabled then
 		local origin = projCamState.storedImpactPos
 		local plane = projCamState.storedImpactPlane
-
-		-- Defensive check for plane
-		if not plane then
-			return
-		end
-
 		local polygonPositions = {}
 		local radius = config.polygon.size
 		local segments = config.polygon.segments
@@ -847,9 +659,7 @@ local function drawProjCamTrajectory()
 		else
 			local right = Vector3(-plane.y, plane.x, 0)
 			local up = Vector3(plane.z * right.y, -plane.z * right.x, (plane.y * right.x) - (plane.x * right.y))
-			local clampedZ = math.max(-0.98, math.min(0.98, plane.z))
-			local cosVal = math.cos(math.asin(clampedZ))
-			radius = safeDivide(radius, cosVal, radius)
+			radius = radius / math.cos(math.asin(plane.z))
 			for i = 1, segments do
 				local ang = i * segAngle + segAngleOffset
 				local pos = projectToCamera(
@@ -1126,7 +936,7 @@ end
 
 function PhysicsEnv:getObject(index)
 	if index < 1 or index > #self.objects then
-		return nil -- Invalid index, let caller handle
+		error("Invalid physics object index: " .. tostring(index))
 	end
 	if index ~= self.activeIndex then
 		local currentObj = self.objects[self.activeIndex]
@@ -1135,7 +945,7 @@ function PhysicsEnv:getObject(index)
 		end
 		local newObj = self.objects[index]
 		if not newObj then
-			return nil -- Object unavailable, let caller handle
+			error("Physics object at index " .. tostring(index) .. " is nil")
 		end
 		newObj:Wake()
 		self.activeIndex = index
@@ -1552,20 +1362,17 @@ callbacks.Register("CreateMove", "LoadPhysicsObjects", function()
 			end
 		else
 			local obj = physicsEnv:getObject(iItemDefinitionType)
-			if not obj then
-				return -- Physics object unavailable, skip
-			end
 			obj:SetPosition(vStartPosition, vStartAngle, true)
 			obj:SetVelocity(vVelocity, Vector3(0, 0, 0))
 			local prevPos = vStartPosition
 			for i = 2, 330 do
 				local curPos = obj:GetPosition()
 				if not curPos then
-					break -- Physics object position unavailable, stop simulation
+					error("Physics object position is nil")
 				end
 				results = traceHull(results.endpos, curPos, vCollisionMin, vCollisionMax, 100679691)
 				if not results then
-					break -- Trace failed, stop simulation
+					error("TraceHull returned nil in physics simulation")
 				end
 				trajectoryLine:insert(results.endpos)
 
@@ -1724,100 +1531,131 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 		baseSpeed = maxSpeed
 	end
 
-	-- Mouse input like WoT artillery - controls actual impact position
+	-- Mouse input like WoT artillery
 	local mouseX = cmd.mousedx or 0
 	local mouseY = cmd.mousedy or 0
 
-	-- Calculate max range based on max speed with safety margin
+	-- Calculate max range based on max speed
 	local maxRangeSpeed = hasCharge and maxSpeed or baseSpeed
-	local theoreticalMax = (maxRangeSpeed * maxRangeSpeed) / g
-	bombardAim.maxDistance = theoreticalMax * 0.95
+	bombardAim.maxDistance = (maxRangeSpeed * maxRangeSpeed) / g
 
-	-- WoT-style simple mouse control:
-	-- Mouse X = rotate aim left/right (yaw)
-	-- Mouse Y = push aim further/closer (distance)
-	-- SHIFT + Mouse Y = adjust height offset
-	local bShiftDown = input.IsButtonDown(KEY_SHIFT)
-
-	if bShiftDown then
-		-- SHIFT held: vertical control
-		bombardAim.targetHeightOffset = clamp(bombardAim.targetHeightOffset - mouseY * 2, -2000, 2000)
-	else
-		-- Normal: mouseY controls distance, mouseX controls yaw
-		bombardAim.targetDistance =
-			clamp(bombardAim.targetDistance - mouseY * 3, bombardAim.minDistance, bombardAim.maxDistance)
-		bombardAim.targetYaw = bombardAim.targetYaw - mouseX * 0.15
-	end
+	-- Mouse Y moves target point, Mouse X rotates yaw
+	bombardAim.targetDistance = clamp(
+		bombardAim.targetDistance - mouseY * bombardAim.sensitivity,
+		bombardAim.minDistance,
+		bombardAim.maxDistance
+	)
+	bombardAim.targetYaw = bombardAim.targetYaw - mouseX * 0.05
 
 	local d = bombardAim.targetDistance
-	local h = bombardAim.targetHeightOffset
 	local bestCharge = 0
 	local bestPitch = nil
 	local bestError = 999999
 
 	if hasCharge then
-		-- Binary search for MINIMUM charge that reaches target (flatter arc = through doorways)
-		-- Try 0% charge first (prefer flattest trajectory)
-		local minChargeSpeed = baseSpeed
-		local minPitchLow, minPitchHigh = solvePitchForDistanceAndHeight(minChargeSpeed, d, h, g, upwardVel)
+		-- Binary search for optimal charge
+		local minCharge = 0
+		local maxCharge = 1.0
+		local iterations = 20
 
-		if minPitchLow then
-			-- 0% charge works, use it (flattest arc)
-			bestCharge = 0
-			bestPitch = bombardAim.useHighArc and minPitchHigh or minPitchLow
-		else
-			-- Binary search for minimum charge that works (max 7 iterations)
-			local lo, hi = 0, 1
-			local foundCharge = nil
-			local foundPitch = nil
+		for i = 1, iterations do
+			local midCharge = (minCharge + maxCharge) / 2
+			local speed = baseSpeed + midCharge * (maxSpeed - baseSpeed)
+			local v2 = speed * speed
 
-			for iter = 1, 7 do
-				local mid = (lo + hi) / 2
-				local speed = baseSpeed + mid * (maxSpeed - baseSpeed)
-				local pitchLow, pitchHigh = solvePitchForDistanceAndHeight(speed, d, h, g, upwardVel)
+			-- No artificial pitch limits - let mathematics handle all cases
 
-				if pitchLow then
-					-- This charge works, try lower
-					foundCharge = mid
-					foundPitch = bombardAim.useHighArc and pitchHigh or pitchLow
-					hi = mid
-				else
-					-- This charge doesn't work, need higher
-					lo = mid
+			local inner = v2 * v2 - g * g * d * d
+
+			if inner >= 0 then
+				local sqrtInner = math.sqrt(inner)
+
+				-- Safety check for division by zero (allow very close targets)
+				if math.abs(g * d) < 0.00001 then
+					-- For extremely close targets, use steep downward angle
+					local steepPitch = -89
+					bestPitch = steepPitch
+					bestCharge = midCharge
+					break
 				end
-			end
 
-			if foundCharge then
-				bestCharge = foundCharge
-				bestPitch = foundPitch
+				local tanLow = (v2 - sqrtInner) / (g * d)
+				local tanHigh = (v2 + sqrtInner) / (g * d)
+				local pitchLow = -math.deg(math.atan(tanLow))
+				local pitchHigh = -math.deg(math.atan(tanHigh))
+
+				local pitch, actualRange, error
+				if bombardAim.useHighArc then
+					pitch = pitchHigh
+					local pitchRadHigh = math.rad(-pitchHigh)
+					actualRange = calculateRange(speed, pitchRadHigh, g, upwardVel)
+					error = math.abs(actualRange - d)
+				else
+					pitch = pitchLow
+					local pitchRadLow = math.rad(-pitchLow)
+					actualRange = calculateRange(speed, pitchRadLow, g, upwardVel)
+					error = math.abs(actualRange - d)
+				end
+
+				if error < bestError then
+					bestError = error
+					bestCharge = midCharge
+					bestPitch = pitch
+				end
+
+				if actualRange < d then
+					minCharge = midCharge
+				else
+					maxCharge = midCharge
+				end
+			else
+				minCharge = midCharge
 			end
 		end
 	else
 		-- No charge weapon - calculate pitch directly
 		local speed = baseSpeed
-		local pitchLow, pitchHigh = solvePitchForDistanceAndHeight(speed, d, h, g, upwardVel)
+		local v2 = speed * speed
+		local inner = v2 * v2 - g * g * d * d
 
-		if pitchLow then
-			bestPitch = bombardAim.useHighArc and pitchHigh or pitchLow
+		if inner >= 0 then
+			local sqrtInner = math.sqrt(inner)
+
+			-- Safety check for division by zero (allow very close targets)
+			if math.abs(g * d) < 0.00001 then
+				-- For extremely close targets, use steep downward angle
+				bestPitch = -89
+			else
+				local tanLow = (v2 - sqrtInner) / (g * d)
+				local tanHigh = (v2 + sqrtInner) / (g * d)
+				local pitchLow = -math.deg(math.atan(tanLow))
+				local pitchHigh = -math.deg(math.atan(tanHigh))
+
+				if bombardAim.useHighArc then
+					bestPitch = pitchHigh
+				else
+					bestPitch = pitchLow
+				end
+			end
 			bestCharge = 0
 		end
 	end
 
-	-- ALWAYS zero mouse so we fully control view (prevents jittering)
-	cmd.mousedx = 0
-	cmd.mousedy = 0
-
-	-- Use best pitch if found, otherwise keep last calculated pitch
 	if bestPitch then
 		bombardMode.chargeLevel = bestCharge
 		bombardAim.calculatedPitch = bestPitch
+
+		-- Zero mouse so we fully control view
+		cmd.mousedx = 0
+		cmd.mousedy = 0
+
+		-- Set view - allow full pitch range for shooting down
+		local aimAngles = EulerAngles(bombardAim.calculatedPitch, bombardAim.targetYaw, 0)
+		engine.SetViewAngles(aimAngles)
+		cmd.viewangles = Vector3(bombardAim.calculatedPitch, bombardAim.targetYaw, 0)
+
 		bombardMode.useStoredCharge = hasCharge
 	end
-
-	-- Always set view angles (use last good pitch if current failed)
-	local clampedPitch = clamp(bombardAim.calculatedPitch, -90, 90)
-	engine.SetViewAngles(EulerAngles(clampedPitch, bombardAim.targetYaw, 0))
-	cmd.viewangles = Vector3(clampedPitch, bombardAim.targetYaw, 0)
 end)
 
 -------------------------------
