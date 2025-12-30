@@ -23,6 +23,10 @@ local DefaultConfig = {
 		TrackedTargets = 2, -- how many enemies to keep movement history for
 		PreferFeet = true, -- prioritize shooting ~5 units above ground to launch enemies
 		AutoFlipViewmodels = true,
+
+		-- Melee/Trickstab settings
+		AutoTrickstab = true,
+		AutoWalk = true,
 	},
 
 	-- Visual settings

@@ -45,9 +45,11 @@ end
 
 ---Get or create player data for an entity
 ---@param entity Entity
----@return table playerData
+---@return table|nil playerData
 function PlayerTracker.GetOrCreate(entity)
-	assert(entity, "PlayerTracker: entity is nil")
+	if not entity then
+		return nil
+	end
 
 	local index = entity:GetIndex()
 	if not playerData[index] then
@@ -59,14 +61,14 @@ function PlayerTracker.GetOrCreate(entity)
 end
 
 ---Get player data if it exists and is valid
----@param entity Entity
+---@param entity Entity|number Entity object or index
 ---@return table|nil playerData
 function PlayerTracker.Get(entity)
 	if not entity then
 		return nil
 	end
 
-	local index = entity:GetIndex()
+	local index = type(entity) == "number" and entity or entity:GetIndex()
 	local data = playerData[index]
 
 	if not data then
@@ -89,6 +91,10 @@ function PlayerTracker.Update(entity, predictionData)
 	assert(predictionData, "PlayerTracker: predictionData is nil")
 
 	local data = PlayerTracker.GetOrCreate(entity)
+	if not data then
+		return
+	end
+
 	local currentTick = globals.TickCount()
 	local now = (globals and globals.RealTime and globals.RealTime()) or 0
 
@@ -128,11 +134,11 @@ function PlayerTracker.Update(entity, predictionData)
 end
 
 ---Get the best available target data (most recent valid)
----@param entities Entity[] List of potential targets
+---@param inputEntities Entity[] List of potential targets
 ---@return table|nil bestData
 ---@return Entity|nil bestEntity
-function PlayerTracker.GetBestTarget(entities)
-	if not entities or #entities == 0 then
+function PlayerTracker.GetBestTarget(inputEntities)
+	if not inputEntities or #inputEntities == 0 then
 		return nil, nil
 	end
 
@@ -141,7 +147,7 @@ function PlayerTracker.GetBestTarget(entities)
 	local bestEntity = nil
 	local bestTick = -1
 
-	for _, entity in pairs(entities) do
+	for _, entity in pairs(inputEntities) do
 		local data = PlayerTracker.Get(entity)
 		if data and data.lastUpdateTick > bestTick then
 			bestData = data

@@ -123,6 +123,15 @@ local function drawMenu()
 		cfg.AutoFlipViewmodels = TimMenu.Checkbox("Auto Flip Viewmodels", cfg.AutoFlipViewmodels)
 		TimMenu.Tooltip("Sets cl_flipviewmodels based on which side has clearer 200u forward trace")
 		TimMenu.EndSector()
+
+		-- Melee Settings
+		TimMenu.BeginSector("Melee")
+		cfg.AutoTrickstab = TimMenu.Checkbox("Auto Trickstab", cfg.AutoTrickstab)
+		TimMenu.Tooltip("Auto backstab for Spy")
+		TimMenu.NextLine()
+		cfg.AutoWalk = TimMenu.Checkbox("Auto Walk", cfg.AutoWalk)
+		TimMenu.Tooltip("Move towards backstab position")
+		TimMenu.EndSector()
 		TimMenu.NextLine()
 	end
 
@@ -167,6 +176,12 @@ local function drawMenu()
 
 		vis.SelfPrediction = TimMenu.Checkbox("Self Prediction", vis.SelfPrediction or false)
 		TimMenu.Tooltip("Visualize local player movement prediction (uses Player Path style)")
+		TimMenu.NextLine()
+
+		vis.SelfPredictionUseWishdir = TimMenu.Checkbox("Self Use Wishdir", vis.SelfPredictionUseWishdir or false)
+		TimMenu.Tooltip(
+			"Use current keyboard input for self-prediction. Unchecked = use velocity history (enemy style)"
+		)
 		TimMenu.NextLine()
 		TimMenu.EndSector()
 

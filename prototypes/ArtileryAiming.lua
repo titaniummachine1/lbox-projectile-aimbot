@@ -1287,12 +1287,12 @@ local function ExecuteBombardingAim(cmd)
 	end
 
 	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or not pLocal:IsAlive() then
+	if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
 		return
 	end
 
 	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
-	if not pWeapon then
+	if not pWeapon or not pWeapon:IsValid() then
 		return
 	end
 
@@ -1494,12 +1494,12 @@ local function UpdateProjectileSimulation(cmd)
 	cache.isValid = false
 
 	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or pLocal:InCond(7) or not pLocal:IsAlive() then
+	if not pLocal or not pLocal:IsValid() or pLocal:InCond(7) or not pLocal:IsAlive() then
 		return
 	end
 
 	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
-	if not pWeapon then
+	if not pWeapon or not pWeapon:IsValid() then
 		return
 	end
 
@@ -1746,12 +1746,12 @@ callbacks.Register("DoPostScreenSpaceEffects", "ProjCamRender", function()
 	end
 
 	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or not pLocal:IsAlive() then
+	if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
 		return
 	end
 
 	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
-	if not pWeapon or pWeapon:GetWeaponProjectileType() < 2 then
+	if not pWeapon or not pWeapon:IsValid() or pWeapon:GetWeaponProjectileType() < 2 then
 		return
 	end
 
@@ -1775,12 +1775,12 @@ callbacks.Register("CreateMove", "StickySpamFire", function(cmd)
 	end
 
 	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or not pLocal:IsAlive() then
+	if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
 		return
 	end
 
 	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
-	if not pWeapon then
+	if not pWeapon or not pWeapon:IsValid() then
 		return
 	end
 

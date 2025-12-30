@@ -1,8 +1,12 @@
--- Imports
+local GameConstants = require("constants.game_constants")
 local StrafePredictor = require("simulation.history.strafe_predictor")
 
--- Module declaration
+---@class PredictionContext
 local PredictionContext = {}
+
+-- ============================================================================
+-- SECTION 1: SIMULATION CONTEXT
+-- ============================================================================
 
 ---@class SimulationContext
 ---@field sv_gravity number
@@ -12,44 +16,33 @@ local PredictionContext = {}
 ---@field sv_airaccelerate number
 ---@field tickinterval number
 ---@field curtime number
-local SimulationContext = {}
 
 ---Creates a new simulation context with current cvars
 ---@return SimulationContext
 function PredictionContext.createSimulationContext()
 	local _, sv_gravity = client.GetConVar("sv_gravity")
-	assert(sv_gravity, "createContext: client.GetConVar('sv_gravity') returned nil")
-
 	local _, sv_friction = client.GetConVar("sv_friction")
-	assert(sv_friction, "createContext: client.GetConVar('sv_friction') returned nil")
-
 	local _, sv_stopspeed = client.GetConVar("sv_stopspeed")
-	assert(sv_stopspeed, "createContext: client.GetConVar('sv_stopspeed') returned nil")
-
 	local _, sv_accelerate = client.GetConVar("sv_accelerate")
-	assert(sv_accelerate, "createContext: client.GetConVar('sv_accelerate') returned nil")
-
 	local _, sv_airaccelerate = client.GetConVar("sv_airaccelerate")
-	assert(sv_airaccelerate, "createContext: client.GetConVar('sv_airaccelerate') returned nil")
 
-	local tickinterval = globals.TickInterval()
-	assert(tickinterval, "createContext: globals.TickInterval() returned nil")
-	assert(tickinterval > 0, "createContext: tickinterval must be positive")
-
+	local tickinterval = globals.TickInterval() or GameConstants.TICK_INTERVAL
 	local curtime = globals.CurTime()
-	assert(curtime, "createContext: globals.CurTime() returned nil")
-	assert(curtime >= 0, "createContext: curtime must be non-negative")
 
 	return {
-		sv_gravity = sv_gravity,
-		sv_friction = sv_friction,
-		sv_stopspeed = sv_stopspeed,
-		sv_accelerate = sv_accelerate,
-		sv_airaccelerate = sv_airaccelerate,
+		sv_gravity = sv_gravity or GameConstants.SV_GRAVITY,
+		sv_friction = sv_friction or GameConstants.SV_FRICTION,
+		sv_stopspeed = sv_stopspeed or GameConstants.SV_STOPSPEED,
+		sv_accelerate = sv_accelerate or GameConstants.SV_ACCELERATE,
+		sv_airaccelerate = sv_airaccelerate or GameConstants.SV_AIRACCELERATE,
 		tickinterval = tickinterval,
 		curtime = curtime,
 	}
 end
+
+-- ============================================================================
+-- SECTION 2: PLAYER CONTEXT
+-- ============================================================================
 
 ---@class PlayerContext
 ---@field entity Entity
@@ -63,16 +56,7 @@ end
 ---@field yaw number Current eye yaw angle in degrees
 ---@field yawDeltaPerTick number Strafe angle change per tick in degrees
 ---@field relativeWishDir Vector3 Wishdir relative to yaw (forward/side basis)
-local PlayerContext = {}
-
-local DEG2RAD = math.pi / 180
-local RAD2DEG = 180 / math.pi
-
----Normalize angle to [-180, 180]
-local function normalizeAngle(angle)
-	angle = (angle + 180) % 360 - 180
-	return angle
-end
+---@field strafeDir Vector3? Normalized movement direction
 
 ---Get entity eye yaw angle
 local function getEntityEyeYaw(entity)
@@ -86,45 +70,28 @@ local function getEntityEyeYaw(entity)
 			return eyeVec.y
 		end
 	end
-	return nil
+	return 0
 end
 
----Calculate yaw delta per tick from velocity history (using StrafePredictor)
----@param entity Entity
----@return number yawDeltaPerTick in degrees
-local function calculateYawDelta(entity)
-	local index = entity:GetIndex()
-	if not index then
-		return 0
-	end
-
-	-- Use StrafePredictor to get yaw delta per tick in degrees
-	return StrafePredictor.getYawDeltaPerTickDegrees(index, 3)
-end
-
----Calculate fallback relative wishdir from velocity when tracker has no data
----If player is standing still (no horizontal velocity), return zero wishdir (no movement prediction)
+---Calculate fallback relative wishdir from velocity
 ---@param velocity Vector3
 ---@param yaw number
----@return Vector3 relativeWishDir
+---@return Vector3
 local function fallbackRelativeWishDir(velocity, yaw)
 	local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
-	-- CRITICAL: If player is standing still, return zero wishdir - don't predict movement!
-	if horizLen < 50 then
+	if horizLen < GameConstants.STILL_SPEED_THRESHOLD then
 		return Vector3(0, 0, 0)
 	end
 
-	local yawRad = yaw * DEG2RAD
+	local yawRad = yaw * GameConstants.DEG2RAD
 	local cosYaw = math.cos(yawRad)
 	local sinYaw = math.sin(yawRad)
 
-	local forward = Vector3(cosYaw, sinYaw, 0)
-	local right = Vector3(sinYaw, -cosYaw, 0)
+	local velNormX, velNormY = velocity.x / horizLen, velocity.y / horizLen
 
-	local velNorm = Vector3(velocity.x / horizLen, velocity.y / horizLen, 0)
-
-	local relX = forward.x * velNorm.x + forward.y * velNorm.y
-	local relY = right.x * velNorm.x + right.y * velNorm.y
+	-- Project velocity onto forward/right basis
+	local relX = cosYaw * velNormX + sinYaw * velNormY
+	local relY = sinYaw * velNormX - cosYaw * velNormY
 
 	local relLen = math.sqrt(relX * relX + relY * relY)
 	if relLen > 0.001 then

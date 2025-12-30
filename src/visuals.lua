@@ -297,6 +297,32 @@ local function isFaceVisible(normal, faceCenter, eyePos)
 	return dot > 0
 end
 
+-- Get local player's movement intent (relative wishdir) from keyboard
+local function getLocalWishDir()
+	local forward = 0
+	local side = 0
+	-- Standard WASD (ASCII)
+	if input.IsButtonDown(87) then
+		forward = forward + 1
+	end -- W
+	if input.IsButtonDown(83) then
+		forward = forward - 1
+	end -- S
+	if input.IsButtonDown(65) then
+		side = side - 1
+	end -- A
+	if input.IsButtonDown(68) then
+		side = side + 1
+	end -- D
+
+	-- Normalize
+	local len = math.sqrt(forward * forward + side * side)
+	if len > 0 then
+		return Vector3(forward / len, side / len, 0)
+	end
+	return Vector3(0, 0, 0)
+end
+
 -- Private helpers -----
 local function drawPlayerPath(texture, playerPath, thickness)
 	if not playerPath or #playerPath < 2 then
@@ -823,297 +849,49 @@ function Visuals.draw(state)
 			end
 		end
 	end
-	if alphaMul <= 0 then
-		return
-	end
-
 	-- Create texture if needed (fallback to no-op if creation fails)
 	local texture = getWhiteTexture()
 
-	-- Get eye position
-	local eyePos = nil
+	-- Get local player (needed for self-prediction and eye pos)
 	local localPlayer = entities and entities.GetLocalPlayer and entities.GetLocalPlayer()
-	if localPlayer then
-		local origin = localPlayer:GetAbsOrigin()
-		local viewOffset = localPlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
-		if origin and viewOffset then
-			eyePos = origin + viewOffset
-		elseif origin then
-			eyePos = origin
-		end
-	end
 
-	-- Get target info from state
-	local playerPath = state and state.path
-	local projPath = state and state.projpath
-	local playerTime = state and state.timetable
-	local projTime = state and state.projtimetable
-	local predictedOrigin = state and state.predictedOrigin
-	local aimPos = state and state.aimPos
-	local multipointPos = state and state.multipointPos
-	local shotTime = state and state.shotTime
-	local targetEntity = state and state.target
-	-- Determine a best-effort target position for rendering boxes/quads even if paths are missing
-	local curTime = (globals and globals.CurTime and globals.CurTime()) or 0
-	playerPath = filterPathByTime(playerPath, playerTime, curTime, shotTime)
-	-- Don't filter projectile path - it's a future trajectory, not historical data
-	local currentOrigin = (targetEntity and targetEntity.GetAbsOrigin and targetEntity:GetAbsOrigin()) or nil
-	local targetPos = predictedOrigin or lastVec(playerPath) or currentOrigin
-
-	-- Draw player path with swing prediction style (world-space drawing)
-	if vis.DrawPlayerPath and playerPath and #playerPath > 1 then
-		local r, g, b, a = getColor(vis, "PlayerPath", 180)
-		a = math.floor(a * alphaMul)
-
-		local style = (vis.PlayerPathStyle or 1) - 2
-		-- Validate style is in range 1-6
-		if type(style) ~= "number" or style < 1 or style > 6 then
-			style = 6 -- Default to simple line
-		end
-		local width = vis.PathWidth or vis.Thickness.PlayerPath or 5
-
-		-- Skip every N points to reduce draw calls (performance)
-		local step = math.max(1, math.floor(#playerPath / 60))
-
-		if style == 1 then
-			-- Arrows Style (was style 3)
-			for i = 1, #playerPath - step, step do
-				local startPos = playerPath[i]
-				local endPos = playerPath[math.min(i + step, #playerPath)]
-				if startPos and endPos then
-					draw.Color(r, g, b, a)
-					arrowPathArrow(startPos, endPos, width)
-				end
-			end
-		elseif style == 2 then
-			-- ArrowPath Style
-			local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
-			for i = 1, #playerPath - step, step do
-				local startPos = playerPath[i]
-				local endPos = playerPath[math.min(i + step, #playerPath)]
-				if startPos and endPos then
-					draw.Color(r, g, b, a)
-					local leftBase, rightBase = arrowPathArrow2(startPos, endPos, width)
-					if leftBase and rightBase then
-						local screenLeftBase = client.WorldToScreen(leftBase)
-						local screenRightBase = client.WorldToScreen(rightBase)
-						if screenLeftBase and screenRightBase then
-							if lastLeftBaseScreen and lastRightBaseScreen then
-								draw.Color(r, g, b, a)
-								draw.Line(
-									lastLeftBaseScreen[1],
-									lastLeftBaseScreen[2],
-									screenLeftBase[1],
-									screenLeftBase[2]
-								)
-								draw.Line(
-									lastRightBaseScreen[1],
-									lastRightBaseScreen[2],
-									screenRightBase[1],
-									screenRightBase[2]
-								)
-							end
-							lastLeftBaseScreen = screenLeftBase
-							lastRightBaseScreen = screenRightBase
-						end
-					end
-				end
-			end
-		elseif style == 3 then
-			-- Pavement Style (was style 1)
-			local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
-			for i = 1, #playerPath - step, step do
-				local startPos = playerPath[i]
-				local endPos = playerPath[math.min(i + step, #playerPath)]
-				if startPos and endPos then
-					draw.Color(r, g, b, a)
-					local leftBase, rightBase = drawPavement(startPos, endPos, width)
-					if leftBase and rightBase then
-						local screenLeftBase = client.WorldToScreen(leftBase)
-						local screenRightBase = client.WorldToScreen(rightBase)
-						if screenLeftBase and screenRightBase then
-							if lastLeftBaseScreen and lastRightBaseScreen then
-								draw.Color(r, g, b, a)
-								draw.Line(
-									lastLeftBaseScreen[1],
-									lastLeftBaseScreen[2],
-									screenLeftBase[1],
-									screenLeftBase[2]
-								)
-								draw.Line(
-									lastRightBaseScreen[1],
-									lastRightBaseScreen[2],
-									screenRightBase[1],
-									screenRightBase[2]
-								)
-							end
-							lastLeftBaseScreen = screenLeftBase
-							lastRightBaseScreen = screenRightBase
-						end
-					end
-				end
-			end
-			if lastLeftBaseScreen and lastRightBaseScreen then
-				local finalPos = playerPath[#playerPath]
-				local screenFinalPos = client.WorldToScreen(finalPos)
-				if screenFinalPos then
-					draw.Color(r, g, b, a)
-					draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
-					draw.Line(lastRightBaseScreen[1], lastRightBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
-				end
-			end
-		elseif style == 4 then
-			-- L Line Style
-			for i = 1, #playerPath - step, step do
-				local pos1 = playerPath[i]
-				local pos2 = playerPath[math.min(i + step, #playerPath)]
-				if pos1 and pos2 then
-					draw.Color(r, g, b, a)
-					L_line(pos1, pos2, width)
-				end
-			end
-		elseif style == 5 then
-			-- Dashed Line Style (draw odd lines only)
-			local dashIdx = 0
-			for i = 1, #playerPath - step, step do
-				local pos1 = playerPath[i]
-				local pos2 = playerPath[math.min(i + step, #playerPath)]
-				local screenPos1 = client.WorldToScreen(pos1)
-				local screenPos2 = client.WorldToScreen(pos2)
-				if screenPos1 and screenPos2 and dashIdx % 2 == 1 then
-					draw.Color(r, g, b, a)
-					draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
-				end
-				dashIdx = dashIdx + 1
-			end
-		else
-			-- Simple Line Style (style == 6 or default)
-			for i = 1, #playerPath - step, step do
-				local pos1 = playerPath[i]
-				local pos2 = playerPath[math.min(i + step, #playerPath)]
-				local screenPos1 = client.WorldToScreen(pos1)
-				local screenPos2 = client.WorldToScreen(pos2)
-				if screenPos1 and screenPos2 then
-					draw.Color(r, g, b, a)
-					draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
-				end
-			end
-		end
-	end
-
-	-- Draw bounding box
-	local boxOrigin = predictedOrigin or currentOrigin or targetPos
-	if vis.DrawBoundingBox and boxOrigin and targetEntity and eyePos then
-		local r, g, b, a = getColor(vis, "BoundingBox", 120)
-		a = math.floor(a * alphaMul)
-		draw.Color(r, g, b, a)
-		drawPlayerHitbox(
-			texture,
-			boxOrigin,
-			targetEntity:GetMins(),
-			targetEntity:GetMaxs(),
-			eyePos,
-			vis.Thickness.BoundingBox
-		)
-	end
-
-	-- Draw projectile path with simple line style
-	if vis.DrawProjectilePath and projPath and #projPath > 0 then
-		local startR, startG, startB, startA = getColor(vis, "ProjectilePathStart", 60)
-		local endR, endG, endB, endA = getColor(vis, "ProjectilePathEnd", 60)
-		local startColor = {
-			math.floor(startR + 0.5),
-			math.floor(startG + 0.5),
-			math.floor(startB + 0.5),
-			startA,
-		}
-		local endColor = {
-			math.floor(endR + 0.5),
-			math.floor(endG + 0.5),
-			math.floor(endB + 0.5),
-			endA,
-		}
-		drawProjPath(texture, projPath, vis.Thickness.ProjectilePath, startColor, endColor, alphaMul)
-	end
-
-	local debugDuration = (vis.ShowMultipointDebug and (vis.MultipointDebugDuration or 0)) or 0
-	local dbgToDraw = nil
-	if debugDuration > 0 and multipoint and multipoint.debugPersist and multipoint.debugPersist.state then
-		local now = (globals and globals.RealTime and globals.RealTime()) or 0
-		local age = now - (multipoint.debugPersist.time or 0)
-		if age >= 0 and age <= debugDuration then
-			dbgToDraw = multipoint.debugPersist.state
-		end
-	end
-
-	-- Draw multipoint target
-	if vis.DrawMultipointTarget then
-		local r, g, b, a = getColor(vis, "MultipointTarget", 0)
-		a = math.floor(a * alphaMul)
-		draw.Color(r, g, b, a)
-		local markPos = aimPos or multipointPos
-		if markPos then
-			drawMultipointTarget(texture, markPos, vis.Thickness.MultipointTarget)
-		end
-		if dbgToDraw then
-			drawMultipointDebug(texture, vis.Thickness.MultipointTarget * 0.5, dbgToDraw)
-		end
-	end
-
-	-- Draw quads
-	if vis.DrawQuads and boxOrigin and targetEntity and eyePos then
-		local r, g, b, a = getColor(vis, "Quads", 240, 25)
-		a = math.floor(a * alphaMul)
-		local baseColor = { r = r, g = g, b = b, a = a }
-
-		drawQuads(texture, boxOrigin, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, baseColor)
-	end
-
-	-- Draw impact/last projectile point for quick visibility when path is short
-	if vis.DrawProjectilePath and projPath and #projPath >= 1 then
-		local impactPos = projPath[#projPath]
-		local r, g, b, a = getColor(vis, "ProjectilePath", 60)
-		a = math.floor(a * alphaMul)
-		draw.Color(r, g, b, a)
-		drawImpactDot(texture, impactPos, vis.Thickness.ProjectilePath * 2)
-	end
-
-	-- Draw self-prediction (local player movement prediction - uses same style as player path)
-	-- Uses cache to avoid simulating every frame (expensive)
+	-- Draw self-prediction (local player movement prediction)
+	-- This draws even if aimbot has no target, and is not affected by target fade-out
 	if vis.SelfPrediction and localPlayer then
 		local isAlive = localPlayer.IsAlive and localPlayer:IsAlive()
 		if isAlive then
 			local now = globals.RealTime()
-			local needsUpdate = (now - selfPredCache.lastUpdateTime) >= selfPredCache.updateInterval
-
-			if needsUpdate then
-				local success, err = pcall(function()
-					local playerCtx = PredictionContext.createPlayerContext(localPlayer, 1.0)
-					local simCtx = PredictionContext.createSimulationContext()
-					if playerCtx and simCtx then
-						selfPredCache.path = PlayerTick.simulatePath(playerCtx, simCtx, 1.0)
-						selfPredCache.lastUpdateTime = now
-					end
-				end)
-				if not success then
-					printc(255, 100, 100, 255, "[Visuals] Self-prediction error: " .. tostring(err))
+			-- Simulate every frame for debugging
+			local success, err = pcall(function()
+				local relativeWishDir = nil
+				if vis.SelfPredictionUseWishdir then
+					relativeWishDir = getLocalWishDir()
 				end
+
+				local playerCtx = PredictionContext.createPlayerContext(localPlayer, relativeWishDir)
+				local simCtx = PredictionContext.createSimulationContext()
+				if playerCtx and simCtx then
+					selfPredCache.path = PlayerTick.simulatePath(playerCtx, simCtx, 1.0)
+					selfPredCache.lastUpdateTime = now
+				end
+			end)
+			if not success then
+				printc(255, 100, 100, 255, "[Visuals] Self-prediction error: " .. tostring(err))
 			end
 
 			local selfPath = selfPredCache.path
 			if selfPath and #selfPath > 1 then
 				local r, g, b, a = getColor(vis, "SelfPrediction", 300)
-				a = math.floor(a * alphaMul)
+				-- No alphaMul scaling for self-prediction
 
 				local style = (vis.PlayerPathStyle or 1) - 2
 				if type(style) ~= "number" or style < 1 or style > 6 then
-					style = 6 -- Default to simple line
+					style = 6
 				end
 				local width = vis.PathWidth or vis.Thickness.SelfPrediction or 3
 				local step = math.max(1, math.floor(#selfPath / 30))
 
 				if style == 1 then
-					-- Arrows Style (swapped with style 3)
 					for i = 1, #selfPath - step, step do
 						local startPos = selfPath[i]
 						local endPos = selfPath[math.min(i + step, #selfPath)]
@@ -1123,7 +901,6 @@ function Visuals.draw(state)
 						end
 					end
 				elseif style == 2 then
-					-- ArrowPath Style
 					local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
 					for i = 1, #selfPath - step, step do
 						local startPos = selfPath[i]
@@ -1157,7 +934,6 @@ function Visuals.draw(state)
 						end
 					end
 				elseif style == 3 then
-					-- Pavement Style (swapped with style 1)
 					local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
 					for i = 1, #selfPath - step, step do
 						local startPos = selfPath[i]
@@ -1191,7 +967,6 @@ function Visuals.draw(state)
 						end
 					end
 				elseif style == 4 then
-					-- L Line Style
 					for i = 1, #selfPath - step, step do
 						local pos1 = selfPath[i]
 						local pos2 = selfPath[math.min(i + step, #selfPath)]
@@ -1201,7 +976,6 @@ function Visuals.draw(state)
 						end
 					end
 				elseif style == 5 then
-					-- Dashed Line Style (draw odd lines only)
 					local dashIdx = 0
 					for i = 1, #selfPath - step, step do
 						local pos1 = selfPath[i]
@@ -1215,7 +989,6 @@ function Visuals.draw(state)
 						dashIdx = dashIdx + 1
 					end
 				else
-					-- Simple Line Style (style == 6 or default)
 					for i = 1, #selfPath - step, step do
 						local pos1 = selfPath[i]
 						local pos2 = selfPath[math.min(i + step, #selfPath)]
@@ -1231,8 +1004,260 @@ function Visuals.draw(state)
 		end
 	end
 
-	-- Draw Local Projectile Prediction
-	-- Handled by src/visuals/local_projectile.lua independently
+	-- Target-specific visuals (paths, boxes, etc.)
+	-- These fade out when the aimbot doesn't have an active target
+	if alphaMul > 0 then
+		-- Get eye position (needed for target boxes/quads)
+		local eyePos = nil
+		if localPlayer then
+			local origin = localPlayer:GetAbsOrigin()
+			local viewOffset = localPlayer:GetPropVector("localdata", "m_vecViewOffset[0]")
+			if origin and viewOffset then
+				eyePos = origin + viewOffset
+			elseif origin then
+				eyePos = origin
+			end
+		end
+
+		-- Get target info from state
+		local playerPath = state and state.path
+		local projPath = state and state.projpath
+		local playerTime = state and state.timetable
+		local projTime = state and state.projtimetable
+		local predictedOrigin = state and state.predictedOrigin
+		local aimPos = state and state.aimPos
+		local multipointPos = state and state.multipointPos
+		local shotTime = state and state.shotTime
+		local targetEntity = state and state.target
+
+		-- Determine a best-effort target position for rendering boxes/quads even if paths are missing
+		local curTime = (globals and globals.CurTime and globals.CurTime()) or 0
+		playerPath = filterPathByTime(playerPath, playerTime, curTime, shotTime)
+		-- Don't filter projectile path - it's a future trajectory, not historical data
+		local currentOrigin = (targetEntity and targetEntity.GetAbsOrigin and targetEntity:GetAbsOrigin()) or nil
+		local targetPos = predictedOrigin or lastVec(playerPath) or currentOrigin
+
+		-- Draw player path with swing prediction style (world-space drawing)
+		if vis.DrawPlayerPath and playerPath and #playerPath > 1 then
+			local r, g, b, a = getColor(vis, "PlayerPath", 180)
+			a = math.floor(a * alphaMul)
+
+			local style = (vis.PlayerPathStyle or 1) - 2
+			-- Validate style is in range 1-6
+			if type(style) ~= "number" or style < 1 or style > 6 then
+				style = 6 -- Default to simple line
+			end
+			local width = vis.PathWidth or vis.Thickness.PlayerPath or 5
+
+			-- Skip every N points to reduce draw calls (performance)
+			local step = math.max(1, math.floor(#playerPath / 60))
+
+			if style == 1 then
+				-- Arrows Style (was style 3)
+				for i = 1, #playerPath - step, step do
+					local startPos = playerPath[i]
+					local endPos = playerPath[math.min(i + step, #playerPath)]
+					if startPos and endPos then
+						draw.Color(r, g, b, a)
+						arrowPathArrow(startPos, endPos, width)
+					end
+				end
+			elseif style == 2 then
+				-- ArrowPath Style
+				local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
+				for i = 1, #playerPath - step, step do
+					local startPos = playerPath[i]
+					local endPos = playerPath[math.min(i + step, #playerPath)]
+					if startPos and endPos then
+						draw.Color(r, g, b, a)
+						local leftBase, rightBase = arrowPathArrow2(startPos, endPos, width)
+						if leftBase and rightBase then
+							local screenLeftBase = client.WorldToScreen(leftBase)
+							local screenRightBase = client.WorldToScreen(rightBase)
+							if screenLeftBase and screenRightBase then
+								if lastLeftBaseScreen and lastRightBaseScreen then
+									draw.Color(r, g, b, a)
+									draw.Line(
+										lastLeftBaseScreen[1],
+										lastLeftBaseScreen[2],
+										screenLeftBase[1],
+										screenLeftBase[2]
+									)
+									draw.Line(
+										lastRightBaseScreen[1],
+										lastRightBaseScreen[2],
+										screenRightBase[1],
+										screenRightBase[2]
+									)
+								end
+								lastLeftBaseScreen = screenLeftBase
+								lastRightBaseScreen = screenRightBase
+							end
+						end
+					end
+				end
+			elseif style == 3 then
+				-- Pavement Style (was style 1)
+				local lastLeftBaseScreen, lastRightBaseScreen = nil, nil
+				for i = 1, #playerPath - step, step do
+					local startPos = playerPath[i]
+					local endPos = playerPath[math.min(i + step, #playerPath)]
+					if startPos and endPos then
+						draw.Color(r, g, b, a)
+						local leftBase, rightBase = drawPavement(startPos, endPos, width)
+						if leftBase and rightBase then
+							local screenLeftBase = client.WorldToScreen(leftBase)
+							local screenRightBase = client.WorldToScreen(rightBase)
+							if screenLeftBase and screenRightBase then
+								if lastLeftBaseScreen and lastRightBaseScreen then
+									draw.Color(r, g, b, a)
+									draw.Line(
+										lastLeftBaseScreen[1],
+										lastLeftBaseScreen[2],
+										screenLeftBase[1],
+										screenLeftBase[2]
+									)
+									draw.Line(
+										lastRightBaseScreen[1],
+										lastRightBaseScreen[2],
+										screenRightBase[1],
+										screenRightBase[2]
+									)
+								end
+								lastLeftBaseScreen = screenLeftBase
+								lastRightBaseScreen = screenRightBase
+							end
+						end
+					end
+				end
+				if lastLeftBaseScreen and lastRightBaseScreen then
+					local finalPos = playerPath[#playerPath]
+					local screenFinalPos = client.WorldToScreen(finalPos)
+					if screenFinalPos then
+						draw.Color(r, g, b, a)
+						draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
+						draw.Line(lastRightBaseScreen[1], lastRightBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
+					end
+				end
+			elseif style == 4 then
+				-- L Line Style
+				for i = 1, #playerPath - step, step do
+					local pos1 = playerPath[i]
+					local pos2 = playerPath[math.min(i + step, #playerPath)]
+					if pos1 and pos2 then
+						draw.Color(r, g, b, a)
+						L_line(pos1, pos2, width)
+					end
+				end
+			elseif style == 5 then
+				-- Dashed Line Style (draw odd lines only)
+				local dashIdx = 0
+				for i = 1, #playerPath - step, step do
+					local pos1 = playerPath[i]
+					local pos2 = playerPath[math.min(i + step, #playerPath)]
+					local screenPos1 = client.WorldToScreen(pos1)
+					local screenPos2 = client.WorldToScreen(pos2)
+					if screenPos1 and screenPos2 and dashIdx % 2 == 1 then
+						draw.Color(r, g, b, a)
+						draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
+					end
+					dashIdx = dashIdx + 1
+				end
+			else
+				-- Simple Line Style (style == 6 or default)
+				for i = 1, #playerPath - step, step do
+					local pos1 = playerPath[i]
+					local pos2 = playerPath[math.min(i + step, #playerPath)]
+					local screenPos1 = client.WorldToScreen(pos1)
+					local screenPos2 = client.WorldToScreen(pos2)
+					if screenPos1 and screenPos2 then
+						draw.Color(r, g, b, a)
+						draw.Line(screenPos1[1], screenPos1[2], screenPos2[1], screenPos2[2])
+					end
+				end
+			end
+		end
+
+		-- Draw bounding box
+		local boxOrigin = predictedOrigin or currentOrigin or targetPos
+		if vis.DrawBoundingBox and boxOrigin and targetEntity and eyePos then
+			local r, g, b, a = getColor(vis, "BoundingBox", 120)
+			a = math.floor(a * alphaMul)
+			draw.Color(r, g, b, a)
+			drawPlayerHitbox(
+				texture,
+				boxOrigin,
+				targetEntity:GetMins(),
+				targetEntity:GetMaxs(),
+				eyePos,
+				vis.Thickness.BoundingBox
+			)
+		end
+
+		-- Draw projectile path with simple line style
+		if vis.DrawProjectilePath and projPath and #projPath > 0 then
+			local startR, startG, startB, startA = getColor(vis, "ProjectilePathStart", 60)
+			local endR, endG, endB, endA = getColor(vis, "ProjectilePathEnd", 60)
+			local startColor = {
+				math.floor(startR + 0.5),
+				math.floor(startG + 0.5),
+				math.floor(startB + 0.5),
+				startA,
+			}
+			local endColor = {
+				math.floor(endR + 0.5),
+				math.floor(endG + 0.5),
+				math.floor(endB + 0.5),
+				endA,
+			}
+			drawProjPath(texture, projPath, vis.Thickness.ProjectilePath, startColor, endColor, alphaMul)
+		end
+
+		local debugDuration = (vis.ShowMultipointDebug and (vis.MultipointDebugDuration or 0)) or 0
+		local dbgToDraw = nil
+		if debugDuration > 0 and multipoint and multipoint.debugPersist and multipoint.debugPersist.state then
+			local now = (globals and globals.RealTime and globals.RealTime()) or 0
+			local age = now - (multipoint.debugPersist.time or 0)
+			if age >= 0 and age <= debugDuration then
+				dbgToDraw = multipoint.debugPersist.state
+			end
+		end
+
+		-- Draw multipoint target
+		if vis.DrawMultipointTarget then
+			local r, g, b, a = getColor(vis, "MultipointTarget", 0)
+			a = math.floor(a * alphaMul)
+			draw.Color(r, g, b, a)
+			local markPos = aimPos or multipointPos
+			if markPos then
+				drawMultipointTarget(texture, markPos, vis.Thickness.MultipointTarget)
+			end
+			if dbgToDraw then
+				drawMultipointDebug(texture, vis.Thickness.MultipointTarget * 0.5, dbgToDraw)
+			end
+		end
+
+		-- Draw quads
+		if vis.DrawQuads and boxOrigin and targetEntity and eyePos then
+			local r, g, b, a = getColor(vis, "Quads", 240, 25)
+			a = math.floor(a * alphaMul)
+			local baseColor = { r = r, g = g, b = b, a = a }
+
+			drawQuads(texture, boxOrigin, targetEntity:GetMins(), targetEntity:GetMaxs(), eyePos, baseColor)
+		end
+
+		-- Draw impact/last projectile point for quick visibility when path is short
+		if vis.DrawProjectilePath and projPath and #projPath >= 1 then
+			local impactPos = projPath[#projPath]
+			local r, g, b, a = getColor(vis, "ProjectilePath", 60)
+			a = math.floor(a * alphaMul)
+			draw.Color(r, g, b, a)
+			drawImpactDot(texture, impactPos, vis.Thickness.ProjectilePath * 2)
+		end
+
+		-- Draw Local Projectile Prediction
+		-- Handled by src/visuals/local_projectile.lua independently
+	end
 end
 
 return Visuals
