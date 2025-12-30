@@ -11,15 +11,36 @@ local velocityHistory = {}
 ---@param entityIndex integer
 ---@param velocity Vector3
 ---@param maxSamples integer
-function StrafePredictor.recordVelocity(entityIndex, velocity, maxSamples)
+---@param relativeWishdir Vector3? Optional current relative wishdir
+function StrafePredictor.recordVelocity(entityIndex, velocity, maxSamples, relativeWishdir)
 	assert(entityIndex, "StrafePredictor: entityIndex is nil")
 	assert(velocity, "StrafePredictor: velocity is nil")
 
 	if not velocityHistory[entityIndex] then
-		velocityHistory[entityIndex] = {}
+		velocityHistory[entityIndex] = {
+			history = {},
+			lastWishdir = nil,
+		}
 	end
 
-	local history = velocityHistory[entityIndex]
+	local state = velocityHistory[entityIndex]
+	local history = state.history
+
+	-- Check for significant wishdir change (> 90 degrees)
+	if relativeWishdir and state.lastWishdir then
+		local dot = relativeWishdir:Dot(state.lastWishdir)
+		-- Dot product < 0 means angle > 90 degrees
+		if dot < -0.01 then
+			-- Clear history on sudden direction change
+			state.history = {}
+			history = state.history
+		end
+	end
+
+	-- Update last wishdir
+	if relativeWishdir then
+		state.lastWishdir = Vector3(relativeWishdir:Unpack())
+	end
 
 	-- Add to front of list
 	table.insert(history, 1, Vector3(velocity:Unpack()))
@@ -67,10 +88,12 @@ end
 ---@param minSamples integer Minimum samples required
 ---@return number? avgYawChange Average yaw change in radians (nil if insufficient data)
 function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
-	local history = velocityHistory[entityIndex]
-	if not history or #history < (minSamples or 3) then
+	local state = velocityHistory[entityIndex]
+	if not state or not state.history or #state.history < (minSamples or 3) then
 		return nil
 	end
+
+	local history = state.history
 
 	local totalYawChange = 0
 	local samples = 0
@@ -93,8 +116,11 @@ function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
 				diff = diff + 2 * math.pi
 			end
 
-			totalYawChange = totalYawChange + diff
-			samples = samples + 1
+			-- Ignore samples with delta > 90 degrees (not a smooth strafe)
+			if math.abs(diff) < (math.pi / 2) then
+				totalYawChange = totalYawChange + diff
+				samples = samples + 1
+			end
 		end
 	end
 
@@ -137,23 +163,9 @@ function StrafePredictor.getYawDeltaPerTickDegrees(entityIndex, minSamples)
 	return avgYawChangeRad * GameConstants.RAD2DEG
 end
 
----Updates velocity history for all active players
----@param entities table List of entities to track
----@param maxSamples integer
-function StrafePredictor.updateAll(entities, maxSamples)
-	StrafePredictor.cleanupStalePlayers()
-
-	for _, entity in pairs(entities) do
-		if entity:IsAlive() and not entity:IsDormant() then
-			local velocity = entity:EstimateAbsVelocity()
-			if velocity and velocity:Length2D() > 1 then
-				StrafePredictor.recordVelocity(entity:GetIndex(), velocity, maxSamples)
-			end
-		else
-			-- Clear history for dead/dormant players
-			StrafePredictor.clearHistory(entity:GetIndex())
-		end
-	end
+---Clears all velocity history
+function StrafePredictor.clearAllHistory()
+	velocityHistory = {}
 end
 
 return StrafePredictor

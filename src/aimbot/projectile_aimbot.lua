@@ -385,7 +385,6 @@ function ProjectileAimbot.Run(cmd, plocal, weapon, info)
 			historyPlayers[#historyPlayers + 1] = topK[i].entity
 		end
 	end
-	StrafePredictor.updateAll(historyPlayers, 10)
 	WishdirTracker.updateTop(plocal, historyPlayers, trackedCount * 2)
 
 	-- 5. Prediction Loop (Simplified for now, aiming for parity with main.lua)

@@ -1,5 +1,4 @@
 local GameConstants = require("constants.game_constants")
-local StrafePredictor = require("simulation.history.strafe_predictor")
 
 ---@class PredictionContext
 local PredictionContext = {}
@@ -20,11 +19,11 @@ local PredictionContext = {}
 ---Creates a new simulation context with current cvars
 ---@return SimulationContext
 function PredictionContext.createSimulationContext()
-	local _, sv_gravity = client.GetConVar("sv_gravity")
-	local _, sv_friction = client.GetConVar("sv_friction")
-	local _, sv_stopspeed = client.GetConVar("sv_stopspeed")
-	local _, sv_accelerate = client.GetConVar("sv_accelerate")
-	local _, sv_airaccelerate = client.GetConVar("sv_airaccelerate")
+	local sv_gravity = client.GetConVar("sv_gravity")
+	local sv_friction = client.GetConVar("sv_friction")
+	local sv_stopspeed = client.GetConVar("sv_stopspeed")
+	local sv_accelerate = client.GetConVar("sv_accelerate")
+	local sv_airaccelerate = client.GetConVar("sv_airaccelerate")
 
 	local tickinterval = globals.TickInterval() or GameConstants.TICK_INTERVAL
 	local curtime = globals.CurTime()
@@ -78,27 +77,19 @@ end
 ---@param yaw number
 ---@return Vector3
 local function fallbackRelativeWishDir(velocity, yaw)
-	local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
-	if horizLen < GameConstants.STILL_SPEED_THRESHOLD then
-		return Vector3(0, 0, 0)
-	end
-
-	local yawRad = yaw * GameConstants.DEG2RAD
-	local cosYaw = math.cos(yawRad)
-	local sinYaw = math.sin(yawRad)
-
-	local velNormX, velNormY = velocity.x / horizLen, velocity.y / horizLen
-
-	-- Project velocity onto forward/right basis
-	local relX = cosYaw * velNormX + sinYaw * velNormY
-	local relY = sinYaw * velNormX - cosYaw * velNormY
-
-	local relLen = math.sqrt(relX * relX + relY * relY)
-	if relLen > 0.001 then
-		return Vector3(relX / relLen, relY / relLen, 0)
-	end
-
 	return Vector3(0, 0, 0)
+end
+
+---Calculate yaw delta per tick from velocity history
+---@param entity Entity
+---@return number yawDeltaPerTick in degrees
+local function calculateYawDelta(entity)
+	local index = entity:GetIndex()
+	if not index then
+		return 0
+	end
+	local StrafePredictor = require("simulation.history.strafe_predictor")
+	return StrafePredictor.getYawDeltaPerTickDegrees(index, 3)
 end
 
 ---Creates a player context from entity
@@ -127,11 +118,11 @@ function PredictionContext.createPlayerContext(entity, relativeWishDir)
 
 	local originWithOffset = origin + Vector3(0, 0, 1)
 
-	local yaw = getEntityEyeYaw(entity) or 0
+	local yaw = getEntityEyeYaw(entity)
 	local yawDeltaPerTick = calculateYawDelta(entity)
 
 	if not relativeWishDir then
-		relativeWishDir = fallbackRelativeWishDir(velocity, yaw)
+		relativeWishDir = Vector3(0, 0, 0)
 	end
 
 	return {
@@ -173,7 +164,7 @@ function PredictionContext.createProjectileContext(info, startPos, angle, charge
 	assert(angle, "createProjectileContext: angle is nil")
 	assert(localTeam, "createProjectileContext: localTeam is nil")
 
-	local _, sv_gravity = client.GetConVar("sv_gravity")
+	local sv_gravity = client.GetConVar("sv_gravity")
 	assert(sv_gravity, "createProjectileContext: client.GetConVar('sv_gravity') returned nil")
 
 	local gravityMod = 0

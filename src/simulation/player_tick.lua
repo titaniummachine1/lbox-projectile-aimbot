@@ -113,23 +113,21 @@ PlayerTick.rotateDirByAngle = rotateDirByAngle
 PlayerTick.dirToYaw = dirToYaw
 PlayerTick.yawToDir = yawToDir
 
----Convert yaw-relative wishdir to world-space wishdir
----@param relWishDir Vector3
----@param yaw number
----@return Vector3
 local function relativeToWorldWishDir(relWishDir, yaw)
 	local yawRad = yaw * GameConstants.DEG2RAD
 	local cosYaw = math.cos(yawRad)
 	local sinYaw = math.sin(yawRad)
 
-	local worldX = cosYaw * relWishDir.x + sinYaw * relWishDir.y
-	local worldY = sinYaw * relWishDir.x - cosYaw * relWishDir.y
+	-- Source: Forward = [cos, sin], Left = [-sin, cos]
+	-- world_wishdir = world_forward * relX + world_left * relY
+	local worldX = cosYaw * relWishDir.x - sinYaw * relWishDir.y
+	local worldY = sinYaw * relWishDir.x + cosYaw * relWishDir.y
 
 	local len = math.sqrt(worldX * worldX + worldY * worldY)
 	if len > 0.001 then
 		return Vector3(worldX / len, worldY / len, 0)
 	end
-	return Vector3(cosYaw, sinYaw, 0)
+	return Vector3(0, 0, 0)
 end
 
 -- ============================================================================
@@ -488,63 +486,19 @@ end
 ---@return Vector3 newOrigin
 function PlayerTick.simulateTick(playerCtx, simCtx)
 	local tickinterval = simCtx.tickinterval
-	local speed2d = length2D(playerCtx.velocity)
-
-	-- Resolve strafeDir
-	if not playerCtx.strafeDir then
-		if speed2d > 0.1 then
-			playerCtx.strafeDir = Vector3(playerCtx.velocity.x / speed2d, playerCtx.velocity.y / speed2d, 0)
-		else
-			playerCtx.strafeDir = yawToDir(playerCtx.yaw)
-		end
-	end
-
-	-- Update yaw and strafeDir
 	local yawDelta = playerCtx.yawDeltaPerTick or 0
-	if math.abs(yawDelta) > 0.001 then
-		playerCtx.yaw = playerCtx.yaw + yawDelta
-		rotateDirByAngle(playerCtx.strafeDir, yawDelta)
-	end
 
-	-- Ghost movement suppression
-	if speed2d > GameConstants.STILL_SPEED_THRESHOLD then
-		local testDist = speed2d * tickinterval
-		local testPos = Vector3(
-			playerCtx.origin.x + playerCtx.strafeDir.x * testDist,
-			playerCtx.origin.y + playerCtx.strafeDir.y * testDist,
-			playerCtx.origin.z
-		)
-		local trace = engine.TraceHull(
-			playerCtx.origin,
-			testPos,
-			playerCtx.mins,
-			playerCtx.maxs,
-			GameConstants.MASK_PLAYERSOLID,
-			function(ent)
-				return ent:GetIndex() ~= playerCtx.index
-			end
-		)
-		if trace.fraction > 0.95 then
-			playerCtx.velocity.x = playerCtx.strafeDir.x * speed2d
-			playerCtx.velocity.y = playerCtx.strafeDir.y * speed2d
-		end
-	end
-
-	-- Resolve wishdir
-	local wishdir = relativeToWorldWishDir(playerCtx.relativeWishDir, playerCtx.yaw)
-	if playerCtx.relativeWishDir:LengthSqr() < 0.001 then
-		wishdir = Vector3(playerCtx.strafeDir.x, playerCtx.strafeDir.y, 0)
-	end
-
-	-- Physics
+	-- Phase 1: Friction
 	local is_on_ground =
 		checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
 	if is_on_ground and playerCtx.velocity.z < 0 then
 		playerCtx.velocity.z = 0
 	end
-
 	friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
 	checkVelocity(playerCtx.velocity)
+
+	-- Phase 2: Wishdir & Acceleration
+	local wishdir = relativeToWorldWishDir(playerCtx.relativeWishDir, playerCtx.yaw)
 
 	if not is_on_ground then
 		playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
@@ -564,6 +518,21 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 		)
 	end
 
+	-- Phase 3: Strafe Prediction (Velocity Rotation)
+	-- "strafe pred only rotates current vector of velocity it does nothing else"
+	if math.abs(yawDelta) > 0.001 then
+		local speed2d = length2D(playerCtx.velocity)
+		if speed2d > 0.1 then
+			local velYaw = math.atan(playerCtx.velocity.y, playerCtx.velocity.x)
+			local newVelYaw = velYaw + (yawDelta * GameConstants.DEG2RAD)
+			playerCtx.velocity.x = math.cos(newVelYaw) * speed2d
+			playerCtx.velocity.y = math.sin(newVelYaw) * speed2d
+		end
+		-- Update yaw for next tick's wishdir rotation
+		playerCtx.yaw = playerCtx.yaw + yawDelta
+	end
+
+	-- Phase 4: Movement (Collision)
 	if is_on_ground then
 		playerCtx.origin = stepMove(
 			playerCtx.origin,
@@ -586,11 +555,14 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 		)
 	end
 
-	if not is_on_ground then
+	-- Phase 5: Re-calculate ground state and final gravity
+	local new_on_ground =
+		checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
+	if not new_on_ground then
 		playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
 	end
 
-	return Vector3(playerCtx.origin.x, playerCtx.origin.y, playerCtx.origin.z)
+	return Vector3(playerCtx.origin:Unpack())
 end
 
 function PlayerTick.simulatePath(playerCtx, simCtx, time_seconds)
@@ -602,10 +574,7 @@ function PlayerTick.simulatePath(playerCtx, simCtx, time_seconds)
 	path[1] = Vector3(playerCtx.origin.x, playerCtx.origin.y, playerCtx.origin.z)
 	timetable[1] = (simCtx.curtime or globals.CurTime())
 	local lastOrigin = path[1]
-
-	if length2D(playerCtx.velocity) <= 0.01 and math.abs(playerCtx.yawDeltaPerTick or 0) < 0.001 then
-		return path, lastOrigin, timetable
-	end
+	-- Always simulate path as requested for debugging/visual clarity
 
 	while clock < time_seconds do
 		local newOrigin = PlayerTick.simulateTick(playerCtx, simCtx)

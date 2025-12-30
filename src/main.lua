@@ -3,14 +3,22 @@ local G = require("globals")
 local Config = require("config")
 local Menu = require("menu")
 local Visuals = require("visuals")
-local GetProjectileInfo = require("projectile_info")
+local ProjectileInfo = require("projectile_info")
 local TickProfiler = require("tick_profiler")
 local PlayerTracker = require("player_tracker")
 local FastPlayers = require("utils.fast_players")
+local StrafePredictor = require("simulation.history.strafe_predictor")
 local AimbotManager = require("aimbot.aimbot_manager")
 local utils = {
 	weapon = require("utils.weapon_utils"),
 }
+
+-- ConVars (used for prediction/simulation)
+local sv_gravity = client.GetConVar("sv_gravity")
+local sv_friction = client.GetConVar("sv_friction")
+local sv_stopspeed = client.GetConVar("sv_stopspeed")
+local sv_accelerate = client.GetConVar("sv_accelerate")
+local sv_airaccelerate = client.GetConVar("sv_airaccelerate")
 
 -- Fonts
 local confidenceFont = draw.CreateFont("Tahoma", 16, 700, FONTFLAG_OUTLINE)
@@ -121,14 +129,45 @@ end
 local function onCreateMove(cmd)
 	TickProfiler.BeginSection("CM:Total")
 
+	-- Update core state even if aimbot is disabled (needed for visuals/self-prediction)
+	FastPlayers.Update()
+
+	-- Update player histories
+	local WishdirTracker = require("simulation.history.wishdir_tracker")
+	local players = FastPlayers.GetAll()
+	StrafePredictor.cleanupStalePlayers(FastPlayers)
+	for _, player in pairs(players) do
+		if player:IsAlive() and not player:IsDormant() then
+			local velocity = player:EstimateAbsVelocity()
+			if velocity and velocity:Length2D() > 10 then
+				local relWishdir = WishdirTracker.getRelativeWishdir(player)
+				StrafePredictor.recordVelocity(player:GetIndex(), velocity, 10, relWishdir)
+			end
+		else
+			StrafePredictor.clearHistory(player:GetIndex())
+		end
+	end
+
+	PlayerTracker.UpdatePlayerList()
+
+	-- Store local wishdir for visuals/self-prediction
+	local fwd, side = cmd:GetForwardMove(), cmd:GetSideMove()
+	local len = math.sqrt(fwd * fwd + side * side)
+	if len > 0.1 then
+		-- Engine Standard: +fwd is Forward, +side is LEFT (-450 for A, 450 for D?)
+		-- Wait, if ComputeMove sin(-90)=-1, then A is -450.
+		-- We want Left = +1, so we use -side.
+		G.LocalWishdir = Vector3(fwd / len, -side / len, 0)
+	else
+		G.LocalWishdir = Vector3(0, 0, 0)
+	end
+	G.LocalWishdirTick = globals.TickCount()
+
 	local cfg = G.Menu.Aimbot
 	if not cfg.Enabled then
 		TickProfiler.EndSection("CM:Total")
 		return
 	end
-
-	FastPlayers.Update()
-	PlayerTracker.UpdatePlayerList()
 
 	if not utils.weapon.CanShoot() then
 		TickProfiler.EndSection("CM:Total")
@@ -140,19 +179,9 @@ local function onCreateMove(cmd)
 		return
 	end
 
-	local plocal = entities.GetLocalPlayer()
-	if not plocal or not plocal:IsAlive() then
-		TickProfiler.EndSection("CM:Total")
-		return
-	end
-
-	local weapon = plocal:GetPropEntity("m_hActiveWeapon")
-	if not weapon then
-		TickProfiler.EndSection("CM:Total")
-		return
-	end
-
 	-- Delegate to AimbotManager
+	local plocal = entities.GetLocalPlayer()
+	local weapon = plocal:GetPropEntity("m_hActiveWeapon")
 	AimbotManager.Run(cmd, plocal, weapon)
 
 	TickProfiler.EndSection("CM:Total")

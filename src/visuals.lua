@@ -6,6 +6,7 @@ local PredictionContext = require("simulation.prediction_context")
 local Physics = require("physics.projectile_simulation")
 local TrajDrawer = require("visuals.trajectory_drawer")
 local ProjectileInfo = require("projectile_info")
+local WishdirTracker = require("simulation.history.wishdir_tracker")
 
 -- Module declaration
 local Visuals = {}
@@ -299,9 +300,16 @@ end
 
 -- Get local player's movement intent (relative wishdir) from keyboard
 local function getLocalWishDir()
+	-- Prefer the more accurate Wishdir from UserCmd if available
+	-- Relaxed check: within 2 ticks for timing safety
+	local tick = globals.TickCount()
+	if G.LocalWishdir and G.LocalWishdirTick and math.abs(tick - G.LocalWishdirTick) <= 2 then
+		return G.LocalWishdir
+	end
+
 	local forward = 0
 	local side = 0
-	-- Standard WASD (ASCII)
+	-- Standard WASD Fallback (Engine standard: A is +Left, D is -Right)
 	if input.IsButtonDown(87) then
 		forward = forward + 1
 	end -- W
@@ -309,17 +317,26 @@ local function getLocalWishDir()
 		forward = forward - 1
 	end -- S
 	if input.IsButtonDown(65) then
-		side = side - 1
+		side = side + 1
 	end -- A
 	if input.IsButtonDown(68) then
-		side = side + 1
+		side = side - 1
 	end -- D
 
-	-- Normalize
 	local len = math.sqrt(forward * forward + side * side)
 	if len > 0 then
 		return Vector3(forward / len, side / len, 0)
 	end
+
+	-- Last resort: check if the solver has detected anything for us
+	local localPlayer = entities.GetLocalPlayer()
+	if localPlayer then
+		local solved = WishdirTracker.getRelativeWishdir(localPlayer)
+		if solved then
+			return solved
+		end
+	end
+
 	return Vector3(0, 0, 0)
 end
 

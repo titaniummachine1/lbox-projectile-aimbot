@@ -24,19 +24,18 @@ local EXPIRY_TICKS = 66
 
 local STILL_SPEED_THRESHOLD = 50
 local COAST_BIAS_SPEED_THRESHOLD = 50
-local COAST_ERROR_MULTIPLIER = 0.8
 
 -- 9 possible movement directions (relative to player yaw)
 -- x = forward/back component, y = left/right component
 local DIRECTIONS = {
 	{ name = "forward", x = 1, y = 0 },
-	{ name = "forwardright", x = 1, y = -1 },
-	{ name = "right", x = 0, y = -1 },
-	{ name = "backright", x = -1, y = -1 },
-	{ name = "back", x = -1, y = 0 },
-	{ name = "backleft", x = -1, y = 1 },
+	{ name = "forwardleft", x = 1, y = 1 }, -- y=1 is Left (A)
 	{ name = "left", x = 0, y = 1 },
-	{ name = "forwardleft", x = 1, y = 1 },
+	{ name = "backleft", x = -1, y = 1 },
+	{ name = "back", x = -1, y = 0 },
+	{ name = "backright", x = -1, y = -1 },
+	{ name = "right", x = 0, y = -1 }, -- y=-1 is Right (D)
+	{ name = "forwardright", x = 1, y = -1 },
 	{ name = "coast", x = 0, y = 0 }, -- No input (coasting)
 }
 
@@ -88,15 +87,15 @@ local function clampVelocityTo8Directions(velocity, yaw)
 	local cosYaw = math.cos(yawRad)
 	local sinYaw = math.sin(yawRad)
 
-	-- Forward and right vectors in world space
+	-- Forward and Left vectors in world space
 	local forwardX, forwardY = cosYaw, sinYaw
-	local rightX, rightY = sinYaw, -cosYaw
+	local leftX, leftY = -sinYaw, cosYaw
 
-	-- Project velocity onto forward/right
+	-- Project velocity onto forward/left
 	local velNormX = velocity.x / horizLen
 	local velNormY = velocity.y / horizLen
 	local relForward = forwardX * velNormX + forwardY * velNormY
-	local relRight = rightX * velNormX + rightY * velNormY
+	local relLeft = leftX * velNormX + leftY * velNormY
 
 	-- Snap to nearest 45-degree direction
 	local snapX = 0
@@ -106,10 +105,10 @@ local function clampVelocityTo8Directions(velocity, yaw)
 	elseif relForward < -0.3 then
 		snapX = -1
 	end
-	if relRight > 0.3 then
-		snapY = -1
-	elseif relRight < -0.3 then
+	if relLeft > 0.3 then
 		snapY = 1
+	elseif relLeft < -0.3 then
+		snapY = -1
 	end
 
 	return normalizeDirection(snapX, snapY)
@@ -134,6 +133,9 @@ local function simulateOneDirection(entity, simCtx, dirX, dirY)
 	-- Create wishdir from direction components
 	local wishdir = normalizeDirection(dirX, dirY)
 
+	local StrafePredictor = require("simulation.history.strafe_predictor")
+	local yawDeltaPerTick = StrafePredictor.getYawDeltaPerTickDegrees(entity:GetIndex(), 3)
+
 	-- Build temporary player context for simulation
 	local playerCtx = {
 		entity = entity,
@@ -145,7 +147,7 @@ local function simulateOneDirection(entity, simCtx, dirX, dirY)
 		index = entity:GetIndex(),
 		stepheight = 18,
 		yaw = yaw,
-		yawDeltaPerTick = 0,
+		yawDeltaPerTick = yawDeltaPerTick,
 		relativeWishDir = wishdir,
 	}
 
@@ -201,10 +203,9 @@ local function findBestMatchingPrediction(predictions, currentPos, currentVel)
 			local velDy = currentVel.y - pred.vel.y
 			local velDiff = math.sqrt(velDx * velDx + velDy * velDy)
 
-			local totalError = posDiff + velDiff * 0.1
-			if pred.dirName == "coast" and curHorizLen < COAST_BIAS_SPEED_THRESHOLD then
-				totalError = totalError * COAST_ERROR_MULTIPLIER
-			end
+			-- Weighted error: Position error + Velocity error (normalized)
+			-- Horizontal move per tick is ~5-15 units. Velocity per tick change is ~50 units.
+			local totalError = posDiff + (velDiff * 0.25)
 
 			if totalError < bestError then
 				bestError = totalError
@@ -309,7 +310,7 @@ function WishdirTracker.updateTop(pLocal, sortedEntities, maxTargets)
 	local keep = {}
 	for i = 1, math.min(maxTargets, #sortedEntities) do
 		local ent = sortedEntities[i]
-		if ent and ent:IsAlive() and not ent:IsDormant() and ent ~= pLocal then
+		if ent and ent:IsAlive() and not ent:IsDormant() then
 			keep[ent:GetIndex()] = true
 			WishdirTracker.update(ent)
 		end

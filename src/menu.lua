@@ -178,9 +178,9 @@ local function drawMenu()
 		TimMenu.Tooltip("Visualize local player movement prediction (uses Player Path style)")
 		TimMenu.NextLine()
 
-		vis.SelfPredictionUseWishdir = TimMenu.Checkbox("Self Use Wishdir", vis.SelfPredictionUseWishdir or false)
+		vis.SelfPredictionUseCmd = TimMenu.Checkbox("Self Use Cmd", vis.SelfPredictionUseCmd or false)
 		TimMenu.Tooltip(
-			"Use current keyboard input for self-prediction. Unchecked = use velocity history (enemy style)"
+			"Use current UserCmd movement for self-prediction. Always perfectly accurate. Unchecked = use solver (enemy style)"
 		)
 		TimMenu.NextLine()
 		TimMenu.EndSector()
