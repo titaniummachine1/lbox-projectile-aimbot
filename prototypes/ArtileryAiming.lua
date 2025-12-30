@@ -943,7 +943,7 @@ function PhysicsEnv:new()
 	end
 	env:SetGravity(Vector3(0, 0, -800))
 	env:SetAirDensity(2.0)
-	env:SetSimulationTimestep(1 / 66)
+	env:SetSimulationTimestep(globals.TickInterval() or (1 / 66))
 	self = setmetatable({
 		env = env,
 		objects = {},
@@ -1301,6 +1301,15 @@ local function ExecuteBombardingAim(cmd)
 	if not iItemDefinitionIndex then
 		return
 	end
+
+	-- Guard: Only work for projectile weapons (Primary/Secondary)
+	local projectileType = pWeapon:GetWeaponProjectileType()
+	if not projectileType or projectileType < 2 then
+		bombardAim.calculatedPitch = nil
+		projCamState.trajectory.isValid = false
+		return
+	end
+
 	local weaponType = ItemDefinitions[iItemDefinitionIndex] or 0
 
 	-- 1. Get accurate projectile info for current weapon state
@@ -1708,12 +1717,12 @@ callbacks.Register("CreateMove", "LoadPhysicsObjects", function()
 			lastScreen = screenPos
 		end
 
-		drawAimGuideMainView()
+		-- drawAimGuideMainView()
 
 		if isProjCamActive() then
 			drawProjCamTexture()
 			drawProjCamWindow()
-			drawAimGuideCamera()
+			-- drawAimGuideCamera()
 		end
 	end)
 end)
@@ -1733,6 +1742,16 @@ callbacks.Register("DoPostScreenSpaceEffects", "ProjCamRender", function()
 	end
 
 	if not isProjCamActive() then
+		return
+	end
+
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal or not pLocal:IsAlive() then
+		return
+	end
+
+	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
+	if not pWeapon or pWeapon:GetWeaponProjectileType() < 2 then
 		return
 	end
 
