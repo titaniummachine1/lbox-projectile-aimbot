@@ -3,6 +3,9 @@ local G = require("globals")
 local multipoint = require("multipoint")
 local PlayerTick = require("simulation.player_tick")
 local PredictionContext = require("simulation.prediction_context")
+local Physics = require("physics.projectile_simulation")
+local TrajDrawer = require("visuals.trajectory_drawer")
+local ProjectileInfo = require("projectile_info")
 
 -- Module declaration
 local Visuals = {}
@@ -1227,6 +1230,9 @@ function Visuals.draw(state)
 			end
 		end
 	end
+
+	-- Draw Local Projectile Prediction
+	-- Handled by src/visuals/local_projectile.lua independently
 end
 
 return Visuals

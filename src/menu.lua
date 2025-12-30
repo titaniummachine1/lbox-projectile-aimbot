@@ -18,7 +18,8 @@ local Menu = {}
 -- Local constants / utilities -----
 local AIM_METHOD_OPTIONS = { "silent +", "silent", "normal" }
 local AIM_MODE_OPTIONS = { "Legit", "Blatant" }
-local VISUAL_ELEMENT_OPTIONS = { "Player Path", "Projectile Path", "Bounding Box", "Multipoint", "Quads" }
+local VISUAL_ELEMENT_OPTIONS =
+	{ "Player Path", "Projectile Path", "Local Projectile", "Bounding Box", "Multipoint", "Quads" }
 
 -- Private helpers -----
 local function getAimMethodIndex(method)
@@ -143,6 +144,7 @@ local function drawMenu()
 		local selectedElements = {
 			vis.DrawPlayerPath and true or false,
 			vis.DrawProjectilePath and true or false,
+			vis.DrawLocalProjectile and true or false,
 			vis.DrawBoundingBox and true or false,
 			vis.DrawMultipointTarget and true or false,
 			vis.DrawQuads and true or false,
@@ -150,9 +152,10 @@ local function drawMenu()
 		selectedElements = TimMenu.Combo("Elements", selectedElements, VISUAL_ELEMENT_OPTIONS)
 		vis.DrawPlayerPath = selectedElements[1] and true or false
 		vis.DrawProjectilePath = selectedElements[2] and true or false
-		vis.DrawBoundingBox = selectedElements[3] and true or false
-		vis.DrawMultipointTarget = selectedElements[4] and true or false
-		vis.DrawQuads = selectedElements[5] and true or false
+		vis.DrawLocalProjectile = selectedElements[3] and true or false
+		vis.DrawBoundingBox = selectedElements[4] and true or false
+		vis.DrawMultipointTarget = selectedElements[5] and true or false
+		vis.DrawQuads = selectedElements[6] and true or false
 		TimMenu.NextLine()
 
 		vis.ShowMultipointDebug = TimMenu.Checkbox("Multipoint Debug", vis.ShowMultipointDebug)

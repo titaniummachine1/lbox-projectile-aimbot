@@ -41,6 +41,11 @@ local config = {
 -- CONSTANTS
 -------------------------------
 local IN_ATTACK = 1
+local STICKY_BASE_SPEED = 900
+local STICKY_MAX_SPEED = 2400
+local STICKY_UPWARD_VEL = 200
+local STICKY_GRAVITY = 800
+local DOWNWARD_SEARCH_STEPS = 24
 
 -------------------------------
 -- PROJECTILE CAMERA CONFIG
@@ -102,11 +107,13 @@ local bombardAim = {
 	targetDistance = 500, -- Distance in units we want to hit
 	targetYaw = 0, -- Yaw offset from player view
 	scrollMode = 0, -- 0=position, 1=charge, 2=distance
-	minDistance = 0.1, -- Allow very close targets
+	minDistance = 10, -- Allow very close targets
 	maxDistance = 3000, -- Will be calculated dynamically
 	distanceStep = 50,
 	useHighArc = false, -- false = low arc (direct), true = high arc (lob)
 	calculatedPitch = -45,
+	targetPoint = nil,
+	originPoint = nil,
 	lastMouseX = 0,
 	lastMouseY = 0,
 	sensitivity = 1.0, -- Increased sensitivity
@@ -127,6 +134,33 @@ local function cross(a, b, c)
 	return (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
 end
 
+local function findDownwardPitch(speed, targetDistance, gravity, upwardVel)
+	local minPitch = -89
+	local maxPitch = 0
+	local bestPitch = nil
+	local smallestDiff = math.huge
+
+	for _ = 1, DOWNWARD_SEARCH_STEPS do
+		local midPitch = 0.5 * (minPitch + maxPitch)
+		local midRange = calculateRange(speed, math.rad(-midPitch), gravity, upwardVel)
+		local rangeDiff = midRange - targetDistance
+
+		if rangeDiff > 0 then
+			maxPitch = midPitch
+		else
+			minPitch = midPitch
+		end
+
+		local absDiff = math.abs(rangeDiff)
+		if absDiff < smallestDiff then
+			smallestDiff = absDiff
+			bestPitch = midPitch
+		end
+	end
+
+	return bestPitch
+end
+
 local function clamp(val, minVal, maxVal)
 	if val < minVal then
 		return minVal
@@ -142,6 +176,7 @@ local STICKY_BASE_SPEED = 900
 local STICKY_MAX_SPEED = 2400
 local STICKY_UPWARD_VEL = 200
 local STICKY_GRAVITY = 800
+local DOWNWARD_SEARCH_STEPS = 24
 
 -- Calculate projectile range for given speed and pitch (in radians)
 local function calculateRange(speed, pitchRad, gravity, upwardVel)
@@ -471,6 +506,36 @@ local function drawProjCamWindow()
 	for i, text in ipairs(controls) do
 		draw.Text(x + 5, y + h + 5 + (i - 1) * 14, text)
 	end
+end
+
+local function drawAimGuideMainView()
+	if not bombardAim.originPoint or not bombardAim.targetPoint then
+		return
+	end
+
+	local start2d = worldToScreen(bombardAim.originPoint)
+	local end2d = worldToScreen(bombardAim.targetPoint)
+	if not start2d or not end2d then
+		return
+	end
+
+	setColor(0, 255, 0, 255)
+	drawLine(math.floor(start2d[1]), math.floor(start2d[2]), math.floor(end2d[1]), math.floor(end2d[2]))
+end
+
+local function drawAimGuideCamera()
+	if not bombardAim.originPoint or not bombardAim.targetPoint then
+		return
+	end
+
+	local start2d = worldToScreen(bombardAim.originPoint)
+	local end2d = worldToScreen(bombardAim.targetPoint)
+	if not start2d or not end2d then
+		return
+	end
+
+	setColor(0, 255, 0, 255)
+	drawLine(math.floor(start2d[1]), math.floor(start2d[2]), math.floor(end2d[1]), math.floor(end2d[2]))
 end
 
 local function updateProjCamSmoothing()
@@ -1407,12 +1472,14 @@ callbacks.Register("CreateMove", "LoadPhysicsObjects", function()
 		handleProjCamToggle()
 		handleBombardModeToggle()
 		handleBombardAimToggle()
+		drawAimGuideMainView()
 
 		if isProjCamActive() then
 			handleProjCamInput()
 			updateProjCamSmoothing()
 			drawProjCamTexture()
 			drawProjCamWindow()
+			drawAimGuideCamera()
 		end
 	end)
 end)
@@ -1531,130 +1598,152 @@ callbacks.Register("CreateMove", "BombardingAim", function(cmd)
 		baseSpeed = maxSpeed
 	end
 
-	-- Mouse input like WoT artillery
+	-- Calculate max distance based on weapon speed (45° gives max range)
+	local maxRangeSpeed = hasCharge and maxSpeed or baseSpeed
+	local calculatedMaxDistance = (maxRangeSpeed * maxRangeSpeed) / g -- Max range at 45°
+	bombardAim.maxDistance = calculatedMaxDistance
+
+	-- Simple point control logic - same as artielrcontrols.lua
 	local mouseX = cmd.mousedx or 0
 	local mouseY = cmd.mousedy or 0
 
-	-- Calculate max range based on max speed
-	local maxRangeSpeed = hasCharge and maxSpeed or baseSpeed
-	bombardAim.maxDistance = (maxRangeSpeed * maxRangeSpeed) / g
+	-- Get player's absolute position
+	local absOrigin = pLocal:GetAbsOrigin()
+	local viewAngles = engine.GetViewAngles()
+	if not absOrigin or not viewAngles then
+		return
+	end
 
-	-- Mouse Y moves target point, Mouse X rotates yaw
-	bombardAim.targetDistance = clamp(
-		bombardAim.targetDistance - mouseY * bombardAim.sensitivity,
-		bombardAim.minDistance,
-		bombardAim.maxDistance
-	)
-	bombardAim.targetYaw = bombardAim.targetYaw - mouseX * 0.05
+	bombardAim.originPoint = absOrigin
 
-	local d = bombardAim.targetDistance
-	local bestCharge = 0
-	local bestPitch = nil
-	local bestError = 999999
+	-- Mouse Y controls distance with fixed ratio (0.50 units per pixel)
+	-- Screen coordinates are inverted: mouse up = negative mouseY, so we invert again
+	local distanceDelta = -mouseY * 0.50 -- Match artielrcontrols.lua: mouse up = increase distance
+	bombardAim.targetDistance = clamp(bombardAim.targetDistance + distanceDelta, 0, bombardAim.maxDistance)
+
+	-- Calculate target point based on player's current view yaw directly
+	local yawRad = math.rad(viewAngles.y)
+	local forwardDir = Vector3(math.cos(yawRad), math.sin(yawRad), 0)
+
+	-- Adapt height from last impact position if available
+	local targetZ = forwardDir.z * bombardAim.targetDistance
+	if projCamState.storedImpactPos then
+		targetZ = projCamState.storedImpactPos.z - absOrigin.z
+	end
+
+	bombardAim.targetPoint = bombardAim.originPoint
+		+ Vector3(forwardDir.x * bombardAim.targetDistance, forwardDir.y * bombardAim.targetDistance, targetZ)
+
+	-- Calculate pitch to hit the target point using proper ballistic math from src
+	local p0 = bombardAim.originPoint
+	local p1 = bombardAim.targetPoint
+	local diff = p1 - p0
+	local dx = math.sqrt(diff.x * diff.x + diff.y * diff.y)
+	local dy = diff.z
+	local g = STICKY_GRAVITY
 
 	if hasCharge then
-		-- Binary search for optimal charge
-		local minCharge = 0
+		-- Start from maximum charge and search downward for minimal charge that can hit
 		local maxCharge = 1.0
+		local minCharge = 0
 		local iterations = 20
+		local bestCharge = 0
+		local bestPitch = nil
+		local bestSpeed = baseSpeed
 
 		for i = 1, iterations do
-			local midCharge = (minCharge + maxCharge) / 2
+			local midCharge = (maxCharge + minCharge) / 2
 			local speed = baseSpeed + midCharge * (maxSpeed - baseSpeed)
-			local v2 = speed * speed
+			local speed2 = speed * speed
 
-			-- No artificial pitch limits - let mathematics handle all cases
+			-- Use proper ballistic math from src/ballistics.lua
+			local root = speed2 * speed2 - g * (g * dx * dx + 2 * dy * speed2)
 
-			local inner = v2 * v2 - g * g * d * d
+			if root >= 0 and dx > 1e-8 then
+				local sqrt_root = math.sqrt(root)
 
-			if inner >= 0 then
-				local sqrtInner = math.sqrt(inner)
+				-- Calculate both low and high arc angles
+				local theta_low = math.atan((speed2 - sqrt_root) / (g * dx))
+				local theta_high = math.atan((speed2 + sqrt_root) / (g * dx))
 
-				-- Safety check for division by zero (allow very close targets)
-				if math.abs(g * d) < 0.00001 then
-					-- For extremely close targets, use steep downward angle
-					local steepPitch = -89
-					bestPitch = steepPitch
-					bestCharge = midCharge
-					break
-				end
+				local pitch_low = -theta_low * (180 / math.pi) -- Convert to degrees
+				local pitch_high = -theta_high * (180 / math.pi)
 
-				local tanLow = (v2 - sqrtInner) / (g * d)
-				local tanHigh = (v2 + sqrtInner) / (g * d)
-				local pitchLow = -math.deg(math.atan(tanLow))
-				local pitchHigh = -math.deg(math.atan(tanHigh))
-
-				local pitch, actualRange, error
+				-- Choose arc based on user preference
+				local chosenPitch = pitch_low
 				if bombardAim.useHighArc then
-					pitch = pitchHigh
-					local pitchRadHigh = math.rad(-pitchHigh)
-					actualRange = calculateRange(speed, pitchRadHigh, g, upwardVel)
-					error = math.abs(actualRange - d)
-				else
-					pitch = pitchLow
-					local pitchRadLow = math.rad(-pitchLow)
-					actualRange = calculateRange(speed, pitchRadLow, g, upwardVel)
-					error = math.abs(actualRange - d)
+					chosenPitch = pitch_high
 				end
 
-				if error < bestError then
-					bestError = error
+				-- Clamp to valid range
+				if chosenPitch and chosenPitch > -89 and chosenPitch < 89 then
 					bestCharge = midCharge
-					bestPitch = pitch
-				end
+					bestPitch = chosenPitch
+					bestSpeed = speed
 
-				if actualRange < d then
-					minCharge = midCharge
-				else
+					-- If found good solution, search for lower charge
 					maxCharge = midCharge
+				else
+					minCharge = midCharge
 				end
 			else
 				minCharge = midCharge
 			end
 		end
-	else
-		-- No charge weapon - calculate pitch directly
-		local speed = baseSpeed
-		local v2 = speed * speed
-		local inner = v2 * v2 - g * g * d * d
 
-		if inner >= 0 then
-			local sqrtInner = math.sqrt(inner)
-
-			-- Safety check for division by zero (allow very close targets)
-			if math.abs(g * d) < 0.00001 then
-				-- For extremely close targets, use steep downward angle
-				bestPitch = -89
-			else
-				local tanLow = (v2 - sqrtInner) / (g * d)
-				local tanHigh = (v2 + sqrtInner) / (g * d)
-				local pitchLow = -math.deg(math.atan(tanLow))
-				local pitchHigh = -math.deg(math.atan(tanHigh))
-
-				if bombardAim.useHighArc then
-					bestPitch = pitchHigh
-				else
-					bestPitch = pitchLow
-				end
-			end
-			bestCharge = 0
-		end
-	end
-
-	if bestPitch then
 		bombardMode.chargeLevel = bestCharge
 		bombardAim.calculatedPitch = bestPitch
+	else
+		-- No charge weapon - calculate directly
+		local speed = baseSpeed
+		local speed2 = speed * speed
 
+		-- Use proper ballistic math from src/ballistics.lua
+		local root = speed2 * speed2 - g * (g * dx * dx + 2 * dy * speed2)
+
+		if root >= 0 and dx > 1e-8 then
+			local sqrt_root = math.sqrt(root)
+
+			-- Calculate both low and high arc angles
+			local theta_low = math.atan((speed2 - sqrt_root) / (g * dx))
+			local theta_high = math.atan((speed2 + sqrt_root) / (g * dx))
+
+			local pitch_low = -theta_low * (180 / math.pi) -- Convert to degrees
+			local pitch_high = -theta_high * (180 / math.pi)
+
+			-- Choose arc based on user preference
+			local chosenPitch = pitch_low
+			if bombardAim.useHighArc then
+				chosenPitch = pitch_high
+			end
+
+			-- Clamp to valid range
+			if chosenPitch and chosenPitch > -89 and chosenPitch < 89 then
+				bombardAim.calculatedPitch = chosenPitch
+			else
+				bombardAim.calculatedPitch = nil
+			end
+		else
+			bombardAim.calculatedPitch = nil
+		end
+
+		bombardMode.chargeLevel = 0
+	end
+
+	if bombardAim.calculatedPitch then
 		-- Zero mouse so we fully control view
 		cmd.mousedx = 0
 		cmd.mousedy = 0
 
-		-- Set view - allow full pitch range for shooting down
-		local aimAngles = EulerAngles(bombardAim.calculatedPitch, bombardAim.targetYaw, 0)
+		-- Set view angles to aim at target point
+		local aimAngles = EulerAngles(bombardAim.calculatedPitch, viewAngles.y, 0)
 		engine.SetViewAngles(aimAngles)
-		cmd.viewangles = Vector3(bombardAim.calculatedPitch, bombardAim.targetYaw, 0)
+		cmd.viewangles = Vector3(bombardAim.calculatedPitch, viewAngles.y, 0)
 
 		bombardMode.useStoredCharge = hasCharge
+	else
+		bombardAim.originPoint = nil
+		bombardAim.targetPoint = nil
 	end
 end)
 

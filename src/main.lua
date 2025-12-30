@@ -16,6 +16,7 @@ local TickProfiler = require("tick_profiler")
 local PlayerTracker = require("player_tracker")
 local ViewmodelManager = require("targeting.viewmodel_manager")
 local FastPlayers = require("utils.fast_players")
+local LocalProjectile = require("visuals.local_projectile")
 
 -- Local constants / utilities -----
 local DEFAULT_MAX_DISTANCE = 3000
