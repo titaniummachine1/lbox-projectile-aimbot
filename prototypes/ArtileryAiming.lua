@@ -492,7 +492,10 @@ local function drawProjCamWindow()
 		draw.Text(x + 5, y + 50, chargeText)
 
 		setColor(255, 255, 0, 255)
-		local pitchText = string.format("Pitch: %.1f°", bombardAim.calculatedPitch)
+		local pitchText = string.format(
+			"Pitch: %s",
+			bombardAim.calculatedPitch and string.format("%.1f°", bombardAim.calculatedPitch) or "N/A"
+		)
 		draw.Text(x + 5, y + 65, pitchText)
 
 		setColor(150, 255, 150, 255)
@@ -1300,28 +1303,34 @@ local function ExecuteBombardingAim(cmd)
 	end
 	local weaponType = ItemDefinitions[iItemDefinitionIndex] or 0
 
-	-- Determine if weapon has charge (sticky launchers = type 1, 3)
-	local hasCharge = (weaponType == 1 or weaponType == 3)
-	local baseSpeed = STICKY_BASE_SPEED
-	local maxSpeed = STICKY_MAX_SPEED
-	local upwardVel = STICKY_UPWARD_VEL
-	local g = STICKY_GRAVITY
+	-- 1. Get accurate projectile info for current weapon state
+	local weaponID = pWeapon:GetWeaponID()
+	local iItemDef = pWeapon:GetPropInt("m_iItemDefinitionIndex")
+	local iCase = ItemDefinitions[iItemDef] or 0
+	local isDucking = (pLocal:GetPropInt("m_fFlags") & 2) ~= 0
 
-	-- For non-charge weapons, use fixed speed
-	if not hasCharge then
-		baseSpeed = maxSpeed
+	local vOffset, fForwardVelocity, fUpwardVelocity, vCollisionMax, fGravity, fDrag =
+		GetProjectileInformation(pWeapon, isDucking, iCase, iItemDef, weaponID or 0, pLocal)
+
+	local baseSpeed = 900
+	local maxSpeed = 2400
+	if iCase == 4 or iCase == 5 or iCase == 6 then -- Grenades/Launchers
+		baseSpeed = fForwardVelocity
+		maxSpeed = fForwardVelocity
 	end
 
-	-- Calculate max distance based on weapon speed (45° gives max range)
-	local maxRangeSpeed = hasCharge and maxSpeed or baseSpeed
-	local calculatedMaxDistance = (maxRangeSpeed * maxRangeSpeed) / g -- Max range at 45°
-	bombardAim.maxDistance = calculatedMaxDistance
+	local hasCharge = (iCase == 1 or iCase == 3)
+	local gravity = fGravity > 0 and fGravity or STICKY_GRAVITY
 
-	-- Simple point control logic
+	-- 2. Calculate dynamic max distance
+	local maxRangeSpeed = hasCharge and maxSpeed or fForwardVelocity
+	bombardAim.maxDistance = (maxRangeSpeed * maxRangeSpeed) / gravity -- Basic estimate
+
+	-- 3. Simple point control logic
 	local mouseX = cmd.mousedx or 0
 	local mouseY = cmd.mousedy or 0
 
-	-- Don't update distance if we are interacting with the menu (dragging the window)
+	-- Mouse Y controls distance with fixed ratio (0.50 units per pixel)
 	if gui.GetValue("Menu") ~= 1 then
 		local distanceDelta = -mouseY * 0.50
 		bombardAim.targetDistance = clamp(bombardAim.targetDistance + distanceDelta, 0, bombardAim.maxDistance)
@@ -1334,41 +1343,81 @@ local function ExecuteBombardingAim(cmd)
 		return
 	end
 
-	bombardAim.originPoint = absOrigin
+	-- 4. Calculate accurate start position
+	local viewOffset = pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
+	local vHeadPos = absOrigin + viewOffset
 
-	-- Calculate target point based on player's current view yaw directly
+	-- Account for weapon offset as simulation does
+	local vStartPos = vHeadPos
+		+ (viewAngles:Forward() * vOffset.x)
+		+ (viewAngles:Right() * (vOffset.y * (pWeapon:IsViewModelFlipped() and -1 or 1)))
+		+ (viewAngles:Up() * vOffset.z)
+
+	bombardAim.originPoint = vStartPos
+
+	-- 5. Set target point at calculated distance on the yaw line
 	local yawRad = math.rad(viewAngles.y)
-	local forwardDir = Vector3(math.cos(yawRad), math.sin(yawRad), 0)
+	local direction = Vector3(math.cos(yawRad), math.sin(yawRad), 0)
 
-	-- Adapt height from last impact position if available
-	local targetZ = forwardDir.z * bombardAim.targetDistance
-	if projCamState.storedImpactPos then
-		targetZ = projCamState.storedImpactPos.z - absOrigin.z
+	local targetZ = 0
+	if projCamState.trajectory.isValid and projCamState.trajectory.impactPos then
+		targetZ = projCamState.trajectory.impactPos.z - vStartPos.z
 	end
 
-	bombardAim.targetPoint = bombardAim.originPoint
-		+ Vector3(forwardDir.x * bombardAim.targetDistance, forwardDir.y * bombardAim.targetDistance, targetZ)
+	bombardAim.targetPoint = vStartPos + (direction * bombardAim.targetDistance) + Vector3(0, 0, targetZ)
 
-	-- Calculate pitch to hit the target point using proper ballistic math
-	local p0 = bombardAim.originPoint
-	local p1 = bombardAim.targetPoint
-	local diff = p1 - p0
-	local dx = math.sqrt(diff.x * diff.x + diff.y * diff.y)
-	local dy = diff.z
-	local gravity = STICKY_GRAVITY
+	-- 6. Precise Ballistic Solver (accounts for upward boost)
+	local dx = bombardAim.targetDistance
+	local dy = targetZ
+
+	local function checkSolution(speed, pitch)
+		local ang = EulerAngles(pitch, viewAngles.y, 0)
+		local vVel = (ang:Forward() * speed) + (ang:Up() * fUpwardVelocity)
+
+		-- Use basic kinematics for high performance solver
+		-- dy = v_z * t - 0.5 * g * t^2
+		-- dx = v_x * t
+		local vx = math.sqrt(vVel.x * vVel.x + vVel.y * vVel.y)
+		local vz = vVel.z
+
+		if vx < 1 then
+			return -999999
+		end
+		local t = dx / vx
+		return (vz * t) - (0.5 * gravity * t * t)
+	end
 
 	local function findPitchForArc(speed, isHighArc)
-		local speed2 = speed * speed
-		local root = speed2 * speed2 - gravity * (gravity * dx * dx + 2 * dy * speed2)
-		if root < 0 then
-			return nil
+		-- Search range based on arc preference
+		local lowP, highP = (isHighArc and -89 or -45), (isHighArc and -45 or 89)
+		local bestP = nil
+
+		for i = 1, 15 do
+			local mid = (lowP + highP) / 2
+			local hitZ = checkSolution(speed, mid)
+
+			if isHighArc then
+				-- High Arc: aim more UP (-89) to hit shorter/lower at dx
+				if hitZ > dy then
+					highP = mid
+				else
+					lowP = mid
+				end
+			else
+				-- Low Arc: aim more DOWN (89) to hit shorter/lower at dx
+				if hitZ > dy then
+					lowP = mid
+				else
+					highP = mid
+				end
+			end
+			bestP = mid
 		end
 
-		local sqrt_root = math.sqrt(root)
-		local theta = math.atan((speed2 + (isHighArc and sqrt_root or -sqrt_root)) / (gravity * dx))
-		local pitch = -theta * (180 / math.pi)
-		if pitch > -89 and pitch < 89 then
-			return pitch
+		-- Final validation
+		local finalZ = checkSolution(speed, bestP)
+		if math.abs(finalZ - dy) < 100 then
+			return bestP
 		end
 		return nil
 	end
