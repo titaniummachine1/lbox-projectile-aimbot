@@ -881,7 +881,7 @@ function Visuals.draw(state)
 			-- Simulate every frame for debugging
 			local success, err = pcall(function()
 				local relativeWishDir = nil
-				if vis.SelfPredictionUseWishdir then
+				if vis.SelfPredictionUseCmd then
 					relativeWishDir = getLocalWishDir()
 				end
 

@@ -15,6 +15,10 @@ local SNAPSHOT_INTERVAL = 10
 local SMOOTHING_FACTOR = 0.1
 local SORT_DELAY = 33
 local lastSortTime = 0
+local lastMemCheck = collectgarbage("count") * 1024
+local totalAllocatedLastSecond = 0
+local allocRate = 0
+local lastAllocReset = 0
 
 local font = draw.CreateFont("Tahoma", 12, 600, FONTFLAG_OUTLINE)
 local fontSmall = draw.CreateFont("Tahoma", 11, 400, FONTFLAG_OUTLINE)
@@ -52,7 +56,7 @@ local function getColorForValue(val, t1, t2, t3)
 end
 
 local function now()
-	return globals.RealTime()
+	return os.clock()
 end
 
 local function reset()
@@ -126,6 +130,20 @@ local function buildEntries()
 			end
 			return a.memAvg > b.memAvg
 		end)
+	end
+
+	-- Update Global Allocation Rate
+	local currentMem = collectgarbage("count") * 1024
+	if currentMem > lastMemCheck then
+		totalAllocatedLastSecond = totalAllocatedLastSecond + (currentMem - lastMemCheck)
+	end
+	lastMemCheck = currentMem
+
+	local nowTime = now()
+	if nowTime - lastAllocReset >= 1.0 then
+		allocRate = totalAllocatedLastSecond
+		totalAllocatedLastSecond = 0
+		lastAllocReset = nowTime
 	end
 
 	return display
@@ -226,7 +244,12 @@ local function drawOverlay()
 
 	y = y - lineHeight - 4
 	local memUsed = collectgarbage("count") * 1024
-	local memStr = string.format("Lua Total: %s | Measured: %s", formatMemory(memUsed), formatMemory(totalMeasuredMem))
+	local memStr = string.format(
+		"Lua Total: %s | Measured: %s | Rate: %s/s",
+		formatMemory(memUsed),
+		formatMemory(totalMeasuredMem),
+		formatMemory(allocRate)
+	)
 	draw.Color(255, 200, 100, 255)
 	draw.Text(x, y, memStr)
 end

@@ -12,94 +12,111 @@
 --   5. Fallback: if no prior prediction, clamp current velocity to 8 directions
 -- ============================================================================
 
+local G = require("globals")
 local PlayerTick = require("simulation.player_tick")
 local PredictionContext = require("simulation.prediction_context")
 
 local WishdirTracker = {}
 
+-- [[ POOLING LOGIC ]]
+local vectorPool = {}
+local function getPooledVector(x, y, z)
+	local v = table.remove(vectorPool)
+	if v then
+		v.x, v.y, v.z = x, y, z
+		return v
+	end
+	return Vector3(x, y, z)
+end
+local function releaseVector(v)
+	if v then
+		table.insert(vectorPool, v)
+	end
+end
+
+local predPool = {}
+local function getPooledPred()
+	local p = table.remove(predPool)
+	if p then
+		return p
+	end
+	-- Initialize with dedicated vectors that stay within this prediction object
+	return {
+		pos = Vector3(0, 0, 0),
+		vel = Vector3(0, 0, 0),
+		wishdir = Vector3(0, 0, 0),
+		name = "",
+	}
+end
+local function releasePred(p)
+	if p then
+		table.insert(predPool, p)
+	end
+end
+
 -- Per-player state storage
-local state = {}
+local playerState = {}
 local MAX_TRACKED = 4
 local EXPIRY_TICKS = 66
-
 local STILL_SPEED_THRESHOLD = 50
-local COAST_BIAS_SPEED_THRESHOLD = 50
 
--- 9 possible movement directions (relative to player yaw)
--- x = forward/back component, y = left/right component
 local DIRECTIONS = {
 	{ name = "forward", x = 1, y = 0 },
-	{ name = "forwardleft", x = 1, y = 1 }, -- y=1 is Left (A)
+	{ name = "forwardleft", x = 1, y = 1 },
 	{ name = "left", x = 0, y = 1 },
 	{ name = "backleft", x = -1, y = 1 },
 	{ name = "back", x = -1, y = 0 },
 	{ name = "backright", x = -1, y = -1 },
-	{ name = "right", x = 0, y = -1 }, -- y=-1 is Right (D)
+	{ name = "right", x = 0, y = -1 },
 	{ name = "forwardright", x = 1, y = -1 },
-	{ name = "coast", x = 0, y = 0 }, -- No input (coasting)
+	{ name = "coast", x = 0, y = 0 },
 }
 
 -- ============================================================================
 -- UTILITY FUNCTIONS
 -- ============================================================================
 
-local function normalizeDirection(x, y)
+local function normalizeDirection(x, y, out)
 	local len = math.sqrt(x * x + y * y)
 	if len < 0.0001 then
-		return Vector3(0, 0, 0)
+		out.x, out.y, out.z = 0, 0, 0
+	else
+		out.x, out.y, out.z = x / len, y / len, 0
 	end
-	return Vector3(x / len, y / len, 0)
+	return out
 end
 
 local function getEntityYaw(entity)
 	if not entity then
 		return nil
 	end
-	local yaw = entity:GetPropFloat("m_angEyeAngles[1]")
-	if yaw then
-		return yaw
-	end
-	if entity.GetPropVector and type(entity.GetPropVector) == "function" then
-		local eyeVec = entity:GetPropVector("tfnonlocaldata", "m_angEyeAngles")
-		if eyeVec and eyeVec.y then
-			return eyeVec.y
+	local localPlayer = entities.GetLocalPlayer()
+	if localPlayer and entity:GetIndex() == localPlayer:GetIndex() then
+		local angles = engine.GetViewAngles()
+		if angles then
+			return angles.y
 		end
 	end
-	return nil
-end
-
-local function shouldPrune(entry)
-	if not entry then
-		return true
-	end
-	return (globals.TickCount() - entry.lastTick) > EXPIRY_TICKS
+	return entity:GetPropFloat("m_angEyeAngles[1]")
 end
 
 -- Clamp velocity to nearest of 8 directions (fallback when no prior prediction)
-local function clampVelocityTo8Directions(velocity, yaw)
+local function clampVelocityTo8Directions(velocity, yaw, out)
 	local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
 	if horizLen < STILL_SPEED_THRESHOLD then
-		return Vector3(0, 0, 0) -- Standing still
+		out.x, out.y, out.z = 0, 0, 0
+		return out
 	end
 
-	-- Convert velocity to relative direction (relative to yaw)
 	local yawRad = yaw * (math.pi / 180)
-	local cosYaw = math.cos(yawRad)
-	local sinYaw = math.sin(yawRad)
+	local cosYaw, sinYaw = math.cos(yawRad), math.sin(yawRad)
+	local velNormX, velNormY = velocity.x / horizLen, velocity.y / horizLen
 
-	-- Forward and Left vectors in world space
-	local forwardX, forwardY = cosYaw, sinYaw
-	local leftX, leftY = -sinYaw, cosYaw
+	-- Project velocity onto forward/left relative to player yaw
+	local relForward = cosYaw * velNormX + sinYaw * velNormY
+	local relLeft = -sinYaw * velNormX + cosYaw * velNormY
 
-	-- Project velocity onto forward/left
-	local velNormX = velocity.x / horizLen
-	local velNormY = velocity.y / horizLen
-	local relForward = forwardX * velNormX + forwardY * velNormY
-	local relLeft = leftX * velNormX + leftY * velNormY
-
-	-- Snap to nearest 45-degree direction
-	local snapX = 0
-	local snapY = 0
+	local snapX, snapY = 0, 0
 	if relForward > 0.3 then
 		snapX = 1
 	elseif relForward < -0.3 then
@@ -111,113 +128,59 @@ local function clampVelocityTo8Directions(velocity, yaw)
 		snapY = -1
 	end
 
-	return normalizeDirection(snapX, snapY)
+	return normalizeDirection(snapX, snapY, out)
 end
 
 -- ============================================================================
 -- CORE PREDICTION SYSTEM
 -- ============================================================================
 
+-- Static player context for reuse in simulations
+local staticPlayerCtx = {
+	origin = getPooledVector(0, 0, 0),
+	velocity = getPooledVector(0, 0, 0),
+	mins = getPooledVector(0, 0, 0),
+	maxs = getPooledVector(0, 0, 0),
+	relativeWishDir = getPooledVector(0, 0, 0),
+}
+
 -- Simulate 1 tick ahead for a single direction
-local function simulateOneDirection(entity, simCtx, dirX, dirY)
-	local velocity = entity:EstimateAbsVelocity()
-	local origin = entity:GetAbsOrigin()
-	local maxspeed = entity:GetPropFloat("m_flMaxspeed")
+local function simulateOneDirection(entity, simCtx, dir, outPred)
+	local vel = entity:EstimateAbsVelocity()
+	local pos = entity:GetAbsOrigin()
+	if not (vel and pos) then
+		return false
+	end
+
 	local mins, maxs = entity:GetMins(), entity:GetMaxs()
 	local yaw = getEntityYaw(entity) or 0
-
-	if not (velocity and origin and maxspeed and mins and maxs) then
-		return nil
-	end
-
-	-- Create wishdir from direction components
-	local wishdir = normalizeDirection(dirX, dirY)
-
 	local StrafePredictor = require("simulation.history.strafe_predictor")
-	local yawDeltaPerTick = StrafePredictor.getYawDeltaPerTickDegrees(entity:GetIndex(), 3)
+	local yawDelta = StrafePredictor.getYawDeltaPerTickDegrees(entity:GetIndex(), 3)
 
-	-- Build temporary player context for simulation
-	local playerCtx = {
-		entity = entity,
-		origin = Vector3(origin.x, origin.y, origin.z + 1),
-		velocity = Vector3(velocity:Unpack()),
-		mins = mins,
-		maxs = maxs,
-		maxspeed = maxspeed,
-		index = entity:GetIndex(),
-		stepheight = 18,
-		yaw = yaw,
-		yawDeltaPerTick = yawDeltaPerTick,
-		relativeWishDir = wishdir,
-	}
+	-- Update static context
+	staticPlayerCtx.entity = entity
+	staticPlayerCtx.origin.x, staticPlayerCtx.origin.y, staticPlayerCtx.origin.z = pos.x, pos.y, pos.z + 1
+	staticPlayerCtx.velocity.x, staticPlayerCtx.velocity.y, staticPlayerCtx.velocity.z = vel.x, vel.y, vel.z
+	staticPlayerCtx.mins.x, staticPlayerCtx.mins.y, staticPlayerCtx.mins.z = mins.x, mins.y, mins.z
+	staticPlayerCtx.maxs.x, staticPlayerCtx.maxs.y, staticPlayerCtx.maxs.z = maxs.x, maxs.y, maxs.z
+	staticPlayerCtx.maxspeed = entity:GetPropFloat("m_flMaxspeed")
+	staticPlayerCtx.index = entity:GetIndex()
+	staticPlayerCtx.stepheight = 18
+	staticPlayerCtx.yaw = yaw
+	staticPlayerCtx.yawDeltaPerTick = yawDelta
+	normalizeDirection(dir.x, dir.y, staticPlayerCtx.relativeWishDir)
 
-	-- Simulate one tick
-	local predictedPos = PlayerTick.simulateTick(playerCtx, simCtx)
-	local predictedVel = Vector3(playerCtx.velocity:Unpack())
+	-- Simulate
+	PlayerTick.simulateTick(staticPlayerCtx, simCtx)
 
-	return {
-		pos = predictedPos,
-		vel = predictedVel,
-		wishdir = wishdir,
-		dirName = nil,
-	}
-end
-
--- Simulate all 9 directions for a player
-local function simulateAllDirections(entity, simCtx)
-	local predictions = {}
-
-	for i, dir in ipairs(DIRECTIONS) do
-		local pred = simulateOneDirection(entity, simCtx, dir.x, dir.y)
-		if pred then
-			pred.dirName = dir.name
-			predictions[i] = pred
-		end
-	end
-
-	return predictions
-end
-
--- Find which prediction best matches current state
-local function findBestMatchingPrediction(predictions, currentPos, currentVel)
-	assert(predictions, "findBestMatchingPrediction: predictions is nil")
-	assert(currentPos, "findBestMatchingPrediction: currentPos is nil")
-	assert(currentVel, "findBestMatchingPrediction: currentVel is nil")
-
-	if not predictions or #predictions == 0 then
-		return nil
-	end
-
-	local curHorizLen = math.sqrt(currentVel.x * currentVel.x + currentVel.y * currentVel.y)
-
-	local bestIdx = nil
-	local bestError = math.huge
-
-	for i, pred in ipairs(predictions) do
-		if pred and pred.pos and pred.vel then
-			local posDx = currentPos.x - pred.pos.x
-			local posDy = currentPos.y - pred.pos.y
-			local posDiff = math.sqrt(posDx * posDx + posDy * posDy)
-
-			local velDx = currentVel.x - pred.vel.x
-			local velDy = currentVel.y - pred.vel.y
-			local velDiff = math.sqrt(velDx * velDx + velDy * velDy)
-
-			-- Weighted error: Position error + Velocity error (normalized)
-			-- Horizontal move per tick is ~5-15 units. Velocity per tick change is ~50 units.
-			local totalError = posDiff + (velDiff * 0.25)
-
-			if totalError < bestError then
-				bestError = totalError
-				bestIdx = i
-			end
-		end
-	end
-
-	if bestIdx and predictions[bestIdx] then
-		return predictions[bestIdx].wishdir, bestError
-	end
-	return nil
+	outPred.pos.x, outPred.pos.y, outPred.pos.z =
+		staticPlayerCtx.origin.x, staticPlayerCtx.origin.y, staticPlayerCtx.origin.z
+	outPred.vel.x, outPred.vel.y, outPred.vel.z =
+		staticPlayerCtx.velocity.x, staticPlayerCtx.velocity.y, staticPlayerCtx.velocity.z
+	outPred.wishdir.x, outPred.wishdir.y, outPred.wishdir.z =
+		staticPlayerCtx.relativeWishDir.x, staticPlayerCtx.relativeWishDir.y, staticPlayerCtx.relativeWishDir.z
+	outPred.name = dir.name
+	return true
 end
 
 -- ============================================================================
@@ -228,50 +191,57 @@ function WishdirTracker.update(entity)
 	if not entity or not entity:IsAlive() or entity:IsDormant() then
 		return
 	end
-
 	local idx = entity:GetIndex()
-	if not state[idx] then
-		state[idx] = {}
+	if not playerState[idx] then
+		playerState[idx] = { predictions = {} }
+		for i = 1, 9 do
+			playerState[idx].predictions[i] = getPooledPred()
+		end
 	end
-	local s = state[idx]
-
-	local currentPos = entity:GetAbsOrigin()
-	local currentVel = entity:EstimateAbsVelocity()
-	local currentYaw = getEntityYaw(entity)
-
-	if not (currentPos and currentVel and currentYaw) then
+	local s = playerState[idx]
+	local curPos, curVel = entity:GetAbsOrigin(), entity:EstimateAbsVelocity()
+	local yaw = getEntityYaw(entity)
+	if not (curPos and curVel and yaw) then
 		return
 	end
 
-	s.detectedWishdir = nil
-	s.detectionError = nil
-
-	-- Step 1: If we have prior predictions, find which one matches best
-	if s.predictions and s.predictionTick == globals.TickCount() - 1 then
-		local bestWishdir, error = findBestMatchingPrediction(s.predictions, currentPos, currentVel)
-		if bestWishdir then
-			s.detectedWishdir = bestWishdir
-			s.detectionError = error
+	-- Compare with previous predictions
+	if not s.detectedWishdir then
+		s.detectedWishdir = Vector3(0, 0, 0)
+	end
+	local matched = false
+	if s.predictionTick == globals.TickCount() - 1 then
+		local bestErr, bestIdx = 1e9, 0
+		for i = 1, 9 do
+			local p = s.predictions[i]
+			local dx, dy = curPos.x - p.pos.x, curPos.y - p.pos.y
+			local dvx, dvy = curVel.x - p.vel.x, curVel.y - p.vel.y
+			-- Error metric: Pos + Vel
+			local err = math.sqrt(dx * dx + dy * dy) + math.sqrt(dvx * dvx + dvy * dvy) * 0.25
+			if err < bestErr then
+				bestErr = err
+				bestIdx = i
+			end
+		end
+		if bestIdx > 0 then
+			local p = s.predictions[bestIdx]
+			s.detectedWishdir.x, s.detectedWishdir.y, s.detectedWishdir.z = p.wishdir.x, p.wishdir.y, p.wishdir.z
+			matched = true
 		end
 	end
 
-	if not s.detectedWishdir then
-		s.detectedWishdir = clampVelocityTo8Directions(currentVel, currentYaw)
-		s.detectionError = nil
+	if not matched then
+		clampVelocityTo8Directions(curVel, yaw, s.detectedWishdir)
 	end
 
-	-- Step 2: Simulate all 9 directions for next tick comparison
+	-- Prepare for next tick
 	local simCtx = PredictionContext.createSimulationContext()
-	if simCtx then
-		s.predictions = simulateAllDirections(entity, simCtx)
-		s.predictionTick = globals.TickCount()
+	for i = 1, 9 do
+		simulateOneDirection(entity, simCtx, DIRECTIONS[i], s.predictions[i])
 	end
-
-	-- Store current state
-	s.lastPos = currentPos
-	s.lastVel = currentVel
-	s.lastYaw = currentYaw
+	s.predictionTick = globals.TickCount()
 	s.lastTick = globals.TickCount()
+	s.lastVelYaw = { x = curVel.x, y = curVel.y, yaw = yaw }
 end
 
 -- Get the detected relative wishdir for an entity
@@ -280,20 +250,20 @@ function WishdirTracker.getRelativeWishdir(entity)
 	if not entity then
 		return nil
 	end
-
 	local idx = entity:GetIndex()
-	local s = state[idx]
 
-	-- If we have a recent detected wishdir, use it
-	if s and s.detectedWishdir and s.lastTick == globals.TickCount() then
+	-- Handle Local Player CMD Override
+	local localPlayer = entities.GetLocalPlayer()
+	if localPlayer and idx == localPlayer:GetIndex() then
+		if G.LocalWishdir and G.LocalWishdirTick == globals.TickCount() then
+			return G.LocalWishdir
+		end
+	end
+
+	local s = playerState[idx]
+	if s and s.lastTick == globals.TickCount() then
 		return s.detectedWishdir
 	end
-
-	-- Fallback: clamp current velocity to 8 directions
-	if s and s.lastVel and s.lastYaw and s.lastTick == globals.TickCount() then
-		return clampVelocityTo8Directions(s.lastVel, s.lastYaw)
-	end
-
 	return nil
 end
 
@@ -306,26 +276,54 @@ function WishdirTracker.updateTop(pLocal, sortedEntities, maxTargets)
 	assert(sortedEntities, "WishdirTracker.updateTop: sortedEntities is nil")
 
 	maxTargets = maxTargets or MAX_TRACKED
+	local active = {}
 
-	local keep = {}
+	-- Inclusion: Local player always tracked for self-prediction
+	if pLocal and pLocal:IsAlive() then
+		active[pLocal:GetIndex()] = true
+		WishdirTracker.update(pLocal)
+	end
+
 	for i = 1, math.min(maxTargets, #sortedEntities) do
 		local ent = sortedEntities[i]
 		if ent and ent:IsAlive() and not ent:IsDormant() then
-			keep[ent:GetIndex()] = true
+			active[ent:GetIndex()] = true
 			WishdirTracker.update(ent)
 		end
 	end
 
-	-- Prune old entries
-	for idx, entry in pairs(state) do
-		if not keep[idx] or shouldPrune(entry) then
-			state[idx] = nil
+	for idx, s in pairs(playerState) do
+		if not active[idx] or (globals.TickCount() - s.lastTick) > EXPIRY_TICKS then
+			if s.predictions then
+				for i = 1, 9 do
+					releasePred(s.predictions[i])
+				end
+			end
+			-- s.detectedWishdir is a Vector3, if we wanted to pool it we could,
+			-- but for now we'll just let GC handle it or keep it in the state object.
+			playerState[idx] = nil
 		end
 	end
 end
 
 function WishdirTracker.clearAllHistory()
-	state = {}
+	for idx, s in pairs(playerState) do
+		if s.predictions then
+			for i = 1, 9 do
+				releasePred(s.predictions[i])
+			end
+		end
+		if s.detectedWishdir then
+			releaseVector(s.detectedWishdir)
+		end
+	end
+	playerState = {}
+	-- Also clear static context vectors
+	releaseVector(staticPlayerCtx.origin)
+	releaseVector(staticPlayerCtx.velocity)
+	releaseVector(staticPlayerCtx.mins)
+	releaseVector(staticPlayerCtx.maxs)
+	releaseVector(staticPlayerCtx.relativeWishDir)
 end
 
 return WishdirTracker

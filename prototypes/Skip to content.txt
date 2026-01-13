@@ -1,0 +1,3220 @@
+Skip to content
+- 
+      [Home](https://lmaobox.net/lua/)
+
+- 
+      [API Changelog](https://lmaobox.net/lua/API_changelog/)
+
+- 
+
+
+
+
+
+
+
+
+
+
+
+    Lua Callbacks
+
+
+
+
+
+
+
+
+
+
+    Lua Callbacks
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      Table of contents
+
+
+
+
+
+
+      Callbacks
+
+
+
+
+
+
+
+
+
+      Draw()
+
+
+
+
+
+
+
+
+      DrawModel( DrawModelContext:ctx )
+
+
+
+
+
+
+
+
+      DrawStaticProps( StaticPropRenderInfo:info )
+
+
+
+
+
+
+
+
+      CreateMove( UserCmd:cmd )
+
+
+
+
+
+
+
+
+      FireGameEvent( GameEvent:event )
+
+
+
+
+
+
+
+
+      DispatchUserMessage( UserMessage:msg )
+
+
+
+
+
+
+
+
+      SendStringCmd( StringCmd:cmd )
+
+
+
+
+
+
+
+
+      FrameStageNotify( stage:integer )
+
+
+
+
+
+
+
+
+      RenderView( ViewSetup:view )
+
+
+
+
+
+
+
+
+      PostRenderView( ViewSetup:view )
+
+
+
+
+
+
+
+
+      RenderViewModel( ViewSetup:view )
+
+
+
+
+
+
+
+
+      ServerCmdKeyValues( StringCmd:keyvalues )
+
+
+
+
+
+
+
+
+      OnFakeUncrate( Item:crate, Table:crateLootList )
+
+
+
+
+
+
+
+
+      OnLobbyUpdated( GameServerLobby:lobby )
+
+
+
+
+
+
+
+
+      SetRichPresence( String:key, String:value )
+
+
+
+
+
+
+
+
+      GCSendMessage( typeID:integer, data:StringCmd)
+
+
+
+
+
+
+
+
+      GCRetrieveMessage( typeID:integer, data:StringCmd)
+
+
+
+
+
+
+
+
+      SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+
+
+
+
+
+
+
+
+      DoPostScreenSpaceEffects()
+
+
+
+
+
+
+
+
+      ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+
+
+
+
+
+
+
+
+      Unload()
+
+
+
+
+
+
+
+
+
+
+
+  Examples
+
+
+
+
+
+
+
+
+- 
+
+
+      Callbacks
+
+
+
+
+
+
+
+
+
+      Draw()
+
+
+
+
+
+
+
+
+      DrawModel( DrawModelContext:ctx )
+
+
+
+
+
+
+
+
+      DrawStaticProps( StaticPropRenderInfo:info )
+
+
+
+
+
+
+
+
+      CreateMove( UserCmd:cmd )
+
+
+
+
+
+
+
+
+      FireGameEvent( GameEvent:event )
+
+
+
+
+
+
+
+
+      DispatchUserMessage( UserMessage:msg )
+
+
+
+
+
+
+
+
+      SendStringCmd( StringCmd:cmd )
+
+
+
+
+
+
+
+
+      FrameStageNotify( stage:integer )
+
+
+
+
+
+
+
+
+      RenderView( ViewSetup:view )
+
+
+
+
+
+
+
+
+      PostRenderView( ViewSetup:view )
+
+
+
+
+
+
+
+
+      RenderViewModel( ViewSetup:view )
+
+
+
+
+
+
+
+
+      ServerCmdKeyValues( StringCmd:keyvalues )
+
+
+
+
+
+
+
+
+      OnFakeUncrate( Item:crate, Table:crateLootList )
+
+
+
+
+
+
+
+
+      OnLobbyUpdated( GameServerLobby:lobby )
+
+
+
+
+
+
+
+
+      SetRichPresence( String:key, String:value )
+
+
+
+
+
+
+
+
+      GCSendMessage( typeID:integer, data:StringCmd)
+
+
+
+
+
+
+
+
+      GCRetrieveMessage( typeID:integer, data:StringCmd)
+
+
+
+
+
+
+
+
+      SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+
+
+
+
+
+
+
+
+      DoPostScreenSpaceEffects()
+
+
+
+
+
+
+
+
+      ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+
+
+
+
+
+
+  Unload()
+
+
+
+
+
+
+
+- 
+  Draw()
+
+
+- 
+  DrawModel( DrawModelContext:ctx )
+
+
+- 
+  DrawStaticProps( StaticPropRenderInfo:info )
+
+
+- 
+  CreateMove( UserCmd:cmd )
+
+
+- 
+  FireGameEvent( GameEvent:event )
+
+
+- 
+  DispatchUserMessage( UserMessage:msg )
+
+
+- 
+  SendStringCmd( StringCmd:cmd )
+
+
+- 
+  FrameStageNotify( stage:integer )
+
+
+- 
+  RenderView( ViewSetup:view )
+
+
+- 
+  PostRenderView( ViewSetup:view )
+
+
+- 
+  RenderViewModel( ViewSetup:view )
+
+
+- 
+  ServerCmdKeyValues( StringCmd:keyvalues )
+
+
+- 
+  OnFakeUncrate( Item:crate, Table:crateLootList )
+
+
+- 
+  OnLobbyUpdated( GameServerLobby:lobby )
+
+
+- 
+  SetRichPresence( String:key, String:value )
+
+
+- 
+  GCSendMessage( typeID:integer, data:StringCmd)
+
+
+- 
+  GCRetrieveMessage( typeID:integer, data:StringCmd)
+
+
+- 
+  SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+
+
+- 
+  DoPostScreenSpaceEffects()
+
+
+- 
+  ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+
+
+- 
+  Unload()
+
+
+- 
+  Examples
+
+
+- 
+      [Predefined constants](https://lmaobox.net/lua/Lua_Constants/)
+
+- 
+      [Lua Globals](https://lmaobox.net/lua/Lua_Globals/)
+
+- 
+      [Entity Props](https://lmaobox.net/lua/TF2_props/)
+
+- 
+
+
+
+
+
+
+
+
+
+
+    Lua Classes
+
+
+
+
+
+
+
+
+
+            Lua Classes
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    AttributeDefinition
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    BitBuffer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    DrawModelContext
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Entity
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    EulerAngles
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    EventInfo
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    GameEvent
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    GameServerLobby
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Item
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ItemDefinition
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    LobbyPlayer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    MatchGroup
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    MatchMapDefinition
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Material
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Model
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    NetChannel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    NetMessage
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    PartyMemberActivity
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    PhysicsCollisionModel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    PhysicsEnvironment
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    PhysicsObject
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    PhysicsObjectParameters
+
+PhysicsSolid
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    StaticPropRenderInfo
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    StringCmd
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    StudioBBox
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    StudioHitboxSet
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    StudioModelHeader
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    TempEntity
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Texture
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Trace
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    UserCmd
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    UserMessage
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Vector3
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ViewSetup
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      [WeaponData](https://lmaobox.net/lua/Lua_Classes/WeaponData/)
+
+
+
+
+
+
+
+
+
+- 
+      [AttributeDefinition](https://lmaobox.net/lua/Lua_Classes/AttributeDefinition/)
+
+- 
+      [BitBuffer](https://lmaobox.net/lua/Lua_Classes/BitBuffer/)
+
+- 
+      [DrawModelContext](https://lmaobox.net/lua/Lua_Classes/DrawModelContext/)
+
+- 
+      [Entity](https://lmaobox.net/lua/Lua_Classes/Entity/)
+
+- 
+      [EulerAngles](https://lmaobox.net/lua/Lua_Classes/EulerAngles/)
+
+- 
+      [EventInfo](https://lmaobox.net/lua/Lua_Classes/EventInfo/)
+
+- 
+      [GameEvent](https://lmaobox.net/lua/Lua_Classes/GameEvent/)
+
+- 
+      [GameServerLobby](https://lmaobox.net/lua/Lua_Classes/GameServerLobby/)
+
+- 
+      [Item](https://lmaobox.net/lua/Lua_Classes/Item/)
+
+- 
+      [ItemDefinition](https://lmaobox.net/lua/Lua_Classes/ItemDefinition/)
+
+- 
+      [LobbyPlayer](https://lmaobox.net/lua/Lua_Classes/LobbyPlayer/)
+
+- 
+      [MatchGroup](https://lmaobox.net/lua/Lua_Classes/MatchGroup/)
+
+- 
+      [MatchMapDefinition](https://lmaobox.net/lua/Lua_Classes/MatchMapDefinition/)
+
+- 
+      [Material](https://lmaobox.net/lua/Lua_Classes/Material/)
+
+- 
+      [Model](https://lmaobox.net/lua/Lua_Classes/Model/)
+
+- 
+      [NetChannel](https://lmaobox.net/lua/Lua_Classes/NetChannel/)
+
+- 
+      [NetMessage](https://lmaobox.net/lua/Lua_Classes/NetMessage/)
+
+- 
+      [PartyMemberActivity](https://lmaobox.net/lua/Lua_Classes/PartyMemberActivity/)
+
+- 
+      [PhysicsCollisionModel](https://lmaobox.net/lua/Lua_Classes/PhysicsCollisionModel/)
+
+- 
+      [PhysicsEnvironment](https://lmaobox.net/lua/Lua_Classes/PhysicsEnvironment/)
+
+- 
+      [PhysicsObject](https://lmaobox.net/lua/Lua_Classes/PhysicsObject/)
+
+- 
+      [PhysicsObjectParameters](https://lmaobox.net/lua/Lua_Classes/PhysicsObjectParameters/)
+
+- 
+      [PhysicsSolid](https://lmaobox.net/lua/Lua_Classes/PhysicsSolid/)
+
+- 
+      [StaticPropRenderInfo](https://lmaobox.net/lua/Lua_Classes/StaticPropRenderInfo/)
+
+- 
+      [StringCmd](https://lmaobox.net/lua/Lua_Classes/StringCmd/)
+
+- 
+      [StudioBBox](https://lmaobox.net/lua/Lua_Classes/StudioBBox/)
+
+- 
+      [StudioHitboxSet](https://lmaobox.net/lua/Lua_Classes/StudioHitboxSet/)
+
+- 
+      [StudioModelHeader](https://lmaobox.net/lua/Lua_Classes/StudioModelHeader/)
+
+- 
+      [TempEntity](https://lmaobox.net/lua/Lua_Classes/TempEntity/)
+
+- 
+      [Texture](https://lmaobox.net/lua/Lua_Classes/Texture/)
+
+- 
+      [Trace](https://lmaobox.net/lua/Lua_Classes/Trace/)
+
+- 
+      [UserCmd](https://lmaobox.net/lua/Lua_Classes/UserCmd/)
+
+- 
+      [UserMessage](https://lmaobox.net/lua/Lua_Classes/UserMessage/)
+
+- 
+      [Vector3](https://lmaobox.net/lua/Lua_Classes/Vector3/)
+
+- 
+      [ViewSetup](https://lmaobox.net/lua/Lua_Classes/ViewSetup/)
+
+- 
+      [WeaponData](https://lmaobox.net/lua/Lua_Classes/WeaponData/)
+
+- 
+
+
+
+
+
+
+
+
+
+
+    Lua Libraries
+
+
+
+
+
+
+
+
+
+            Lua Libraries
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    aimbot
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    callbacks
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    client
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    clientstate
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    draw
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    engine
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    entities
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    filesystem
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    gamecoordinator
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    gamerules
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    globals
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    gui
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    http
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    input
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    inventory
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    itemschema
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    materials
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    models
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    party
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    physics
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    playerlist
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    render
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    steam
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    vector
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      [warp](https://lmaobox.net/lua/Lua_Libraries/warp/)
+
+
+
+
+
+
+
+
+
+- 
+      [aimbot](https://lmaobox.net/lua/Lua_Libraries/aimbot/)
+
+- 
+      [callbacks](https://lmaobox.net/lua/Lua_Libraries/callbacks/)
+
+- 
+      [client](https://lmaobox.net/lua/Lua_Libraries/client/)
+
+- 
+      [clientstate](https://lmaobox.net/lua/Lua_Libraries/clientstate/)
+
+-
+
+[draw](https://lmaobox.net/lua/Lua_Libraries/draw/)
+
+- 
+      [engine](https://lmaobox.net/lua/Lua_Libraries/engine/)
+
+- 
+      [entities](https://lmaobox.net/lua/Lua_Libraries/entities/)
+
+- 
+      [filesystem](https://lmaobox.net/lua/Lua_Libraries/filesystem/)
+
+- 
+      [gamecoordinator](https://lmaobox.net/lua/Lua_Libraries/gamecoordinator/)
+
+- 
+      [gamerules](https://lmaobox.net/lua/Lua_Libraries/gamerules/)
+
+- 
+      [globals](https://lmaobox.net/lua/Lua_Libraries/globals/)
+
+- 
+      [gui](https://lmaobox.net/lua/Lua_Libraries/gui/)
+
+- 
+      [http](https://lmaobox.net/lua/Lua_Libraries/http/)
+
+- 
+      [input](https://lmaobox.net/lua/Lua_Libraries/input/)
+
+- 
+      [inventory](https://lmaobox.net/lua/Lua_Libraries/inventory/)
+
+- 
+      [itemschema](https://lmaobox.net/lua/Lua_Libraries/itemschema/)
+
+- 
+      [materials](https://lmaobox.net/lua/Lua_Libraries/materials/)
+
+- 
+      [models](https://lmaobox.net/lua/Lua_Libraries/models/)
+
+- 
+      [party](https://lmaobox.net/lua/Lua_Libraries/party/)
+
+- 
+      [physics](https://lmaobox.net/lua/Lua_Libraries/physics/)
+
+- 
+      [playerlist](https://lmaobox.net/lua/Lua_Libraries/playerlist/)
+
+- 
+      [render](https://lmaobox.net/lua/Lua_Libraries/render/)
+
+- 
+      [steam](https://lmaobox.net/lua/Lua_Libraries/steam/)
+
+- 
+      [vector](https://lmaobox.net/lua/Lua_Libraries/vector/)
+
+- 
+      [warp](https://lmaobox.net/lua/Lua_Libraries/warp/)
+
+[Home](https://lmaobox.net/lua/)
+[API Changelog](https://lmaobox.net/lua/API_changelog/)
+[Lua Callbacks](https://lmaobox.net/lua/Lua_Callbacks/)
+- 
+
+
+      Callbacks
+
+
+
+
+
+
+
+
+
+      Draw()
+
+
+
+
+
+
+
+
+      DrawModel( DrawModelContext:ctx )
+
+
+
+
+
+
+
+
+      DrawStaticProps( StaticPropRenderInfo:info )
+
+
+
+
+
+
+
+
+      CreateMove( UserCmd:cmd )
+
+
+
+
+
+
+
+
+      FireGameEvent( GameEvent:event )
+
+
+
+
+
+
+
+
+      DispatchUserMessage( UserMessage:msg )
+
+
+
+
+
+
+
+
+      SendStringCmd( StringCmd:cmd )
+
+
+
+
+
+
+
+
+      FrameStageNotify( stage:integer )
+
+
+
+
+
+
+
+
+      RenderView( ViewSetup:view )
+
+
+
+
+
+
+
+
+      PostRenderView( ViewSetup:view )
+
+
+
+
+
+
+
+
+      RenderViewModel( ViewSetup:view )
+
+
+
+
+
+
+
+
+      ServerCmdKeyValues( StringCmd:keyvalues )
+
+
+
+
+
+
+
+
+      OnFakeUncrate( Item:crate, Table:crateLootList )
+
+
+
+
+
+
+
+
+      OnLobbyUpdated( GameServerLobby:lobby )
+
+
+
+
+
+
+
+
+      SetRichPresence( String:key, String:value )
+
+
+
+
+
+
+
+
+      GCSendMessage( typeID:integer, data:StringCmd)
+
+
+
+
+
+
+
+
+      GCRetrieveMessage( typeID:integer, data:StringCmd)
+
+
+
+
+
+
+
+
+      SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+
+
+
+
+
+
+
+
+      DoPostScreenSpaceEffects()
+
+
+
+
+
+
+
+
+      ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+
+
+
+
+
+
+  Unload()
+
+
+
+
+
+
+
+- 
+  Draw()
+
+
+- 
+  DrawModel( DrawModelContext:ctx )
+
+
+- 
+  DrawStaticProps( StaticPropRenderInfo:info )
+
+
+- 
+  CreateMove( UserCmd:cmd )
+
+
+- 
+  FireGameEvent( GameEvent:event )
+
+
+- 
+  DispatchUserMessage( UserMessage:msg )
+
+
+- 
+  SendStringCmd( StringCmd:cmd )
+
+
+- 
+  FrameStageNotify( stage:integer )
+
+
+- 
+  RenderView( ViewSetup:view )
+
+
+- 
+  PostRenderView( ViewSetup:view )
+
+
+- 
+  RenderViewModel( ViewSetup:view )
+
+
+- 
+  ServerCmdKeyValues( StringCmd:keyvalues )
+
+
+- 
+  OnFakeUncrate( Item:crate, Table:crateLootList )
+
+
+- 
+  OnLobbyUpdated( GameServerLobby:lobby )
+
+
+- 
+  SetRichPresence( String:key, String:value )
+
+
+- 
+  GCSendMessage( typeID:integer, data:StringCmd)
+
+
+- 
+  GCRetrieveMessage( typeID:integer, data:StringCmd)
+
+
+- 
+  SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+
+
+- 
+  DoPostScreenSpaceEffects()
+
+
+- 
+  ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+
+
+- 
+  Unload()
+
+
+- 
+  Examples
+
+
+Callbacks
+- 
+  Draw()
+
+
+- 
+  DrawModel( DrawModelContext:ctx )
+
+
+- 
+  DrawStaticProps( StaticPropRenderInfo:info )
+
+
+- 
+  CreateMove( UserCmd:cmd )
+
+
+- 
+  FireGameEvent( GameEvent:event )
+
+
+- 
+  DispatchUserMessage( UserMessage:msg )
+
+
+- 
+  SendStringCmd( StringCmd:cmd )
+
+
+- 
+  FrameStageNotify( stage:integer )
+
+
+- 
+  RenderView( ViewSetup:view )
+
+
+- 
+  PostRenderView( ViewSetup:view )
+
+
+- 
+  RenderViewModel( ViewSetup:view )
+
+
+- 
+  ServerCmdKeyValues( StringCmd:keyvalues )
+
+
+- 
+  OnFakeUncrate( Item:crate, Table:crateLootList )
+
+
+- 
+  OnLobbyUpdated( GameServerLobby:lobby )
+
+
+- 
+  SetRichPresence( String:key, String:value )
+
+
+- 
+  GCSendMessage( typeID:integer, data:StringCmd)
+
+
+- 
+  GCRetrieveMessage( typeID:integer, data:StringCmd)
+
+
+- 
+  SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+
+
+- 
+  DoPostScreenSpaceEffects()
+
+
+-
+
+ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+
+
+- 
+  Unload()
+
+
+Draw()
+DrawModel( DrawModelContext:ctx )
+DrawStaticProps( StaticPropRenderInfo:info )
+CreateMove( UserCmd:cmd )
+FireGameEvent( GameEvent:event )
+DispatchUserMessage( UserMessage:msg )
+SendStringCmd( StringCmd:cmd )
+FrameStageNotify( stage:integer )
+RenderView( ViewSetup:view )
+PostRenderView( ViewSetup:view )
+RenderViewModel( ViewSetup:view )
+ServerCmdKeyValues( StringCmd:keyvalues )
+OnFakeUncrate( Item:crate, Table:crateLootList )
+OnLobbyUpdated( GameServerLobby:lobby )
+SetRichPresence( String:key, String:value )
+GCSendMessage( typeID:integer, data:StringCmd)
+GCRetrieveMessage( typeID:integer, data:StringCmd)
+SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+DoPostScreenSpaceEffects()
+ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+Unload()
+Examples
+[Predefined constants](https://lmaobox.net/lua/Lua_Constants/)
+[Lua Globals](https://lmaobox.net/lua/Lua_Globals/)
+[Entity Props](https://lmaobox.net/lua/TF2_props/)
+- 
+      [AttributeDefinition](https://lmaobox.net/lua/Lua_Classes/AttributeDefinition/)
+
+- 
+      [BitBuffer](https://lmaobox.net/lua/Lua_Classes/BitBuffer/)
+
+- 
+      [DrawModelContext](https://lmaobox.net/lua/Lua_Classes/DrawModelContext/)
+
+- 
+      [Entity](https://lmaobox.net/lua/Lua_Classes/Entity/)
+
+- 
+      [EulerAngles](https://lmaobox.net/lua/Lua_Classes/EulerAngles/)
+
+- 
+      [EventInfo](https://lmaobox.net/lua/Lua_Classes/EventInfo/)
+
+- 
+      [GameEvent](https://lmaobox.net/lua/Lua_Classes/GameEvent/)
+
+- 
+      [GameServerLobby](https://lmaobox.net/lua/Lua_Classes/GameServerLobby/)
+
+- 
+      [Item](https://lmaobox.net/lua/Lua_Classes/Item/)
+
+- 
+      [ItemDefinition](https://lmaobox.net/lua/Lua_Classes/ItemDefinition/)
+
+- 
+      [LobbyPlayer](https://lmaobox.net/lua/Lua_Classes/LobbyPlayer/)
+
+- 
+      [MatchGroup](https://lmaobox.net/lua/Lua_Classes/MatchGroup/)
+
+- 
+      [MatchMapDefinition](https://lmaobox.net/lua/Lua_Classes/MatchMapDefinition/)
+
+- 
+      [Material](https://lmaobox.net/lua/Lua_Classes/Material/)
+
+- 
+      [Model](https://lmaobox.net/lua/Lua_Classes/Model/)
+
+- 
+      [NetChannel](https://lmaobox.net/lua/Lua_Classes/NetChannel/)
+
+- 
+      [NetMessage](https://lmaobox.net/lua/Lua_Classes/NetMessage/)
+
+- 
+      [PartyMemberActivity](https://lmaobox.net/lua/Lua_Classes/PartyMemberActivity/)
+
+- 
+      [PhysicsCollisionModel](https://lmaobox.net/lua/Lua_Classes/PhysicsCollisionModel/)
+
+- 
+      [PhysicsEnvironment](https://lmaobox.net/lua/Lua_Classes/PhysicsEnvironment/)
+
+- 
+      [PhysicsObject](https://lmaobox.net/lua/Lua_Classes/PhysicsObject/)
+
+- 
+      [PhysicsObjectParameters](https://lmaobox.net/lua/Lua_Classes/PhysicsObjectParameters/)
+
+- 
+      [PhysicsSolid](https://lmaobox.net/lua/Lua_Classes/PhysicsSolid/)
+
+- 
+      [StaticPropRenderInfo](https://lmaobox.net/lua/Lua_Classes/StaticPropRenderInfo/)
+
+- 
+      [StringCmd](https://lmaobox.net/lua/Lua_Classes/StringCmd/)
+
+- 
+      [StudioBBox](https://lmaobox.net/lua/Lua_Classes/StudioBBox/)
+
+- 
+      [StudioHitboxSet](https://lmaobox.net/lua/Lua_Classes/StudioHitboxSet/)
+
+- 
+      [StudioModelHeader](https://lmaobox.net/lua/Lua_Classes/StudioModelHeader/)
+
+- 
+      [TempEntity](https://lmaobox.net/lua/Lua_Classes/TempEntity/)
+
+- 
+      [Texture](https://lmaobox.net/lua/Lua_Classes/Texture/)
+
+- 
+      [Trace](https://lmaobox.net/lua/Lua_Classes/Trace/)
+
+- 
+      [UserCmd](https://lmaobox.net/lua/Lua_Classes/UserCmd/)
+
+- 
+      [UserMessage](https://lmaobox.net/lua/Lua_Classes/UserMessage/)
+
+- 
+      [Vector3](https://lmaobox.net/lua/Lua_Classes/Vector3/)
+
+- 
+      [ViewSetup](https://lmaobox.net/lua/Lua_Classes/ViewSetup/)
+
+- 
+      [WeaponData](https://lmaobox.net/lua/Lua_Classes/WeaponData/)
+
+[AttributeDefinition](https://lmaobox.net/lua/Lua_Classes/AttributeDefinition/)
+[BitBuffer](https://lmaobox.net/lua/Lua_Classes/BitBuffer/)
+[DrawModelContext](https://lmaobox.net/lua/Lua_Classes/DrawModelContext/)
+[Entity](https://lmaobox.net/lua/Lua_Classes/Entity/)
+[EulerAngles](https://lmaobox.net/lua/Lua_Classes/EulerAngles/)
+[EventInfo](https://lmaobox.net/lua/Lua_Classes/EventInfo/)
+[GameEvent](https://lmaobox.net/lua/Lua_Classes/GameEvent/)
+[GameServerLobby](https://lmaobox.net/lua/Lua_Classes/GameServerLobby/)
+[Item](https://lmaobox.net/lua/Lua_Classes/Item/)
+[ItemDefinition](https://lmaobox.net/lua/Lua_Classes/ItemDefinition/)
+[LobbyPlayer](https://lmaobox.net/lua/Lua_Classes/LobbyPlayer/)
+
+[MatchGroup](https://lmaobox.net/lua/Lua_Classes/MatchGroup/)
+[MatchMapDefinition](https://lmaobox.net/lua/Lua_Classes/MatchMapDefinition/)
+[Material](https://lmaobox.net/lua/Lua_Classes/Material/)
+[Model](https://lmaobox.net/lua/Lua_Classes/Model/)
+[NetChannel](https://lmaobox.net/lua/Lua_Classes/NetChannel/)
+[NetMessage](https://lmaobox.net/lua/Lua_Classes/NetMessage/)
+[PartyMemberActivity](https://lmaobox.net/lua/Lua_Classes/PartyMemberActivity/)
+[PhysicsCollisionModel](https://lmaobox.net/lua/Lua_Classes/PhysicsCollisionModel/)
+[PhysicsEnvironment](https://lmaobox.net/lua/Lua_Classes/PhysicsEnvironment/)
+[PhysicsObject](https://lmaobox.net/lua/Lua_Classes/PhysicsObject/)
+[PhysicsObjectParameters](https://lmaobox.net/lua/Lua_Classes/PhysicsObjectParameters/)
+[PhysicsSolid](https://lmaobox.net/lua/Lua_Classes/PhysicsSolid/)
+[StaticPropRenderInfo](https://lmaobox.net/lua/Lua_Classes/StaticPropRenderInfo/)
+[StringCmd](https://lmaobox.net/lua/Lua_Classes/StringCmd/)
+[StudioBBox](https://lmaobox.net/lua/Lua_Classes/StudioBBox/)
+[StudioHitboxSet](https://lmaobox.net/lua/Lua_Classes/StudioHitboxSet/)
+[StudioModelHeader](https://lmaobox.net/lua/Lua_Classes/StudioModelHeader/)
+[TempEntity](https://lmaobox.net/lua/Lua_Classes/TempEntity/)
+[Texture](https://lmaobox.net/lua/Lua_Classes/Texture/)
+[Trace](https://lmaobox.net/lua/Lua_Classes/Trace/)
+[UserCmd](https://lmaobox.net/lua/Lua_Classes/UserCmd/)
+[UserMessage](https://lmaobox.net/lua/Lua_Classes/UserMessage/)
+[Vector3](https://lmaobox.net/lua/Lua_Classes/Vector3/)
+[ViewSetup](https://lmaobox.net/lua/Lua_Classes/ViewSetup/)
+[WeaponData](https://lmaobox.net/lua/Lua_Classes/WeaponData/)
+- 
+      [aimbot](https://lmaobox.net/lua/Lua_Libraries/aimbot/)
+
+- 
+      [callbacks](https://lmaobox.net/lua/Lua_Libraries/callbacks/)
+
+- 
+      [client](https://lmaobox.net/lua/Lua_Libraries/client/)
+
+- 
+      [clientstate](https://lmaobox.net/lua/Lua_Libraries/clientstate/)
+
+- 
+      [draw](https://lmaobox.net/lua/Lua_Libraries/draw/)
+
+- 
+      [engine](https://lmaobox.net/lua/Lua_Libraries/engine/)
+
+- 
+      [entities](https://lmaobox.net/lua/Lua_Libraries/entities/)
+
+- 
+      [filesystem](https://lmaobox.net/lua/Lua_Libraries/filesystem/)
+
+- 
+      [gamecoordinator](https://lmaobox.net/lua/Lua_Libraries/gamecoordinator/)
+
+- 
+      [gamerules](https://lmaobox.net/lua/Lua_Libraries/gamerules/)
+
+- 
+      [globals](https://lmaobox.net/lua/Lua_Libraries/globals/)
+
+- 
+      [gui](https://lmaobox.net/lua/Lua_Libraries/gui/)
+
+- 
+      [http](https://lmaobox.net/lua/Lua_Libraries/http/)
+
+- 
+      [input](https://lmaobox.net/lua/Lua_Libraries/input/)
+
+- 
+      [inventory](https://lmaobox.net/lua/Lua_Libraries/inventory/)
+
+- 
+      [itemschema](https://lmaobox.net/lua/Lua_Libraries/itemschema/)
+
+- 
+      [materials](https://lmaobox.net/lua/Lua_Libraries/materials/)
+
+- 
+      [models](https://lmaobox.net/lua/Lua_Libraries/models/)
+
+- 
+      [party](https://lmaobox.net/lua/Lua_Libraries/party/)
+
+- 
+      [physics](https://lmaobox.net/lua/Lua_Libraries/physics/)
+
+- 
+      [playerlist](https://lmaobox.net/lua/Lua_Libraries/playerlist/)
+
+- 
+      [render](https://lmaobox.net/lua/Lua_Libraries/render/)
+
+- 
+      [steam](https://lmaobox.net/lua/Lua_Libraries/steam/)
+
+- 
+      [vector](https://lmaobox.net/lua/Lua_Libraries/vector/)
+
+- 
+      [warp](https://lmaobox.net/lua/Lua_Libraries/warp/)
+
+[aimbot](https://lmaobox.net/lua/Lua_Libraries/aimbot/)
+[callbacks](https://lmaobox.net/lua/Lua_Libraries/callbacks/)
+[client](https://lmaobox.net/lua/Lua_Libraries/client/)
+[clientstate](https://lmaobox.net/lua/Lua_Libraries/clientstate/)
+[draw](https://lmaobox.net/lua/Lua_Libraries/draw/)
+[engine](https://lmaobox.net/lua/Lua_Libraries/engine/)
+[entities](https://lmaobox.net/lua/Lua_Libraries/entities/)
+[filesystem](https://lmaobox.net/lua/Lua_Libraries/filesystem/)
+[gamecoordinator](https://lmaobox.net/lua/Lua_Libraries/gamecoordinator/)
+[gamerules](https://lmaobox.net/lua/Lua_Libraries/gamerules/)
+[globals](https://lmaobox.net/lua/Lua_Libraries/globals/)
+[gui](https://lmaobox.net/lua/Lua_Libraries/gui/)
+[http](https://lmaobox.net/lua/Lua_Libraries/http/)
+[input](https://lmaobox.net/lua/Lua_Libraries/input/)
+[inventory](https://lmaobox.net/lua/Lua_Libraries/inventory/)
+[itemschema](https://lmaobox.net/lua/Lua_Libraries/itemschema/)
+[materials](https://lmaobox.net/lua/Lua_Libraries/materials/)
+[models](https://lmaobox.net/lua/Lua_Libraries/models/)
+[party](https://lmaobox.net/lua/Lua_Libraries/party/)
+
+[physics](https://lmaobox.net/lua/Lua_Libraries/physics/)
+[playerlist](https://lmaobox.net/lua/Lua_Libraries/playerlist/)
+[render](https://lmaobox.net/lua/Lua_Libraries/render/)
+[steam](https://lmaobox.net/lua/Lua_Libraries/steam/)
+[vector](https://lmaobox.net/lua/Lua_Libraries/vector/)
+[warp](https://lmaobox.net/lua/Lua_Libraries/warp/)
+- 
+
+
+      Callbacks
+
+
+
+
+
+
+
+
+
+      Draw()
+
+
+
+
+
+
+
+
+      DrawModel( DrawModelContext:ctx )
+
+
+
+
+
+
+
+
+      DrawStaticProps( StaticPropRenderInfo:info )
+
+
+
+
+
+
+
+
+      CreateMove( UserCmd:cmd )
+
+
+
+
+
+
+
+
+      FireGameEvent( GameEvent:event )
+
+
+
+
+
+
+
+
+      DispatchUserMessage( UserMessage:msg )
+
+
+
+
+
+
+
+
+      SendStringCmd( StringCmd:cmd )
+
+
+
+
+
+
+
+
+      FrameStageNotify( stage:integer )
+
+
+
+
+
+
+
+
+      RenderView( ViewSetup:view )
+
+
+
+
+
+
+
+
+      PostRenderView( ViewSetup:view )
+
+
+
+
+
+
+
+
+      RenderViewModel( ViewSetup:view )
+
+
+
+
+
+
+
+
+      ServerCmdKeyValues( StringCmd:keyvalues )
+
+
+
+
+
+
+
+
+      OnFakeUncrate( Item:crate, Table:crateLootList )
+
+
+
+
+
+
+
+
+      OnLobbyUpdated( GameServerLobby:lobby )
+
+
+
+
+
+
+
+
+      SetRichPresence( String:key, String:value )
+
+
+
+
+
+
+
+
+      GCSendMessage( typeID:integer, data:StringCmd)
+
+
+
+
+
+
+
+
+      GCRetrieveMessage( typeID:integer, data:StringCmd)
+
+
+
+
+
+
+
+
+      SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+
+
+
+
+
+
+
+
+      DoPostScreenSpaceEffects()
+
+
+
+
+
+
+
+
+      ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+
+
+
+
+
+
+  Unload()
+
+
+
+
+
+
+
+- 
+  Draw()
+
+
+- 
+  DrawModel( DrawModelContext:ctx )
+
+
+- 
+  DrawStaticProps( StaticPropRenderInfo:info )
+
+
+- 
+  CreateMove( UserCmd:cmd )
+
+
+- 
+  FireGameEvent( GameEvent:event )
+
+
+- 
+  DispatchUserMessage( UserMessage:msg )
+
+
+- 
+  SendStringCmd( StringCmd:cmd )
+
+
+- 
+  FrameStageNotify( stage:integer )
+
+
+- 
+  RenderView( ViewSetup:view )
+
+
+- 
+  PostRenderView( ViewSetup:view )
+
+
+- 
+  RenderViewModel( ViewSetup:view )
+
+
+- 
+  ServerCmdKeyValues( StringCmd:keyvalues )
+
+
+- 
+  OnFakeUncrate( Item:crate, Table:crateLootList )
+
+
+- 
+  OnLobbyUpdated( GameServerLobby:lobby )
+
+
+- 
+  SetRichPresence( String:key, String:value )
+
+
+- 
+  GCSendMessage( typeID:integer, data:StringCmd)
+
+
+- 
+  GCRetrieveMessage( typeID:integer, data:StringCmd)
+
+
+- 
+  SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+
+
+- 
+  DoPostScreenSpaceEffects()
+
+
+- 
+  ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+
+
+- 
+  Unload()
+
+
+- 
+  Examples
+
+
+Callbacks
+- 
+  Draw()
+
+
+- 
+  DrawModel( DrawModelContext:ctx )
+
+
+- 
+  DrawStaticProps( StaticPropRenderInfo:info )
+
+
+- 
+  CreateMove( UserCmd:cmd )
+
+
+- 
+  FireGameEvent( GameEvent:event )
+
+
+- 
+  DispatchUserMessage( UserMessage:msg )
+
+
+- 
+  SendStringCmd( StringCmd:cmd )
+
+
+- 
+  FrameStageNotify( stage:integer )
+
+
+- 
+  RenderView( ViewSetup:view )
+
+
+- 
+  PostRenderView( ViewSetup:view )
+
+
+- 
+  RenderViewModel( ViewSetup:view )
+
+
+- 
+  ServerCmdKeyValues( StringCmd:keyvalues )
+
+
+- 
+  OnFakeUncrate( Item:crate, Table:crateLootList )
+
+
+- 
+  OnLobbyUpdated( GameServerLobby:lobby )
+
+
+- 
+  SetRichPresence( String:key, String:value )
+
+
+- 
+  GCSendMessage( typeID:integer, data:StringCmd)
+
+
+- 
+  GCRetrieveMessage( typeID:integer, data:StringCmd)
+
+
+- 
+  SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+
+
+- 
+  DoPostScreenSpaceEffects()
+
+
+- 
+  ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+
+
+- 
+  Unload()
+
+
+Draw()
+DrawModel( DrawModelContext:ctx )
+DrawStaticProps( StaticPropRenderInfo:info )
+CreateMove( UserCmd:cmd )
+FireGameEvent( GameEvent:event )
+DispatchUserMessage( UserMessage:msg )
+SendStringCmd( StringCmd:cmd )
+FrameStageNotify( stage:integer )
+RenderView( ViewSetup:view )
+PostRenderView( ViewSetup:view )
+RenderViewModel( ViewSetup:view )
+ServerCmdKeyValues( StringCmd:keyvalues )
+OnFakeUncrate( Item:crate, Table:crateLootList )
+OnLobbyUpdated( GameServerLobby:lobby )
+SetRichPresence( String:key, String:value )
+GCSendMessage( typeID:integer, data:StringCmd)
+GCRetrieveMessage( typeID:integer, data:StringCmd)
+SendNetMsg( NetMessage:msg, reliable:boolean, voice:boolean )
+DoPostScreenSpaceEffects()
+ProcessTempEntities( Table<TempEntity, EventInfo> entEvtTable )
+Unload()
+Examples
+
+# Lua Callbacks
+
+Callbacks are the functions that are called when certain events happen. They are usually the most key parts of your scripts, and include functions like Draw(), which is called every frame - and as such is useful for drawing. Different callbacks are called in different situations, and you can use them to add custom functionality to your scripts.
+
+```
+Draw()
+```
+
+### Draw()
+Called every frame. It is called after the screen is rendered, and can be used to draw text or objects on the screen.
+
+### DrawModel( [DrawModelContext:ctx](https://lmaobox.net/lua/Lua_Classes/DrawModelContext/) )
+[DrawModelContext:ctx](https://lmaobox.net/lua/Lua_Classes/DrawModelContext/)
+Called every time a model is just about to be drawn on the screen. You can use this to change the material used to draw the model or do some other effects.\
+
+### DrawStaticProps( [StaticPropRenderInfo:info](https://lmaobox.net/lua/Lua_Classes/StaticPropRenderInfo/) )
+[StaticPropRenderInfo:info](https://lmaobox.net/lua/Lua_Classes/StaticPropRenderInfo/)
+Called every time static props are just about to be drawn on the screen. You can use this to change colors, materials, or do some other effects.
+
+### CreateMove( [UserCmd:cmd](https://lmaobox.net/lua/Lua_Classes/UserCmd/) )
+[UserCmd:cmd](https://lmaobox.net/lua/Lua_Classes/UserCmd/)
+Called every input update (66 times/sec), allows to modify viewangles, buttons, packet sending, etc. Useful for changing player movement or inputs.
+
+### FireGameEvent( [GameEvent:event](https://lmaobox.net/lua/Lua_Classes/GameEvent/) )
+[GameEvent:event](https://lmaobox.net/lua/Lua_Classes/GameEvent/)
+Called for all available game events. Game events are small packets of information that are sent from the server to the client, data about a situation that has happened.
+
+### DispatchUserMessage( [UserMessage:msg](https://lmaobox.net/lua/Lua_Classes/UserMessage/) )
+[UserMessage:msg](https://lmaobox.net/lua/Lua_Classes/UserMessage/)
+Called on every user message of type [UserMessage](https://lmaobox.net/lua/Lua_Classes/UserMessage/). User messages are small packets of information that are sent from the server to the client, data about a situation that has happened.
+
+### SendStringCmd( [StringCmd:cmd](https://lmaobox.net/lua/Lua_Classes/StringCmd/) )
+[StringCmd:cmd](https://lmaobox.net/lua/Lua_Classes/StringCmd/)
+Called when console command is sent to server, ex. chat command "say".
+
+### FrameStageNotify( [stage:integer](https://lmaobox.net/lua/Lua_Constants/) )
+[stage:integer](https://lmaobox.net/lua/Lua_Constants/)
+Called multiple times per frame for each stage of the frame, such as rendering start, end, network update start, end, etc. You can do some actions here better than anywhere else. Make sure to check the E_ClientFrameStage constant. This used to be PostPropUpdate if you only updates on NETWORK_UPDATE_START. PostPropUpdate is now deprecated, please do not use it.
+
+### RenderView( [ViewSetup:view](https://lmaobox.net/lua/Lua_Classes/ViewSetup/) )
+[ViewSetup:view](https://lmaobox.net/lua/Lua_Classes/ViewSetup/)
+Called before the players view of type [ViewSetup](https://lmaobox.net/lua/Lua_Classes/ViewSetup/) is rendered. You can use this to change the view, such as changing the view angles, fov, or origin.
+
+### PostRenderView( [ViewSetup:view](https://lmaobox.net/lua/Lua_Classes/ViewSetup/) )
+[ViewSetup:view](https://lmaobox.net/lua/Lua_Classes/ViewSetup/)
+Called after a players view of type [ViewSetup](https://lmaobox.net/lua/Lua_Classes/ViewSetup/) is rendered. This is an ideal place to draw custom views (such as camera views) on the screen, as the primary view has already been rendered.
+
+### RenderViewModel( [ViewSetup:view](https://lmaobox.net/lua/Lua_Classes/ViewSetup/) )
+[ViewSetup:view](https://lmaobox.net/lua/Lua_Classes/ViewSetup/)
+Called before the players viewmodel view of type [ViewSetup](https://lmaobox.net/lua/Lua_Classes/ViewSetup/) is rendered. You can use this to change the rendering of the viewmodel, such as changing the viewmodel angles, fov, or origin.
+
+### ServerCmdKeyValues( [StringCmd:keyvalues](https://lmaobox.net/lua/Lua_Classes/StringCmd/) )
+[StringCmd:keyvalues](https://lmaobox.net/lua/Lua_Classes/StringCmd/)
+Called when the client sends a keyvalues message to the server. Keyvalues are a way of sending data to the server, and are used for many things, such as sending MVM Upgrades, using items, and more.
+
+### OnFakeUncrate( Item:crate, Table:crateLootList )
+Called when a fake crate is to be uncrated. This is called before the crate is actually uncrated. You can return a table of items that will be shown as uncrated. The loot list is useful as a reference for what items can be uncrated in this crate, but you can create any items you want.
+
+### OnLobbyUpdated( [GameServerLobby:lobby](https://lmaobox.net/lua/Lua_Classes/GameServerLobby/) )
+[GameServerLobby:lobby](https://lmaobox.net/lua/Lua_Classes/GameServerLobby/)
+Called when a lobby is found or updated. This can also be called before the lobby is joined, so you can use this to decide whether or not to join the game (abandon), or to do something with the list of players in the lobby if youre in the game.
+
+### SetRichPresence( String:key, String:value )
+Called when the rich presence is updated. Key is the name of the rich presence, and value is the value of the rich presence. Return the value you want to set this key to, or nil to not change it.
+
+### GCSendMessage( typeID:integer, data:StringCmd)
+Called when a message is being sent to the GC. You can use this to intercept messages sent to the GC, and modify them or not send them at all.
+
+### GCRetrieveMessage( typeID:integer, data:StringCmd)
+Called when a message is being received from the GC. You can use this to intercept messages received from the GC, and modify them or not process them at all. Return E_GCResults.k_EGCResultOK to process the message, or E_GCResults.k_EGCResultNoMessage to not process it.
+
+### SendNetMsg( [NetMessage:msg](https://lmaobox.net/lua/Lua_Classes/NetMessage/), reliable:boolean, voice:boolean )
+[NetMessage:msg](https://lmaobox.net/lua/Lua_Classes/NetMessage/)
+Called when a message of type [NetMessage](https://lmaobox.net/lua/Lua_Classes/NetMessage/) is being sent to the server. You can use this to intercept messages sent to the server, and modify them or not send them at all. Return true to send the message, or false to not send it.
+
+### DoPostScreenSpaceEffects()
+This is called after the screen space effects are rendered. You can use this to draw custom screen space effects, such as a custom bloom effect, or a custom blur effect, etc.
+
+### ProcessTempEntities( Table<TempEntity, [EventInfo](https://lmaobox.net/lua/Lua_Classes/EventInfo/)> entEvtTable )
+[TempEntity](https://lmaobox.net/lua/Lua_Classes/TempEntity/)
+[EventInfo](https://lmaobox.net/lua/Lua_Classes/EventInfo/)
+Called immediately when server sends one or more temporary entities to the client. Table consists of TempEntity in first place and [EventInfo](https://lmaobox.net/lua/Lua_Classes/EventInfo/) in the second place for each temporary entity. You may modify the entity and event data or read the temporary entity netvars before it is destroyed.
+
+### Unload()
+Callback called when the script file which registered it is unloaded. This is called before the script is unloaded, so you can still use your script variables.
+
+## Examples
+
+```
+-- Protobuf messages callbacks.Register("GCSendMessage", function(typeID, data) print("GCSendMessage: " .. typeID .. " dataLength: " .. #data) return E_GCResults.k_EGCResultOK end) callbacks.Register("GCRetrieveMessage", function(typeID, data) print("GCRetrieveMessage: " .. typeID .. " dataLength: " .. #data) if typeID == 26 then return E_GCResults.k_EGCResultNoMessage end return E_GCResults.k_EGCResultOK end)
+```
+
+
+```
+-- Protobuf messages callbacks.Register("GCSendMessage", function(typeID, data) print("GCSendMessage: " .. typeID .. " dataLength: " .. #data) return E_GCResults.k_EGCResultOK end) callbacks.Register("GCRetrieveMessage", function(typeID, data) print("GCRetrieveMessage: " .. typeID .. " dataLength: " .. #data) if typeID == 26 then return E_GCResults.k_EGCResultNoMessage end return E_GCResults.k_EGCResultOK end)
+```
+
+
+```
+local myfont = draw.CreateFont( "Verdana", 16, 800 ) local function doDraw() if engine.Con_IsVisible() or engine.IsGameUIVisible() then return end local players = entities.FindByClass("CTFPlayer") for i, p in ipairs( players ) do if p:IsAlive() and not p:IsDormant() then local screenPos = client.WorldToScreen( p:GetAbsOrigin() ) if screenPos ~= nil then draw.SetFont( myfont ) draw.Color( 255, 255, 255, 255 ) draw.Text( screenPos[1], screenPos[2], p:GetName() ) end end end end callbacks.Register("Draw", "mydraw", doDraw)
+```
+
+
+```
+local myfont = draw.CreateFont( "Verdana", 16, 800 ) local function doDraw() if engine.Con_IsVisible() or engine.IsGameUIVisible() then return end local players = entities.FindByClass("CTFPlayer") for i, p in ipairs( players ) do if p:IsAlive() and not p:IsDormant() then local screenPos = client.WorldToScreen( p:GetAbsOrigin() ) if screenPos ~= nil then draw.SetFont( myfont ) draw.Color( 255, 255, 255, 255 ) draw.Text( screenPos[1], screenPos[2], p:GetName() ) end end end end callbacks.Register("Draw", "mydraw", doDraw)
+```
+
+
+```
+local function damageLogger(event) if (event:GetName() == 'player_hurt' ) then local localPlayer = entities.GetLocalPlayer(); local victim = entities.GetByUserID(event:GetInt("userid")) local health = event:GetInt("health") local attacker = entities.GetByUserID(event:GetInt("attacker")) local damage = event:GetInt("damageamount") if (attacker == nil or localPlayer:GetIndex() ~= attacker:GetIndex()) then return end print("You hit " .. victim:GetName() .. " or ID " .. victim:GetIndex() .. " for " .. damage .. "HP they now have " .. health .. "HP left") end end callbacks.Register("FireGameEvent", "exampledamageLogger", damageLogger) -- Made by @RC: https://github.com/racistcop/lmaobox-luas/blob/main/example-damagelogger.lua
+```
+
+
+```
+local function damageLogger(event) if (event:GetName() == 'player_hurt' ) then local localPlayer = entities.GetLocalPlayer(); local victim = entities.GetByUserID(event:GetInt("userid")) local health = event:GetInt("health") local attacker = entities.GetByUserID(event:GetInt("attacker")) local damage = event:GetInt("damageamount") if (attacker == nil or localPlayer:GetIndex() ~= attacker:GetIndex()) then return end print("You hit " .. victim:GetName() .. " or ID " .. victim:GetIndex() .. " for " .. damage .. "HP they now have " .. health .. "HP left") end end callbacks.Register("FireGameEvent", "exampledamageLogger", damageLogger) -- Made by @RC: https://github.com/racistcop/lmaobox-luas/blob/main/example-damagelogger.lua
+```
+
+
+```
+--- OnFakeUncrate gets called when user is unboxing a fake crate with a fake key, --- both could be created by our skinchanger and via CreateFakeItem method callbacks.Register( "OnFakeUncrate", "abcd", function( itemCrate, lootTable ) print( "OnFakeUncrate" ) print( "itemCrate Name: " .. itemCrate:GetName() ) for i = 1, #lootTable do print( "lootTable[" .. i .. "] Name: " .. lootTable[i]:GetName() ) end return lootTable end ) --- modify unboxing to always unbox rainbow flamethrower (15090) callbacks.Register( "OnFakeUncrate", "abcd", function( itemCrate, lootTable ) print( "OnFakeUncrate crate: " .. itemCrate:GetName() ) local myLootTable = {} myLootTable[1] = itemschema.GetItemDefinitionByID(15090) return myLootTable end )
+```
+
+## Examples
+
+```
+--- OnFakeUncrate gets called when user is unboxing a fake crate with a fake key, --- both could be created by our skinchanger and via CreateFakeItem method callbacks.Register( "OnFakeUncrate", "abcd", function( itemCrate, lootTable ) print( "OnFakeUncrate" ) print( "itemCrate Name: " .. itemCrate:GetName() ) for i = 1, #lootTable do print( "lootTable[" .. i .. "] Name: " .. lootTable[i]:GetName() ) end return lootTable end ) --- modify unboxing to always unbox rainbow flamethrower (15090) callbacks.Register( "OnFakeUncrate", "abcd", function( itemCrate, lootTable ) print( "OnFakeUncrate crate: " .. itemCrate:GetName() ) local myLootTable = {} myLootTable[1] = itemschema.GetItemDefinitionByID(15090) return myLootTable end )
+```
+
+[Material for MkDocs](https://squidfunk.github.io/mkdocs-material/)

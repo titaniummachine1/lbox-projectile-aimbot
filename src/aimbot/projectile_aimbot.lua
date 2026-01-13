@@ -14,6 +14,7 @@ local ViewmodelManager = require("targeting.viewmodel_manager")
 local utils = {
 	math = require("utils.math"),
 	weapon = require("utils.weapon_utils"),
+	pool = require("utils.pool"),
 }
 
 local ProjectileAimbot = {}
@@ -22,6 +23,11 @@ local ProjectileAimbot = {}
 local trackedTargetIndices = {}
 local trackedCornerVisible = {}
 local autoFlipDecided = false
+
+-- Persistent reuse tables
+local entitylist = {}
+local candidates = {}
+local historyPlayers = {}
 
 -- Constants
 local DEFAULT_MAX_DISTANCE = 3000
@@ -305,12 +311,21 @@ function ProjectileAimbot.Run(cmd, plocal, weapon, info)
 	local viewangle = engine.GetViewAngles()
 
 	-- 3. Targeted Visibility & Sorting
-	local candidates = {}
+	utils.pool.ReleaseArray(candidates, true)
+	candidates = utils.pool.GetTable()
+
 	local RAD2DEG = 180 / math.pi
 	local maxFov = cfg.AimFOV or 15
 
 	for _, entity in ipairs(entitylist) do
-		local entityCenter = entity:GetAbsOrigin() + (entity:GetMins() + entity:GetMaxs()) * 0.5
+		local mins, maxs = entity:GetMins(), entity:GetMaxs()
+		local origin = entity:GetAbsOrigin()
+		local entityCenter = utils.pool.GetVector(
+			origin.x + (mins.x + maxs.x) * 0.5,
+			origin.y + (mins.y + maxs.y) * 0.5,
+			origin.z + (mins.z + maxs.z) * 0.5
+		)
+
 		local distance = (entityCenter - localPos):Length()
 		local dirToEntity = (entityCenter - aimEyePos)
 		Normalize(dirToEntity)
@@ -320,14 +335,15 @@ function ProjectileAimbot.Run(cmd, plocal, weapon, info)
 		if angle <= maxFov then
 			local fovScore = angle / maxFov
 			local distScore = distance / maxDistance
-			candidates[#candidates + 1] = {
-				entity = entity,
-				fov = angle,
-				dist = distance,
-				score = (fovScore * 2.0) + distScore,
-				visible = false,
-			}
+			local cand = utils.pool.GetTable()
+			cand.entity = entity
+			cand.fov = angle
+			cand.dist = distance
+			cand.score = (fovScore * 2.0) + distScore
+			cand.visible = false
+			candidates[#candidates + 1] = cand
 		end
+		utils.pool.ReleaseVector(entityCenter)
 	end
 
 	if #candidates == 0 then
@@ -379,7 +395,8 @@ function ProjectileAimbot.Run(cmd, plocal, weapon, info)
 
 	-- 4. History & Prediction
 	local entity = bestEntry.entity
-	local historyPlayers = {}
+	utils.pool.ReleaseArray(historyPlayers)
+	historyPlayers = utils.pool.GetTable()
 	for i = 1, math.min(#topK, trackedCount * 2) do
 		if topK[i].entity:IsPlayer() then
 			historyPlayers[#historyPlayers + 1] = topK[i].entity
@@ -401,14 +418,17 @@ function ProjectileAimbot.Run(cmd, plocal, weapon, info)
 	local relWishDir = WishdirTracker.getRelativeWishdir(entity)
 	local playerCtx = PredictionContext.createPlayerContext(entity, relWishDir)
 
-	local path = { Vector3(playerCtx.origin:Unpack()) }
-	local timetable = { simCtx.curtime }
+	local path = utils.pool.GetTable()
+	path[1] = utils.pool.GetVector(playerCtx.origin:Unpack())
+	local timetable = utils.pool.GetTable()
+	timetable[1] = simCtx.curtime
 	local lastPos = path[1]
 
 	-- Simulate until totalTime
 	local targetTotal = math.min(maxFlightTime + outgoingLatency + lerp, totalTime)
 	for _ = 1, math.ceil(targetTotal / simCtx.tickinterval) do
-		lastPos = PlayerTick.simulateTick(playerCtx, simCtx)
+		local nextPos = PlayerTick.simulateTick(playerCtx, simCtx)
+		lastPos = utils.pool.GetVector(nextPos:Unpack())
 		path[#path + 1] = lastPos
 		timetable[#timetable + 1] = simCtx.curtime + (#path - 1) * simCtx.tickinterval
 	end

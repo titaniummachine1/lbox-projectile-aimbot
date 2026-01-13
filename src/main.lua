@@ -132,12 +132,33 @@ local function onCreateMove(cmd)
 	-- Update core state even if aimbot is disabled (needed for visuals/self-prediction)
 	FastPlayers.Update()
 
-	-- Update player histories
+	-- Update player histories for all visible players
 	local WishdirTracker = require("simulation.history.wishdir_tracker")
 	local players = FastPlayers.GetAll()
+	local plocal = entities.GetLocalPlayer()
+
 	StrafePredictor.cleanupStalePlayers(FastPlayers)
+
+	-- Store local wishdir for visuals/self-prediction
+	if plocal then
+		local fwd, side = cmd:GetForwardMove(), cmd:GetSideMove()
+		local len = math.sqrt(fwd * fwd + side * side)
+		if len > 0.1 then
+			G.LocalWishdir = Vector3(fwd / len, -side / len, 0)
+		else
+			G.LocalWishdir = Vector3(0, 0, 0)
+		end
+		G.LocalWishdirTick = globals.TickCount()
+
+		-- Always update tracker for local player
+		WishdirTracker.update(plocal)
+	end
+
 	for _, player in pairs(players) do
 		if player:IsAlive() and not player:IsDormant() then
+			-- Update movement solver for this player
+			WishdirTracker.update(player)
+
 			local velocity = player:EstimateAbsVelocity()
 			if velocity and velocity:Length2D() > 10 then
 				local relWishdir = WishdirTracker.getRelativeWishdir(player)
@@ -149,19 +170,6 @@ local function onCreateMove(cmd)
 	end
 
 	PlayerTracker.UpdatePlayerList()
-
-	-- Store local wishdir for visuals/self-prediction
-	local fwd, side = cmd:GetForwardMove(), cmd:GetSideMove()
-	local len = math.sqrt(fwd * fwd + side * side)
-	if len > 0.1 then
-		-- Engine Standard: +fwd is Forward, +side is LEFT (-450 for A, 450 for D?)
-		-- Wait, if ComputeMove sin(-90)=-1, then A is -450.
-		-- We want Left = +1, so we use -side.
-		G.LocalWishdir = Vector3(fwd / len, -side / len, 0)
-	else
-		G.LocalWishdir = Vector3(0, 0, 0)
-	end
-	G.LocalWishdirTick = globals.TickCount()
 
 	local cfg = G.Menu.Aimbot
 	if not cfg.Enabled then

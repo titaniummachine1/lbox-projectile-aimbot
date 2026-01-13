@@ -59,6 +59,15 @@ end
 
 ---Get entity eye yaw angle
 local function getEntityEyeYaw(entity)
+	-- For local player, engine.GetViewAngles() is the only source of truth for move intent
+	local localPlayer = entities.GetLocalPlayer()
+	if localPlayer and entity:GetIndex() == localPlayer:GetIndex() then
+		local angles = engine.GetViewAngles()
+		if angles then
+			return angles.y
+		end
+	end
+
 	local eyeYaw = entity:GetPropFloat("m_angEyeAngles[1]")
 	if type(eyeYaw) == "number" then
 		return eyeYaw

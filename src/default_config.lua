@@ -44,6 +44,7 @@ local DefaultConfig = {
 		DrawQuads = false,
 
 		SelfPrediction = false,
+		SelfPredictionUseCmd = true,
 
 		-- Path style options (dropdown index -2 = style: 3=Pavement, 4=ArrowPath, 5=Arrows, 6=L Line, 7=Dashed, 8=Line)
 		PathStyles = { "Pavement", "ArrowPath", "Arrows", "L Line", "Dashed", "Line" },
