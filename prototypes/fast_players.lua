@@ -32,7 +32,15 @@ local function onPlayerEvent(event)
 	end
 	TickProfiler.EndSection("FastPlayers:Event")
 end
+
+-- Cleanup interactions
+local function onUnload()
+	callbacks.Unregister("FireGameEvent", "FastPlayers_Events")
+end
+
+callbacks.Unregister("FireGameEvent", "FastPlayers_Events")
 callbacks.Register("FireGameEvent", "FastPlayers_Events", onPlayerEvent)
+callbacks.Register("Unload", onUnload)
 
 -- [[ 3. SMART UPDATE LOGIC ]]
 function FastPlayers.Update()

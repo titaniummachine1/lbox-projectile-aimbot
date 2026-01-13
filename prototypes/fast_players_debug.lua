@@ -84,10 +84,6 @@ local function drawDebugInfo()
 		end
 	end
 
-	-- NEW: Watch API for streamlining programming
-	TickProfiler.Watch("Active Players", activeCount)
-	TickProfiler.Watch("Local Team", localPlayer and localPlayer:GetTeamNumber() or "N/A")
-
 	draw.Color(255, 255, 255, 255)
 	draw.Text(x + PADDING, y + 35, string.format("All Players: %d", activeCount))
 
@@ -141,5 +137,11 @@ end
 -- Callbacks
 callbacks.Unregister("Draw", "Standalone_Player_Debug")
 callbacks.Register("Draw", "Standalone_Player_Debug", drawDebugInfo)
+
+callbacks.Register("Unload", function()
+	package.loaded["tick_profiler"] = nil
+	package.loaded["fast_players"] = nil
+	print("[Standalone Debug] Unloaded and dependencies cleared from cache.")
+end)
 
 print("[Standalone Debug] Initialized with Profiled FastPlayers Module.")
