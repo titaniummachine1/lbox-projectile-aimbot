@@ -13,7 +13,7 @@ local COLORS = {
 }
 
 -- State -----
-local sections = {} -- { name = { timeRing={}, memRing={}, ringIdx=1, count=0 } }
+local sections = {} -- { name = { timeRing={}, memRing={}, ringIdx=1, count=0, lastUpdate=0 } }
 local stacks = {}
 local display = {}
 local enabled = false
@@ -90,20 +90,43 @@ local function calcRingStats(ring, count)
 end
 
 local function rebuildDisplay()
+	local currentTick = globals.TickCount()
 	display = {}
+
 	for name, sec in pairs(sections) do
-		local tAvg, tPeak = calcRingStats(sec.timeRing, sec.count)
-		local mAvg, mPeak = calcRingStats(sec.memRing, sec.count)
-		table.insert(display, {
-			name = name,
-			tAvg = tAvg * 1000000, -- Convert to microseconds
-			tPeak = tPeak * 1000000,
-			mAvg = mAvg,
-			mPeak = mPeak,
-		})
+		-- auto-hide if not updated for RING_SIZE ticks
+		if currentTick - sec.lastUpdate < RING_SIZE then
+			local tAvg, tPeak = calcRingStats(sec.timeRing, sec.count)
+			local mAvg, mPeak = calcRingStats(sec.memRing, sec.count)
+
+			tAvg = tAvg * 1000000 -- to microseconds
+			tPeak = tPeak * 1000000
+
+			local isHighTime = tAvg > 1
+			-- Smart score:
+			-- For High-Time: Time takes precedence, but significant memory outweighs it.
+			-- Scaling: 1 KB allocation = 10 us "cost" weight.
+			local score = isHighTime and (tAvg + (mAvg / 1024) * 10) or mAvg
+
+			table.insert(display, {
+				name = name,
+				tAvg = tAvg,
+				tPeak = tPeak,
+				mAvg = mAvg,
+				mPeak = mPeak,
+				score = score,
+				isHighTime = isHighTime,
+			})
+		end
 	end
+
 	table.sort(display, function(a, b)
-		return a.tAvg > b.tAvg
+		-- Group High-Time above Low-Time
+		if a.isHighTime ~= b.isHighTime then
+			return a.isHighTime
+		end
+		-- Within group, sort by calculated score
+		return a.score > b.score
 	end)
 end
 
@@ -122,58 +145,110 @@ local function drawOverlay()
 		return
 	end
 
-	draw.SetFont(font)
-	local _, screenH = draw.GetScreenSize()
-	local x, y = 12, screenH - 12
-	local lineHeight = 14
-	local totalMeasuredMem = 0
+	-- Layout Config
+	local x, yIdx = 16, 16 -- Starting top-left
+	local colWidths = { 70, 70, 15, 75, 75, 15, 300 }
+	local rowHeight = 18
+	local padding = 6
 
-	for i = #display, 1, -1 do
-		local e = display[i]
+	-- Calculate total dimensions
+	local totalHeight = (#display + 3) * rowHeight + (padding * 2)
+	local totalWidth = 0
+	for _, w in ipairs(colWidths) do
+		totalWidth = totalWidth + w
+	end
+
+	-- Draw Main Background (Glass-like)
+	draw.Color(20, 20, 20, 200) -- Dark translucency
+	draw.FilledRect(x, yIdx, x + totalWidth + padding * 2, yIdx + totalHeight)
+	draw.Color(60, 60, 60, 255) -- Border
+	draw.OutlinedRect(x, yIdx, x + totalWidth + padding * 2, yIdx + totalHeight)
+
+	local curX, curY = x + padding, yIdx + padding
+
+	-- 1. Reserve Space for Global Header (Drawn at end)
+	curY = curY + rowHeight
+
+	-- 2. Draw Table Header
+	draw.Color(40, 40, 40, 255)
+	draw.FilledRect(x + 2, curY - 2, x + totalWidth + (padding * 2) - 2, curY + rowHeight - 4)
+
+	draw.SetFont(fontSmall)
+	draw.Color(200, 200, 200, 255)
+	local hX = curX
+	draw.Text(hX, curY, "Avg Time")
+	hX = hX + colWidths[1]
+	draw.Text(hX, curY, "Peak Time")
+	hX = hX + colWidths[2] + colWidths[3]
+	draw.Text(hX, curY, "Avg Mem")
+	hX = hX + colWidths[4]
+	draw.Text(hX, curY, "Peak Mem")
+	hX = hX + colWidths[5] + colWidths[6]
+	draw.Text(hX, curY, "Section Name")
+
+	curY = curY + rowHeight
+
+	-- 3. Draw Entries
+	draw.SetFont(font)
+	local totalMeasuredMem = 0
+	for i, e in ipairs(display) do
 		totalMeasuredMem = totalMeasuredMem + e.mAvg
+
+		-- Row Highlight
+		if i % 2 == 0 then
+			draw.Color(35, 35, 35, 150)
+			draw.FilledRect(x + 2, curY - 2, x + totalWidth + (padding * 2) - 2, curY + rowHeight - 2)
+		end
+
 		local tColor = getTimeColor(e.tAvg)
 		local mColor = getMemColor(e.mAvg)
 
+		local eX = curX
+		-- Time
 		draw.Color(table.unpack(tColor))
-		draw.Text(x, y, formatTime(e.tAvg))
-		draw.Color(table.unpack(COLORS.GREY))
-		draw.Text(x + 70, y, formatTime(e.tPeak))
-		draw.Color(100, 100, 100, 255)
-		draw.Text(x + 140, y, "|")
+		draw.Text(eX, curY, formatTime(e.tAvg))
+		eX = eX + colWidths[1]
+		draw.Color(160, 160, 160, 255)
+		draw.Text(eX, curY, formatTime(e.tPeak))
+
+		eX = eX + colWidths[2]
+		draw.Color(80, 80, 80, 255)
+		draw.Text(eX, curY, "|")
+
+		-- Mem
+		eX = eX + colWidths[3]
 		draw.Color(table.unpack(mColor))
-		draw.Text(x + 155, y, formatMemory(e.mAvg))
-		draw.Color(table.unpack(COLORS.GREY))
-		draw.Text(x + 225, y, formatMemory(e.mPeak))
-		draw.Color(100, 100, 100, 255)
-		draw.Text(x + 295, y, "|")
-		draw.Color(table.unpack(COLORS.WHITE))
-		draw.Text(x + 310, y, e.name)
-		y = y - lineHeight
+		draw.Text(eX, curY, formatMemory(e.mAvg))
+		eX = eX + colWidths[4]
+		draw.Color(160, 160, 160, 255)
+		draw.Text(eX, curY, formatMemory(e.mPeak))
+
+		eX = eX + colWidths[5]
+		draw.Color(80, 80, 80, 255)
+		draw.Text(eX, curY, "|")
+
+		-- Name
+		eX = eX + colWidths[6]
+		draw.Color(255, 255, 255, 255)
+		draw.Text(eX, curY, e.name)
+
+		curY = curY + rowHeight
 	end
 
-	-- Header
-	y = y - 4
+	-- 4. Draw Global Stats (Now that we have totalMeasuredMem)
 	draw.SetFont(fontSmall)
-	draw.Color(table.unpack(COLORS.GREY))
-	draw.Text(x, y, "Time Avg")
-	draw.Text(x + 70, y, "Time Peak")
-	draw.Text(x + 155, y, "Mem Avg")
-	draw.Text(x + 225, y, "Mem Peak")
-	draw.Text(x + 310, y, "Section Name")
-
-	-- Footer
-	y = y - 18
 	local memUsed = collectgarbage("count") * 1024
 	local allocAvg, _ = calcRingStats(allocRingBuffer, RING_SIZE)
-	local ratePerSec = allocAvg * 66 -- Approximate rate
-	local memStr = string.format(
-		"Lua Total: %s | Measured: %s | Rate: %s/s",
+	local ratePerSec = allocAvg * 66
+
+	draw.Color(255, 200, 50, 255)
+	local globalStr = string.format(
+		"LUA: %s | MEASURED: %s | RATE: %s/s",
 		formatMemory(memUsed),
 		formatMemory(totalMeasuredMem),
 		formatMemory(ratePerSec)
 	)
-	draw.Color(table.unpack(COLORS.YELLOW))
-	draw.Text(x, y, memStr)
+	draw.Text(curX, yIdx + padding, globalStr)
 end
 
 -- Public API -----
@@ -212,7 +287,7 @@ function TickProfiler.EndSection(name)
 
 	local sec = sections[name]
 	if not sec then
-		sec = { timeRing = {}, memRing = {}, ringIdx = 1, count = 0 }
+		sec = { timeRing = {}, memRing = {}, ringIdx = 1, count = 0, lastUpdate = 0 }
 		for i = 1, RING_SIZE do
 			sec.timeRing[i], sec.memRing[i] = 0, 0
 		end
@@ -223,6 +298,7 @@ function TickProfiler.EndSection(name)
 	sec.memRing[sec.ringIdx] = memDelta
 	sec.ringIdx = (sec.ringIdx % RING_SIZE) + 1
 	sec.count = math.min(sec.count + 1, RING_SIZE)
+	sec.lastUpdate = globals.TickCount()
 
 	-- Track global allocation
 	local currentMem = collectgarbage("count") * 1024
