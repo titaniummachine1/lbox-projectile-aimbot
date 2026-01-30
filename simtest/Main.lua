@@ -2,11 +2,13 @@ local GameConstants = require("constants.game_constants")
 local PlayerTick = require("simulation.Player.player_tick")
 local PredictionContext = require("simulation.Player.prediction_context")
 local WishdirTracker = require("simulation.Player.history.wishdir_tracker")
+local StrafePrediction = require("simulation.Player.strafe_prediction")
 
 local consolas = draw.CreateFont("Consolas", 17, 500)
 
 local TICK_INTERVAL = GameConstants.TICK_INTERVAL
 local MAX_PREDICTION_TICKS = 66
+local MIN_STRAFE_SAMPLES = 6
 
 local state = {
 	enabled = true,
@@ -57,7 +59,7 @@ local function findBestTarget()
 	return bestTarget
 end
 
-local function simulatePlayerPath(entity)
+local function simulatePlayerPath(entity, useStrafePred)
 	local predictions = {}
 
 	local playerCtx = PredictionContext.createPlayerContext(entity)
@@ -65,29 +67,31 @@ local function simulatePlayerPath(entity)
 		return predictions
 	end
 
-	local simCtx = {
-		tickinterval = TICK_INTERVAL,
-		sv_gravity = GameConstants.SV_GRAVITY,
-		sv_friction = GameConstants.SV_FRICTION,
-		sv_stopspeed = GameConstants.SV_STOPSPEED,
-		sv_accelerate = GameConstants.SV_ACCELERATE,
-		sv_airaccelerate = GameConstants.SV_AIRACCELERATE,
-	}
+	local simCtx = PredictionContext.createSimulationContext()
 
-	local currentPos = {
+	local avgYaw = nil
+	if useStrafePred then
+		local maxSpeed = entity:EstimateAbsVelocity():Length2D()
+		if maxSpeed < 10 then
+			maxSpeed = 320
+		end
+		avgYaw = StrafePrediction.calculateAverageYaw(entity:GetIndex(), maxSpeed, MIN_STRAFE_SAMPLES)
+	end
+
+	table.insert(predictions, {
 		x = playerCtx.origin.x,
 		y = playerCtx.origin.y,
 		z = playerCtx.origin.z,
-	}
-
-	table.insert(predictions, {
-		x = currentPos.x,
-		y = currentPos.y,
-		z = currentPos.z,
 		tick = 0,
 	})
 
 	for tick = 1, MAX_PREDICTION_TICKS do
+		if avgYaw then
+			local isAir = playerCtx.velocity.z ~= 0
+			local correction = isAir and (90 * (avgYaw > 0 and 1 or -1)) or 0
+			playerCtx.yaw = playerCtx.yaw + avgYaw + correction
+		end
+
 		PlayerTick.simulateTick(playerCtx, simCtx)
 
 		table.insert(predictions, {
@@ -99,6 +103,32 @@ local function simulatePlayerPath(entity)
 	end
 
 	return predictions
+end
+
+local function recordMovementHistory(entity)
+	if not entity or not entity:IsValid() or not entity:IsAlive() then
+		return
+	end
+
+	local origin = entity:GetAbsOrigin()
+	local velocity = entity:EstimateAbsVelocity()
+	if not origin or not velocity then
+		return
+	end
+
+	local mode = 0
+	if entity:IsOnGround() then
+		mode = 0
+	elseif velocity.z ~= 0 then
+		mode = 1
+	else
+		mode = 2
+	end
+
+	local simTime = globals.CurTime()
+	local maxSpeed = velocity:Length2D()
+
+	StrafePrediction.recordMovement(entity:GetIndex(), origin, velocity, mode, simTime, maxSpeed)
 end
 
 local function updatePredictions()
@@ -114,36 +144,86 @@ local function updatePredictions()
 
 	if state.targetEntity then
 		WishdirTracker.update(state.targetEntity)
-		state.predictions = simulatePlayerPath(state.targetEntity)
+		recordMovementHistory(state.targetEntity)
+		state.predictions = simulatePlayerPath(state.targetEntity, true)
 	else
 		state.predictions = {}
 	end
 end
 
-local function drawPredictionPath()
-	if #state.predictions < 2 then
+local function drawPath(path, r, g, b, a, thickness)
+	if not path or #path < 2 then
 		return
 	end
 
-	for i = 1, #state.predictions - 1 do
-		local p1 = state.predictions[i]
-		local p2 = state.predictions[i + 1]
+	thickness = thickness or 2
+	local step = math.max(1, math.floor(#path / 50))
+
+	for i = 1, #path - step, step do
+		local p1 = path[i]
+		local p2 = path[math.min(i + step, #path)]
 
 		local w2s1 = client.WorldToScreen(Vector3(p1.x, p1.y, p1.z))
 		local w2s2 = client.WorldToScreen(Vector3(p2.x, p2.y, p2.z))
 
 		if w2s1 and w2s2 then
-			local alpha = math.floor(255 * (1 - (i / #state.predictions)))
-			draw.Color(0, 255, 0, alpha)
-			draw.Line(w2s1[1], w2s1[2], w2s2[1], w2s2[2])
+			local progress = i / #path
+			local alpha = math.floor(a * (1 - progress * 0.5))
+			draw.Color(r, g, b, alpha)
+
+			for offset = -thickness, thickness do
+				draw.Line(w2s1[1] + offset, w2s1[2], w2s2[1] + offset, w2s2[2])
+				draw.Line(w2s1[1], w2s1[2] + offset, w2s2[1], w2s2[2] + offset)
+			end
 		end
 	end
 
-	local lastPred = state.predictions[#state.predictions]
+	local lastPred = path[#path]
 	local w2sLast = client.WorldToScreen(Vector3(lastPred.x, lastPred.y, lastPred.z))
 	if w2sLast then
-		draw.Color(255, 0, 0, 255)
-		draw.FilledRect(w2sLast[1] - 3, w2sLast[2] - 3, w2sLast[1] + 3, w2sLast[2] + 3)
+		draw.Color(r, g, b, a)
+		local size = 4
+		draw.FilledRect(w2sLast[1] - size, w2sLast[2] - size, w2sLast[1] + size, w2sLast[2] + size)
+		draw.Color(0, 0, 0, a)
+		draw.OutlinedRect(w2sLast[1] - size, w2sLast[2] - size, w2sLast[1] + size, w2sLast[2] + size)
+	end
+end
+
+local selfPredCache = {
+	path = nil,
+	lastUpdateTime = 0,
+}
+
+local function drawPredictionPath()
+	local plocal = getLocalPlayer()
+	if plocal then
+		local now = globals.RealTime()
+		if now - selfPredCache.lastUpdateTime > 0.016 then
+			local playerCtx = PredictionContext.createPlayerContext(plocal)
+			local simCtx = PredictionContext.createSimulationContext()
+			if playerCtx and simCtx then
+				local path = PlayerTick.simulatePath(playerCtx, simCtx, 1.0)
+				if path then
+					selfPredCache.path = {}
+					for i = 1, #path do
+						selfPredCache.path[i] = {
+							x = path[i].x,
+							y = path[i].y,
+							z = path[i].z,
+						}
+					end
+				end
+				selfPredCache.lastUpdateTime = now
+			end
+		end
+
+		if selfPredCache.path then
+			drawPath(selfPredCache.path, 100, 200, 255, 200, 1)
+		end
+	end
+
+	if state.targetEntity and state.targetEntity:IsValid() then
+		drawPath(state.predictions, 255, 100, 100, 220, 2)
 	end
 end
 
