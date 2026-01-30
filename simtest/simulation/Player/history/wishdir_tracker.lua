@@ -13,7 +13,7 @@
 -- ============================================================================
 
 local PlayerTick = require("simulation.Player.player_tick")
-local PredictionContext = require("simulation.Player.prediction_context")
+local PlayerSimState = require("simulation.Player.player_sim_state")
 
 local WishdirTracker = {}
 
@@ -237,7 +237,7 @@ function WishdirTracker.update(entity)
 	end
 
 	-- Prepare for next tick
-	local simCtx = PredictionContext.createSimulationContext()
+	local simCtx = PlayerSimState.getSimContext()
 	for i = 1, 9 do
 		simulateOneDirection(entity, simCtx, DIRECTIONS[i], s.predictions[i])
 	end
@@ -306,6 +306,17 @@ function WishdirTracker.updateTop(pLocal, sortedEntities, maxTargets)
 			playerState[idx] = nil
 		end
 	end
+end
+
+---Alias for getRelativeWishdir that returns table instead of Vector3
+---@param index integer
+---@return table|nil
+function WishdirTracker.getWishDir(index)
+	local s = playerState[index]
+	if s and s.detectedWishdir then
+		return { x = s.detectedWishdir.x, y = s.detectedWishdir.y, z = s.detectedWishdir.z }
+	end
+	return nil
 end
 
 function WishdirTracker.clearAllHistory()

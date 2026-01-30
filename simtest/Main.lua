@@ -61,21 +61,53 @@ end
 local function simulatePlayerPath(entity, useStrafePred)
 	local predictions = {}
 
-	local playerCtx = PredictionContext.createPlayerContext(entity)
+	local playerCtx = PlayerSimState.getOrCreate(entity)
 	if not playerCtx then
 		return predictions
 	end
 
-	local simCtx = PredictionContext.createSimulationContext()
+	local simCtx = PlayerSimState.getSimContext()
 
-	local avgYaw = nil
+	-- Get initial wishdir from tracker (ONCE, never modified during sim)
+	local trackedWishdir = WishdirTracker.getWishDir(entity:GetIndex())
+	if trackedWishdir then
+		playerCtx.relativeWishDir = {
+			x = trackedWishdir.x,
+			y = trackedWishdir.y,
+			z = 0,
+		}
+	else
+		-- Fallback: derive from velocity
+		local vel = entity:EstimateAbsVelocity()
+		if vel and vel:Length2D() > 50 then
+			local yaw = playerCtx.yaw
+			local yawRad = yaw * (math.pi / 180)
+			local cosYaw = math.cos(yawRad)
+			local sinYaw = math.sin(yawRad)
+
+			local forwardMove = vel.x * cosYaw + vel.y * sinYaw
+			local sideMove = -vel.x * sinYaw + vel.y * cosYaw
+
+			playerCtx.relativeWishDir = {
+				x = forwardMove,
+				y = sideMove,
+				z = 0,
+			}
+		else
+			playerCtx.relativeWishDir = { x = 0, y = 0, z = 0 }
+		end
+	end
+
+	-- Setup strafe prediction yaw delta
+	local avgYawDelta = 0
 	if useStrafePred then
 		local maxSpeed = entity:EstimateAbsVelocity():Length2D()
 		if maxSpeed < 10 then
 			maxSpeed = 320
 		end
-		avgYaw = StrafePrediction.calculateAverageYaw(entity:GetIndex(), maxSpeed, MIN_STRAFE_SAMPLES)
+		avgYawDelta = StrafePrediction.calculateAverageYaw(entity:GetIndex(), maxSpeed, MIN_STRAFE_SAMPLES) or 0
 	end
+	playerCtx.yawDeltaPerTick = avgYawDelta
 
 	table.insert(predictions, {
 		x = playerCtx.origin.x,
@@ -85,12 +117,7 @@ local function simulatePlayerPath(entity, useStrafePred)
 	})
 
 	for tick = 1, MAX_PREDICTION_TICKS do
-		if avgYaw then
-			local isAir = playerCtx.velocity.z ~= 0
-			local correction = isAir and (90 * (avgYaw > 0 and 1 or -1)) or 0
-			playerCtx.yaw = playerCtx.yaw + avgYaw + correction
-		end
-
+		-- simulateTick handles yaw rotation internally via yawDeltaPerTick
 		PlayerTick.simulateTick(playerCtx, simCtx)
 
 		table.insert(predictions, {
@@ -202,9 +229,29 @@ local function drawPredictionPath()
 	if plocal then
 		local now = globals.RealTime()
 		if now - selfPredCache.lastUpdateTime > 0.016 then
-			local playerCtx = PredictionContext.createPlayerContext(plocal)
-			local simCtx = PredictionContext.createSimulationContext()
+			local playerCtx = PlayerSimState.getOrCreate(plocal)
+			local simCtx = PlayerSimState.getSimContext()
 			if playerCtx and simCtx then
+				-- Local player: use current velocity as wishdir
+				local vel = plocal:EstimateAbsVelocity()
+				if vel and vel:Length2D() > 50 then
+					local yaw = playerCtx.yaw
+					local yawRad = yaw * (math.pi / 180)
+					local cosYaw = math.cos(yawRad)
+					local sinYaw = math.sin(yawRad)
+
+					local forwardMove = vel.x * cosYaw + vel.y * sinYaw
+					local sideMove = -vel.x * sinYaw + vel.y * cosYaw
+
+					playerCtx.relativeWishDir = {
+						x = forwardMove,
+						y = sideMove,
+						z = 0,
+					}
+				else
+					playerCtx.relativeWishDir = { x = 0, y = 0, z = 0 }
+				end
+				playerCtx.yawDeltaPerTick = 0
 				local path = PlayerTick.simulatePath(playerCtx, simCtx, 1.0)
 				if path then
 					selfPredCache.path = {}
