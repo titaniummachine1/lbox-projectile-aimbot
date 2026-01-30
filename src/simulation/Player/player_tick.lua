@@ -491,9 +491,17 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 	-- Phase 1: Friction
 	local is_on_ground =
 		checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
-	if is_on_ground and playerCtx.velocity.z < 0 then
-		playerCtx.velocity.z = 0
+
+	-- Clamp vertical velocity when on ground
+	if is_on_ground then
+		if playerCtx.velocity.z < 0 then
+			playerCtx.velocity.z = 0
+		end
+		playerCtx.onGround = true
+	else
+		playerCtx.onGround = false
 	end
+
 	friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
 	checkVelocity(playerCtx.velocity)
 
@@ -533,6 +541,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 	end
 
 	-- Phase 4: Movement (Collision)
+	local was_on_ground = is_on_ground
 	if is_on_ground then
 		playerCtx.origin = stepMove(
 			playerCtx.origin,
@@ -558,8 +567,44 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 	-- Phase 5: Re-calculate ground state and final gravity
 	local new_on_ground =
 		checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
+
 	if not new_on_ground then
 		playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
+		playerCtx.onGround = false
+	else
+		playerCtx.onGround = true
+
+		-- Clamp downward velocity when landing
+		if playerCtx.velocity.z < 0 then
+			playerCtx.velocity.z = 0
+		end
+
+		-- Air to ground transition: restore input from velocity if no input and moving
+		if not was_on_ground and new_on_ground then
+			local hasInput = playerCtx.relativeWishDir
+				and (math.abs(playerCtx.relativeWishDir.x) > 0.01 or math.abs(playerCtx.relativeWishDir.y) > 0.01)
+
+			if not hasInput then
+				local speed2d = length2D(playerCtx.velocity)
+				if speed2d > playerCtx.maxspeed * 0.015 then
+					-- Restore wishdir from velocity direction
+					local velDir = Vector3(playerCtx.velocity.x, playerCtx.velocity.y, 0)
+					local len = velDir:Length()
+					if len > 0.1 then
+						velDir.x = velDir.x / len
+						velDir.y = velDir.y / len
+						velDir.z = 0
+
+						-- Scale to maxspeed
+						velDir.x = velDir.x * 450
+						velDir.y = velDir.y * 450
+
+						-- Store as relative wishdir (this is a simplification)
+						playerCtx.relativeWishDir = velDir
+					end
+				end
+			end
+		end
 	end
 
 	return Vector3(playerCtx.origin:Unpack())
