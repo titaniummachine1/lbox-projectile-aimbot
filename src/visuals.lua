@@ -1,12 +1,12 @@
 -- Imports
 local G = require("globals")
 local multipoint = require("multipoint")
-local PlayerTick = require("simulation.player_tick")
-local PredictionContext = require("simulation.prediction_context")
-local Physics = require("physics.projectile_simulation")
+local PlayerTick = require("simulation.Player.player_tick")
+local PredictionContext = require("simulation.Player.prediction_context")
+local Physics = require("simulation.Projectiles.projectile_simulation")
 local TrajDrawer = require("visuals.trajectory_drawer")
 local ProjectileInfo = require("projectile_info")
-local WishdirTracker = require("simulation.history.wishdir_tracker")
+local WishdirTracker = require("simulation.Player.history.wishdir_tracker")
 
 -- Module declaration
 local Visuals = {}

@@ -7,8 +7,8 @@ local globals = require("globals")
 
 local GetProjectileInfo = require("projectile_info")
 local TrajectoryDrawer = require("visuals.trajectory_drawer")
--- Note: 'SimulateProj' was require("physics.projectile_simulation") in original code
-local SimulateProj = require("physics.projectile_simulation")
+-- Note: 'SimulateProj' was require("simulation.Projectiles.projectile_simulation") in original code
+local SimulateProj = require("simulation.Projectiles.projectile_simulation")
 
 -- Configuration aliases for easier porting
 local function GetConfig()
@@ -98,7 +98,7 @@ local g_vEndOrigin = Vector3(0, 0, 0)
 -- but I will double check if I implemented `DoBasicProjectileTrace` etc. there.
 -- I did. So I will use them.
 
-local Sim = require("physics.projectile_simulation")
+local Sim = require("simulation.Projectiles.projectile_simulation")
 
 local function UpdateSpellPreference(config)
 	if config.spells.show_other_key == -1 then

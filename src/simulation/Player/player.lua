@@ -21,7 +21,7 @@ local math_pi = math.pi
 
 local G = require("globals")
 local TargetSelector = require("targeting.target_selector")
-local WishdirTracker = require("simulation.Player.history.wishdir_tracker")
+local WishdirTracker = require("simulation.history.wishdir_tracker")
 
 -- constants
 local MIN_SPEED = 25 -- HU/s

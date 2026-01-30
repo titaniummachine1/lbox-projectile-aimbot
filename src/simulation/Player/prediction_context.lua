@@ -97,7 +97,7 @@ local function calculateYawDelta(entity)
 	if not index then
 		return 0
 	end
-	local StrafePredictor = require("simulation.Player.history.strafe_predictor")
+	local StrafePredictor = require("simulation.history.strafe_predictor")
 	return StrafePredictor.getYawDeltaPerTickDegrees(index, 3)
 end
 

@@ -7,7 +7,7 @@ local ProjectileInfo = require("projectile_info")
 local TickProfiler = require("tick_profiler")
 local PlayerTracker = require("player_tracker")
 local FastPlayers = require("utils.fast_players")
-local StrafePredictor = require("simulation.history.strafe_predictor")
+local StrafePredictor = require("simulation.Player.history.strafe_predictor")
 local AimbotManager = require("aimbot.aimbot_manager")
 local utils = {
 	weapon = require("utils.weapon_utils"),
@@ -133,7 +133,7 @@ local function onCreateMove(cmd)
 	FastPlayers.Update()
 
 	-- Update player histories for all visible players
-	local WishdirTracker = require("simulation.history.wishdir_tracker")
+	local WishdirTracker = require("simulation.Player.history.wishdir_tracker")
 	local players = FastPlayers.GetAll()
 	local plocal = entities.GetLocalPlayer()
 

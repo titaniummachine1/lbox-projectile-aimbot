@@ -13,8 +13,8 @@
 -- ============================================================================
 
 local G = require("globals")
-local PlayerTick = require("simulation.player_tick")
-local PredictionContext = require("simulation.prediction_context")
+local PlayerTick = require("simulation.Player.player_tick")
+local PredictionContext = require("simulation.Player.prediction_context")
 
 local WishdirTracker = {}
 
