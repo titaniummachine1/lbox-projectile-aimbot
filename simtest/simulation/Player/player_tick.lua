@@ -587,20 +587,29 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 			if not hasInput then
 				local speed2d = length2D(playerCtx.velocity)
 				if speed2d > playerCtx.maxspeed * 0.015 then
-					-- Restore wishdir from velocity direction
-					local velDir = Vector3(playerCtx.velocity.x, playerCtx.velocity.y, 0)
-					local len = velDir:Length()
+					-- Get velocity direction in world space
+					local dirX = playerCtx.velocity.x
+					local dirY = playerCtx.velocity.y
+					local len = math.sqrt(dirX * dirX + dirY * dirY)
+
 					if len > 0.1 then
-						velDir.x = velDir.x / len
-						velDir.y = velDir.y / len
-						velDir.z = 0
+						-- Normalize and scale to 450 (standard move speed)
+						dirX = (dirX / len) * 450
+						dirY = (dirY / len) * 450
 
-						-- Scale to maxspeed
-						velDir.x = velDir.x * 450
-						velDir.y = velDir.y * 450
+						-- Convert from world space to view-relative using current yaw
+						local yawRad = playerCtx.yaw * GameConstants.DEG2RAD
+						local cosYaw = math.cos(yawRad)
+						local sinYaw = math.sin(yawRad)
 
-						-- Store as relative wishdir (this is a simplification)
-						playerCtx.relativeWishDir = velDir
+						-- Transform: view-relative = inverse rotation of world direction
+						local forwardMove = dirX * cosYaw + dirY * sinYaw
+						local sideMove = -(dirX * -sinYaw + dirY * cosYaw)
+
+						-- Store as relative wishdir (forward = x, side = y)
+						playerCtx.relativeWishDir.x = forwardMove
+						playerCtx.relativeWishDir.y = sideMove
+						playerCtx.relativeWishDir.z = 0
 					end
 				end
 			end

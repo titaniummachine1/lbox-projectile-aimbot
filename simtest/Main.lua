@@ -1,12 +1,11 @@
 local GameConstants = require("constants.game_constants")
 local PlayerTick = require("simulation.Player.player_tick")
-local PredictionContext = require("simulation.Player.prediction_context")
 local WishdirTracker = require("simulation.Player.history.wishdir_tracker")
 local StrafePrediction = require("simulation.Player.strafe_prediction")
+local PlayerSimState = require("simulation.Player.player_sim_state")
 
 local consolas = draw.CreateFont("Consolas", 17, 500)
 
-local TICK_INTERVAL = GameConstants.TICK_INTERVAL
 local MAX_PREDICTION_TICKS = 66
 local MIN_STRAFE_SAMPLES = 6
 
@@ -116,10 +115,14 @@ local function recordMovementHistory(entity)
 		return
 	end
 
+	local flags = entity:GetPropInt("m_fFlags") or 0
+	local FL_ONGROUND = 1
+	local isOnGround = (flags & FL_ONGROUND) ~= 0
+
 	local mode = 0
-	if entity:IsOnGround() then
+	if isOnGround then
 		mode = 0
-	elseif velocity.z ~= 0 then
+	elseif math.abs(velocity.z) > 0.1 then
 		mode = 1
 	else
 		mode = 2
