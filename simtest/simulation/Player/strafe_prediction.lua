@@ -72,13 +72,34 @@ function StrafePrediction.clearHistory(entityIndex)
 end
 
 local function getYawDifference(record1, record2, isGround, maxSpeed)
-	local yaw1 = vectorToYaw(record1.direction)
-	local yaw2 = vectorToYaw(record2.direction)
+	-- Use velocity delta for more reliable angle calculation
+	local vel1 = record1.velocity
+	local vel2 = record2.velocity
+
+	-- Calculate angle between velocity vectors
+	local dot = vel1.x * vel2.x + vel1.y * vel2.y
+	local len1 = math.sqrt(vel1.x * vel1.x + vel1.y * vel1.y)
+	local len2 = math.sqrt(vel2.x * vel2.x + vel2.y * vel2.y)
+
+	if len1 < 0.1 or len2 < 0.1 then
+		return 0, 1
+	end
+
+	local cosAngle = dot / (len1 * len2)
+	cosAngle = math.max(-1, math.min(1, cosAngle)) -- Clamp to [-1, 1]
+	local angleRad = math.acos(cosAngle)
+	local angleDeg = angleRad * GameConstants.RAD2DEG
+
+	-- Determine rotation direction using cross product
+	local cross = vel1.x * vel2.y - vel1.y * vel2.x
+	if cross < 0 then
+		angleDeg = -angleDeg
+	end
 
 	local deltaTime = record1.simTime - record2.simTime
 	local ticks = math.max(math.floor(deltaTime / GameConstants.TICK_INTERVAL), 1)
 
-	local yawDelta = normalizeAngle(yaw1 - yaw2)
+	local yawDelta = angleDeg
 
 	if maxSpeed and maxSpeed > 0 and record1.mode ~= 1 then
 		local speedRatio = math.min(record1.speed / maxSpeed, 1.0)

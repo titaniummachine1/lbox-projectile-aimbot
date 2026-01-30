@@ -1,3 +1,9 @@
+---@module player_sim_state
+---Cached player simulation state management
+---Caches static data (mins, maxs, index) per entity
+---Caches cvars globally (updated every 1 second)
+---Maintains per-player dynamic state between frames
+
 local GameConstants = require("constants.game_constants")
 
 local PlayerSimState = {}
