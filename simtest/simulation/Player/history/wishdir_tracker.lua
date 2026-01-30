@@ -12,11 +12,13 @@
 --   5. Fallback: if no prior prediction, clamp current velocity to 8 directions
 -- ============================================================================
 
-local G = require("globals")
 local PlayerTick = require("simulation.Player.player_tick")
 local PredictionContext = require("simulation.Player.prediction_context")
 
 local WishdirTracker = {}
+
+local localWishdir = nil
+local localWishdirTick = -1
 
 -- [[ POOLING LOGIC ]]
 local vectorPool = {}
@@ -255,8 +257,8 @@ function WishdirTracker.getRelativeWishdir(entity)
 	-- Handle Local Player CMD Override
 	local localPlayer = entities.GetLocalPlayer()
 	if localPlayer and idx == localPlayer:GetIndex() then
-		if G.LocalWishdir and G.LocalWishdirTick == globals.TickCount() then
-			return G.LocalWishdir
+		if localWishdir and localWishdirTick == globals.TickCount() then
+			return localWishdir
 		end
 	end
 
