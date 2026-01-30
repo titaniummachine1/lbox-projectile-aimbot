@@ -488,19 +488,22 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 	local tickinterval = simCtx.tickinterval
 	local yawDelta = playerCtx.yawDeltaPerTick or 0
 
-	-- Phase 1: Friction
-	local is_on_ground =
+	-- Phase 1: Ground Detection (entity flag + trace)
+	local entity_flags = playerCtx.entity:GetPropInt("m_fFlags") or 0
+	local entity_says_onground = (entity_flags & GameConstants.FL_ONGROUND) ~= 0
+
+	local trace_says_onground =
 		checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
 
-	-- Clamp vertical velocity when on ground
-	if is_on_ground then
-		if playerCtx.velocity.z < 0 then
-			playerCtx.velocity.z = 0
-		end
-		playerCtx.onGround = true
-	else
-		playerCtx.onGround = false
+	-- Trust entity flag primarily, trace as secondary validation
+	local is_on_ground = entity_says_onground and trace_says_onground
+
+	-- Clamp vertical velocity when on ground BEFORE friction
+	if is_on_ground and playerCtx.velocity.z < 0 then
+		playerCtx.velocity.z = 0
 	end
+
+	playerCtx.onGround = is_on_ground
 
 	friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
 	checkVelocity(playerCtx.velocity)
@@ -564,56 +567,25 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 		)
 	end
 
-	-- Phase 5: Re-calculate ground state and final gravity
-	local new_on_ground =
+	-- Phase 5: Post-movement ground state re-check and final gravity
+	local entity_flags_after = playerCtx.entity:GetPropInt("m_fFlags") or 0
+	local entity_says_onground_after = (entity_flags_after & GameConstants.FL_ONGROUND) ~= 0
+
+	local trace_says_onground_after =
 		checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
 
+	local new_on_ground = entity_says_onground_after and trace_says_onground_after
+
 	if not new_on_ground then
+		-- In air: apply second half of gravity
 		playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
 		playerCtx.onGround = false
 	else
-		playerCtx.onGround = true
-
-		-- Clamp downward velocity when landing
+		-- On ground: clamp downward velocity
 		if playerCtx.velocity.z < 0 then
 			playerCtx.velocity.z = 0
 		end
-
-		-- Air to ground transition: restore input from velocity if no input and moving
-		if not was_on_ground and new_on_ground then
-			local hasInput = playerCtx.relativeWishDir
-				and (math.abs(playerCtx.relativeWishDir.x) > 0.01 or math.abs(playerCtx.relativeWishDir.y) > 0.01)
-
-			if not hasInput then
-				local speed2d = length2D(playerCtx.velocity)
-				if speed2d > playerCtx.maxspeed * 0.015 then
-					-- Get velocity direction in world space
-					local dirX = playerCtx.velocity.x
-					local dirY = playerCtx.velocity.y
-					local len = math.sqrt(dirX * dirX + dirY * dirY)
-
-					if len > 0.1 then
-						-- Normalize and scale to 450 (standard move speed)
-						dirX = (dirX / len) * 450
-						dirY = (dirY / len) * 450
-
-						-- Convert from world space to view-relative using current yaw
-						local yawRad = playerCtx.yaw * GameConstants.DEG2RAD
-						local cosYaw = math.cos(yawRad)
-						local sinYaw = math.sin(yawRad)
-
-						-- Transform: view-relative = inverse rotation of world direction
-						local forwardMove = dirX * cosYaw + dirY * sinYaw
-						local sideMove = -(dirX * -sinYaw + dirY * cosYaw)
-
-						-- Store as relative wishdir (forward = x, side = y)
-						playerCtx.relativeWishDir.x = forwardMove
-						playerCtx.relativeWishDir.y = sideMove
-						playerCtx.relativeWishDir.z = 0
-					end
-				end
-			end
-		end
+		playerCtx.onGround = true
 	end
 
 	return Vector3(playerCtx.origin:Unpack())
