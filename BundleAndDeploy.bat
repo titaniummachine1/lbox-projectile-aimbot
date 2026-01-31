@@ -98,7 +98,7 @@ set "SIMTEST_DIR=%SCRIPT_DIR%simtest"
 if exist "%SIMTEST_DIR%\Main.lua" (
   echo [BundleAndDeploy] Bundling simtest...
   if not exist "%SIMTEST_DIR%\build\" mkdir "%SIMTEST_DIR%\build"
-  node "%SCRIPT_DIR%..\Lmaobox_Context_Server\automations\bundle-and-deploy.js" "%SIMTEST_DIR%" >nul 2>&1
+  node "%SCRIPT_DIR%bundle-simtest.js" >nul 2>&1
   if exist "%SIMTEST_DIR%\build\simtest.lua" (
     copy /Y "%SIMTEST_DIR%\build\simtest.lua" "%DEPLOY_DIR%\simtest.lua" >nul
     echo [BundleAndDeploy] SimTest deployed to %DEPLOY_DIR%\simtest.lua

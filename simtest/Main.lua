@@ -4,6 +4,7 @@ local WishdirEstimator = require("simulation.Player.wishdir_estimator")
 local StrafePrediction = require("simulation.Player.strafe_prediction")
 local StrafeRotation = require("simulation.Player.strafe_rotation")
 local PlayerSimState = require("simulation.Player.player_sim_state")
+local WishdirDebug = require("simulation.Player.wishdir_debug")
 
 local consolas = draw.CreateFont("Consolas", 17, 500)
 
@@ -12,10 +13,11 @@ local MIN_STRAFE_SAMPLES = 6
 
 local state = {
 	enabled = true,
-	targetEntity = nil,
+	showWishdirDebug = true,
 	predictions = {},
 	lastUpdateTime = 0,
 	updateInterval = 0.1,
+	wishdirDebugResults = nil,
 }
 
 local function getLocalPlayer()
@@ -24,39 +26,6 @@ local function getLocalPlayer()
 		return nil
 	end
 	return ply
-end
-
-local function findBestTarget()
-	local plocal = getLocalPlayer()
-	if not plocal then
-		return nil
-	end
-
-	local localPos = plocal:GetAbsOrigin()
-	if not localPos then
-		return nil
-	end
-
-	local bestTarget = nil
-	local bestDist = math.huge
-
-	local players = entities.FindByClass("CTFPlayer")
-	for _, ply in ipairs(players) do
-		if ply and ply:IsValid() and ply:IsAlive() and not ply:IsDormant() then
-			if ply:GetTeamNumber() ~= plocal:GetTeamNumber() and ply:GetIndex() ~= plocal:GetIndex() then
-				local pos = ply:GetAbsOrigin()
-				if pos then
-					local dist = (pos - localPos):Length()
-					if dist < bestDist then
-						bestDist = dist
-						bestTarget = ply
-					end
-				end
-			end
-		end
-	end
-
-	return bestTarget
 end
 
 local function simulatePlayerPath(entity, useStrafePred)
@@ -69,7 +38,6 @@ local function simulatePlayerPath(entity, useStrafePred)
 
 	local sim = PlayerSimState.getSimContext()
 
-	-- Estimate wishdir from velocity (NOT using player's actual input)
 	local vel = entity:EstimateAbsVelocity()
 	if vel then
 		local estimatedWishdir = WishdirEstimator.estimateFromVelocity(vel, playerState.yaw)
@@ -78,7 +46,6 @@ local function simulatePlayerPath(entity, useStrafePred)
 		playerState.relativeWishDir = { x = 0, y = 0, z = 0 }
 	end
 
-	-- Setup strafe prediction yaw delta
 	local avgYawDelta = 0
 	if useStrafePred then
 		local maxSpeed = vel and vel:Length2D() or 320
@@ -89,27 +56,21 @@ local function simulatePlayerPath(entity, useStrafePred)
 	end
 	playerState.yawDeltaPerTick = avgYawDelta
 
-	-- Initialize strafe rotation with initial yaw and velocity
 	if avgYawDelta and math.abs(avgYawDelta) > 0.001 then
 		StrafeRotation.initState(entity:GetIndex(), playerState.yaw, playerState.velocity, avgYawDelta)
 	end
 
-	table.insert(predictions, {
-		x = playerState.origin.x,
-		y = playerState.origin.y,
-		z = playerState.origin.z,
-		tick = 0,
-	})
+	table.insert(
+		predictions,
+		{ x = playerState.origin.x, y = playerState.origin.y, z = playerState.origin.z, tick = 0 }
+	)
 
 	for tick = 1, MAX_PREDICTION_TICKS do
 		MovementSim.simulateTick(playerState, sim)
-
-		table.insert(predictions, {
-			x = playerState.origin.x,
-			y = playerState.origin.y,
-			z = playerState.origin.z,
-			tick = tick,
-		})
+		table.insert(
+			predictions,
+			{ x = playerState.origin.x, y = playerState.origin.y, z = playerState.origin.z, tick = tick }
+		)
 	end
 
 	return predictions
@@ -119,21 +80,15 @@ local function recordMovementHistory(entity)
 	if not entity or not entity:IsValid() or not entity:IsAlive() then
 		return
 	end
-
 	local origin = entity:GetAbsOrigin()
 	local velocity = entity:EstimateAbsVelocity()
 	if not origin or not velocity then
 		return
 	end
-
 	local flags = entity:GetPropInt("m_fFlags") or 0
 	local isOnGround = (flags & GameConstants.FL_ONGROUND) ~= 0
-
 	local mode = isOnGround and 0 or 1
-	local simTime = globals.CurTime()
-	local maxSpeed = velocity:Length2D()
-
-	StrafePrediction.recordMovement(entity:GetIndex(), origin, velocity, mode, simTime, maxSpeed)
+	StrafePrediction.recordMovement(entity:GetIndex(), origin, velocity, mode, globals.CurTime(), velocity:Length2D())
 end
 
 local function updatePredictions()
@@ -143,45 +98,49 @@ local function updatePredictions()
 	end
 	state.lastUpdateTime = currentTime
 
-	if not state.targetEntity or not state.targetEntity:IsValid() or not state.targetEntity:IsAlive() then
-		state.targetEntity = findBestTarget()
-	end
-
-	if state.targetEntity then
-		recordMovementHistory(state.targetEntity)
-		state.predictions = simulatePlayerPath(state.targetEntity, true)
+	local plocal = getLocalPlayer()
+	if plocal then
+		recordMovementHistory(plocal)
+		state.predictions = simulatePlayerPath(plocal, true)
 	else
 		state.predictions = {}
 	end
+end
+
+local function update9DirectionDebug(entity)
+	if not state.showWishdirDebug or not entity then
+		return
+	end
+	local playerState = PlayerSimState.getOrCreate(entity)
+	local sim = PlayerSimState.getSimContext()
+	if not playerState or not sim then
+		return
+	end
+	-- Use new update function: finds best match from last tick, sims 9 new, stores for next tick
+	state.wishdirDebugResults = WishdirDebug.update(entity, playerState, sim)
 end
 
 local function drawPath(path, r, g, b, a, thickness)
 	if not path or #path < 2 then
 		return
 	end
-
 	thickness = thickness or 2
 	local step = math.max(1, math.floor(#path / 50))
-
 	for i = 1, #path - step, step do
 		local p1 = path[i]
 		local p2 = path[math.min(i + step, #path)]
-
 		local w2s1 = client.WorldToScreen(Vector3(p1.x, p1.y, p1.z))
 		local w2s2 = client.WorldToScreen(Vector3(p2.x, p2.y, p2.z))
-
 		if w2s1 and w2s2 then
 			local progress = i / #path
 			local alpha = math.floor(a * (1 - progress * 0.5))
 			draw.Color(r, g, b, alpha)
-
 			for offset = -thickness, thickness do
 				draw.Line(w2s1[1] + offset, w2s1[2], w2s2[1] + offset, w2s2[2])
 				draw.Line(w2s1[1], w2s1[2] + offset, w2s2[1], w2s2[2] + offset)
 			end
 		end
 	end
-
 	local lastPred = path[#path]
 	local w2sLast = client.WorldToScreen(Vector3(lastPred.x, lastPred.y, lastPred.z))
 	if w2sLast then
@@ -193,83 +152,45 @@ local function drawPath(path, r, g, b, a, thickness)
 	end
 end
 
-local selfPredCache = {
-	path = nil,
-	lastUpdateTime = 0,
-}
-
-local function drawPredictionPath()
-	local plocal = getLocalPlayer()
-	if plocal then
-		local now = globals.RealTime()
-		if now - selfPredCache.lastUpdateTime > 0.016 then
-			local state = PlayerSimState.getOrCreate(plocal)
-			local sim = PlayerSimState.getSimContext()
-			if state and sim then
-				-- Local player: estimate wishdir from velocity
-				local vel = plocal:EstimateAbsVelocity()
-				if vel then
-					state.relativeWishDir = WishdirEstimator.estimateFromVelocity(vel, state.yaw)
-				else
-					state.relativeWishDir = { x = 0, y = 0, z = 0 }
-				end
-				state.yawDeltaPerTick = 0
-
-				local numTicks = math.floor(1.0 / sim.tickinterval)
-				local path = MovementSim.simulatePath(state, sim, numTicks)
-				if path then
-					selfPredCache.path = {}
-					for i = 1, #path do
-						selfPredCache.path[i] = {
-							x = path[i].x,
-							y = path[i].y,
-							z = path[i].z,
-						}
-					end
-				end
-				selfPredCache.lastUpdateTime = now
-			end
-		end
-
-		if selfPredCache.path then
-			drawPath(selfPredCache.path, 100, 200, 255, 200, 1)
-		end
-	end
-
-	if state.targetEntity and state.targetEntity:IsValid() then
-		drawPath(state.predictions, 255, 100, 100, 220, 2)
-	end
-end
-
 local function onCreateMove()
 	if not state.enabled then
 		return
 	end
-
 	updatePredictions()
+	local plocal = getLocalPlayer()
+	if plocal then
+		update9DirectionDebug(plocal)
+	end
 end
 
 local function onDraw()
 	if not state.enabled then
 		return
 	end
-
-	drawPredictionPath()
-
+	if state.predictions and #state.predictions > 0 then
+		drawPath(state.predictions, 100, 200, 255, 200, 2)
+	end
+	local plocal = getLocalPlayer()
+	if state.showWishdirDebug and plocal and state.wishdirDebugResults then
+		local sim = PlayerSimState.getSimContext()
+		if sim then
+			WishdirDebug.draw9Directions(plocal, state.wishdirDebugResults, sim.tickinterval)
+		end
+	end
 	draw.Color(255, 255, 255, 255)
 	draw.SetFont(consolas)
-	draw.Text(10, 10, "Player Simulation Test")
-
-	if state.targetEntity and state.targetEntity:IsValid() then
-		local info = state.targetEntity:GetName()
-		draw.Text(10, 30, "Target: " .. info)
-		draw.Text(10, 50, "Predictions: " .. #state.predictions)
+	draw.Text(10, 10, "SimTest - Local Player Only")
+	plocal = getLocalPlayer()
+	if plocal then
+		draw.Text(10, 30, "Predictions: " .. #state.predictions)
+		if state.showWishdirDebug then
+			draw.Text(10, 50, "9-Dir Debug: ON")
+		end
 	else
-		draw.Text(10, 30, "No target")
+		draw.Text(10, 30, "No local player")
 	end
 end
 
 callbacks.Register("CreateMove", "simtest_createmove", onCreateMove)
 callbacks.Register("Draw", "simtest_draw", onDraw)
-
-printc(100, 255, 100, 255, "[SimTest] Player simulation test loaded")
+printc(100, 255, 100, 255, "[SimTest] Local player simulation loaded")

@@ -98,11 +98,7 @@ local function relativeToWorldWishDir(relWishdir, yaw)
 end
 
 local function normalizeVector(vec)
-	local len = math.sqrt(vec.x * vec.x + vec.y * vec.y + vec.z * vec.z)
-	if len < 0.0001 then
-		return Vector3(0, 0, 0)
-	end
-	return Vector3(vec.x / len, vec.y / len, vec.z / len)
+	return vec / vec:Lenght()
 end
 
 local function shouldHitEntity(entity, playerIndex)
@@ -128,8 +124,12 @@ end
 -- COLLISION SYSTEM (ported from src/player_tick.lua)
 -- ============================================================================
 
+local function dotProduct(a, b)
+	return a.x * b.x + a.y * b.y + a.z * b.z
+end
+
 local function clipVelocity(velocity, normal, overbounce)
-	local backoff = velocity:Dot(normal) * overbounce
+	local backoff = dotProduct(velocity, normal) * overbounce
 	velocity.x = velocity.x - normal.x * backoff
 	velocity.y = velocity.y - normal.y * backoff
 	velocity.z = velocity.z - normal.z * backoff
@@ -204,7 +204,7 @@ local function tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
 				clipVelocity(velocity, planes[i], 1.0)
 				local j = 0
 				while j < numplanes do
-					if j ~= i and velocity:Dot(planes[j]) < 0 then
+					if j ~= i and dotProduct(velocity, planes[j]) < 0 then
 						break
 					end
 					j = j + 1
@@ -222,10 +222,10 @@ local function tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
 						planes[0].z * planes[1].x - planes[0].x * planes[1].z,
 						planes[0].x * planes[1].y - planes[0].y * planes[1].x
 					)
-					local d = dir:Dot(velocity)
+					local d = dotProduct(dir, velocity)
 					velocity.x, velocity.y, velocity.z = dir.x * d, dir.y * d, dir.z * d
 				end
-				if velocity:Dot(planes[0]) < 0 then
+				if dotProduct(velocity, planes[0]) < 0 then
 					velocity.x, velocity.y, velocity.z = 0, 0, 0
 					break
 				end
