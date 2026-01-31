@@ -9,15 +9,18 @@ local WishdirEstimator = {}
 
 local STILL_SPEED_THRESHOLD = 50
 
+local MAX_SPEED_INPUT = 450
+local DIAGONAL_INPUT = 450 / math.sqrt(2) -- ≈ 318.2
+
 local function normalizeAngle(angle)
 	return ((angle + 180) % 360) - 180
 end
 
 ---Estimate view-relative wishdir from velocity
----Snaps to 8 directions (forward, back, left, right, 4 diagonals)
+---Returns raw cmd-scale values (0-450), NOT normalized
 ---@param velocity Vector3 Player's current velocity
 ---@param yaw number Player's view yaw angle
----@return table {x, y, z} View-relative wishdir (normalized)
+---@return table {x, y, z} View-relative wishdir (raw cmd values)
 function WishdirEstimator.estimateFromVelocity(velocity, yaw)
 	assert(velocity, "estimateFromVelocity: velocity missing")
 	assert(yaw, "estimateFromVelocity: yaw missing")
@@ -37,37 +40,41 @@ function WishdirEstimator.estimateFromVelocity(velocity, yaw)
 	local relForward = cosYaw * velNormX + sinYaw * velNormY
 	local relLeft = -sinYaw * velNormX + cosYaw * velNormY
 
-	local snapX = 0
-	local snapY = 0
+	local rawX = 0
+	local rawY = 0
 
 	if relForward > 0.3 then
-		snapX = 1
+		rawX = MAX_SPEED_INPUT
 	elseif relForward < -0.3 then
-		snapX = -1
+		rawX = -MAX_SPEED_INPUT
 	end
 
 	if relLeft > 0.3 then
-		snapY = 1
+		rawY = MAX_SPEED_INPUT
 	elseif relLeft < -0.3 then
-		snapY = -1
+		rawY = -MAX_SPEED_INPUT
 	end
 
-	local len = math.sqrt(snapX * snapX + snapY * snapY)
+	local len = math.sqrt(rawX * rawX + rawY * rawY)
 	if len > 0.0001 then
-		snapX = snapX / len
-		snapY = snapY / len
+		if len > MAX_SPEED_INPUT + 1 then
+			local scale = MAX_SPEED_INPUT / len
+			rawX = rawX * scale
+			rawY = rawY * scale
+		end
 	else
-		snapX = 0
-		snapY = 0
+		rawX = 0
+		rawY = 0
 	end
 
-	return { x = snapX, y = snapY, z = 0 }
+	return { x = rawX, y = rawY, z = 0 }
 end
 
 ---Convert view-relative wishdir to world space
----@param relativeWishdir table {x, y, z} View-relative direction
+---Preserves magnitude (0-450) for proper acceleration math
+---@param relativeWishdir table {x, y, z} View-relative direction (raw values)
 ---@param yaw number Player's view yaw angle
----@return table {x, y, z} World-space direction (normalized)
+---@return table {x, y, z, magnitude} World-space direction (normalized) + magnitude
 function WishdirEstimator.toWorldSpace(relativeWishdir, yaw)
 	assert(relativeWishdir, "toWorldSpace: relativeWishdir missing")
 	assert(yaw, "toWorldSpace: yaw missing")
@@ -79,12 +86,17 @@ function WishdirEstimator.toWorldSpace(relativeWishdir, yaw)
 	local worldX = cosYaw * relativeWishdir.x - sinYaw * relativeWishdir.y
 	local worldY = sinYaw * relativeWishdir.x + cosYaw * relativeWishdir.y
 
-	local len = math.sqrt(worldX * worldX + worldY * worldY)
-	if len > 0.001 then
-		return { x = worldX / len, y = worldY / len, z = 0 }
+	local magnitude = math.sqrt(worldX * worldX + worldY * worldY)
+	if magnitude > 0.001 then
+		return {
+			x = worldX / magnitude,
+			y = worldY / magnitude,
+			z = 0,
+			magnitude = magnitude,
+		}
 	end
 
-	return { x = 0, y = 0, z = 0 }
+	return { x = 0, y = 0, z = 0, magnitude = 0 }
 end
 
 return WishdirEstimator

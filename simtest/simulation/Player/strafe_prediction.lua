@@ -22,13 +22,7 @@ local function sign(x)
 end
 
 local function normalizeAngle(angle)
-	while angle > 180 do
-		angle = angle - 360
-	end
-	while angle < -180 do
-		angle = angle + 360
-	end
-	return angle
+	return ((angle + 180) % 360) - 180
 end
 
 local function vectorToYaw(vec)
