@@ -37,8 +37,7 @@ local function friction(vel, onGround, tickInterval, sv_friction, sv_stopspeed)
 	end
 end
 
-local function accelerate(vel, wishdir, maxspeed, accel, tickInterval)
-	local wishspeed = maxspeed
+local function accelerate(vel, wishdir, wishspeed, accel, tickInterval)
 	local currentspeed = vel.x * wishdir.x + vel.y * wishdir.y
 	local addspeed = wishspeed - currentspeed
 
@@ -55,8 +54,13 @@ local function accelerate(vel, wishdir, maxspeed, accel, tickInterval)
 	vel.y = vel.y + accelspeed * wishdir.y
 end
 
-local function airAccelerate(vel, wishdir, maxspeed, accel, tickInterval)
-	local wishspeed = maxspeed
+local function airAccelerate(vel, wishdir, wishspeed, accel, tickInterval)
+	-- Air acceleration caps effective wishspeed to 30 (sv_airaccelerate behavior)
+	local AIR_CAP = 30
+	if wishspeed > AIR_CAP then
+		wishspeed = AIR_CAP
+	end
+
 	local currentspeed = vel.x * wishdir.x + vel.y * wishdir.y
 	local addspeed = wishspeed - currentspeed
 
@@ -83,9 +87,14 @@ local function relativeToWorldWishDir(relWishdir, yaw)
 
 	local len = math.sqrt(worldX * worldX + worldY * worldY)
 	if len > 0.001 then
-		return { x = worldX / len, y = worldY / len, z = 0 }
+		return {
+			x = worldX / len,
+			y = worldY / len,
+			z = 0,
+			magnitude = len,
+		}
 	end
-	return { x = 0, y = 0, z = 0 }
+	return { x = 0, y = 0, z = 0, magnitude = 0 }
 end
 
 local function normalizeVector(vec)
@@ -115,6 +124,209 @@ local function shouldHitEntity(entity, playerIndex)
 	return true
 end
 
+-- ============================================================================
+-- COLLISION SYSTEM (ported from src/player_tick.lua)
+-- ============================================================================
+
+local function clipVelocity(velocity, normal, overbounce)
+	local backoff = velocity:Dot(normal) * overbounce
+	velocity.x = velocity.x - normal.x * backoff
+	velocity.y = velocity.y - normal.y * backoff
+	velocity.z = velocity.z - normal.z * backoff
+
+	if math.abs(velocity.x) < 0.01 then
+		velocity.x = 0
+	end
+	if math.abs(velocity.y) < 0.01 then
+		velocity.y = 0
+	end
+	if math.abs(velocity.z) < 0.01 then
+		velocity.z = 0
+	end
+end
+
+local function checkIsOnGround(origin, velocity, mins, maxs, index)
+	if velocity and velocity.z > GameConstants.NON_JUMP_VELOCITY then
+		return false
+	end
+
+	local down = Vector3(origin.x, origin.y, origin.z - GameConstants.GROUND_CHECK_OFFSET)
+	local trace = engine.TraceHull(origin, down, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
+		return ent:GetIndex() ~= index
+	end)
+
+	return trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7
+end
+
+local function tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
+	local MAX_CLIP_PLANES = GameConstants.DEFAULT_MAX_CLIP_PLANES
+	local time_left = tickinterval
+	local planes = {}
+	local numplanes = 0
+
+	for bumpcount = 0, 3 do
+		if time_left <= 0 then
+			break
+		end
+
+		local end_pos = Vector3(
+			origin.x + velocity.x * time_left,
+			origin.y + velocity.y * time_left,
+			origin.z + velocity.z * time_left
+		)
+
+		local trace = engine.TraceHull(origin, end_pos, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
+			return ent:GetIndex() ~= index
+		end)
+
+		if trace.fraction > 0 then
+			origin.x, origin.y, origin.z = trace.endpos.x, trace.endpos.y, trace.endpos.z
+			numplanes = 0
+		end
+
+		if trace.fraction == 1 then
+			break
+		end
+		time_left = time_left - time_left * trace.fraction
+
+		if trace.plane and numplanes < MAX_CLIP_PLANES then
+			planes[numplanes] = trace.plane
+			numplanes = numplanes + 1
+		end
+
+		if trace.plane then
+			if trace.plane.z > 0.7 and velocity.z < 0 then
+				velocity.z = 0
+			end
+
+			local i = 0
+			while i < numplanes do
+				clipVelocity(velocity, planes[i], 1.0)
+				local j = 0
+				while j < numplanes do
+					if j ~= i and velocity:Dot(planes[j]) < 0 then
+						break
+					end
+					j = j + 1
+				end
+				if j == numplanes then
+					break
+				end
+				i = i + 1
+			end
+
+			if i == numplanes then
+				if numplanes >= 2 then
+					local dir = Vector3(
+						planes[0].y * planes[1].z - planes[0].z * planes[1].y,
+						planes[0].z * planes[1].x - planes[0].x * planes[1].z,
+						planes[0].x * planes[1].y - planes[0].y * planes[1].x
+					)
+					local d = dir:Dot(velocity)
+					velocity.x, velocity.y, velocity.z = dir.x * d, dir.y * d, dir.z * d
+				end
+				if velocity:Dot(planes[0]) < 0 then
+					velocity.x, velocity.y, velocity.z = 0, 0, 0
+					break
+				end
+			end
+		else
+			break
+		end
+	end
+	return origin
+end
+
+local function stepMove(origin, velocity, mins, maxs, index, tickinterval, stepheight)
+	local original_pos = Vector3(origin.x, origin.y, origin.z)
+	local original_vel = Vector3(velocity.x, velocity.y, velocity.z)
+
+	tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
+	local down_pos = Vector3(origin.x, origin.y, origin.z)
+	local down_vel = Vector3(velocity.x, velocity.y, velocity.z)
+
+	origin.x, origin.y, origin.z = original_pos.x, original_pos.y, original_pos.z
+	velocity.x, velocity.y, velocity.z = original_vel.x, original_vel.y, original_vel.z
+
+	local step_up_dest = Vector3(origin.x, origin.y, origin.z + stepheight + GameConstants.DIST_EPSILON)
+	local step_trace = engine.TraceHull(origin, step_up_dest, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
+		return ent:GetIndex() ~= index
+	end)
+
+	if not step_trace.startsolid and not step_trace.allsolid then
+		origin.x, origin.y, origin.z = step_trace.endpos.x, step_trace.endpos.y, step_trace.endpos.z
+		tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
+
+		local step_down_dest = Vector3(origin.x, origin.y, origin.z - stepheight - GameConstants.DIST_EPSILON)
+		local step_down_trace = engine.TraceHull(
+			origin,
+			step_down_dest,
+			mins,
+			maxs,
+			GameConstants.MASK_PLAYERSOLID,
+			function(ent)
+				return ent:GetIndex() ~= index
+			end
+		)
+
+		if step_down_trace.plane and step_down_trace.plane.z < 0.7 then
+			origin.x, origin.y, origin.z = down_pos.x, down_pos.y, down_pos.z
+			velocity.x, velocity.y, velocity.z = down_vel.x, down_vel.y, down_vel.z
+			return origin
+		end
+
+		if not step_down_trace.startsolid and not step_down_trace.allsolid then
+			origin.x, origin.y, origin.z = step_down_trace.endpos.x, step_down_trace.endpos.y, step_down_trace.endpos.z
+		end
+
+		local up_pos = Vector3(origin.x, origin.y, origin.z)
+		local down_dist = (down_pos.x - original_pos.x) ^ 2 + (down_pos.y - original_pos.y) ^ 2
+		local up_dist = (up_pos.x - original_pos.x) ^ 2 + (up_pos.y - original_pos.y) ^ 2
+
+		if down_dist > up_dist then
+			origin.x, origin.y, origin.z = down_pos.x, down_pos.y, down_pos.z
+			velocity.x, velocity.y, velocity.z = down_vel.x, down_vel.y, down_vel.z
+		else
+			velocity.z = down_vel.z
+		end
+	else
+		origin.x, origin.y, origin.z = down_pos.x, down_pos.y, down_pos.z
+		velocity.x, velocity.y, velocity.z = down_vel.x, down_vel.y, down_vel.z
+	end
+	return origin
+end
+
+local function stayOnGround(origin, mins, maxs, stepheight, index)
+	local start_pos = Vector3(origin.x, origin.y, origin.z + 2)
+	local up_trace = engine.TraceHull(origin, start_pos, mins, maxs, GameConstants.MASK_PLAYERSOLID, function(ent)
+		return ent:GetIndex() ~= index
+	end)
+	local end_pos = Vector3(up_trace.endpos.x, up_trace.endpos.y, origin.z - stepheight)
+	local down_trace = engine.TraceHull(
+		up_trace.endpos,
+		end_pos,
+		mins,
+		maxs,
+		GameConstants.MASK_PLAYERSOLID,
+		function(ent)
+			return ent:GetIndex() ~= index
+		end
+	)
+	if
+		down_trace.fraction > 0
+		and down_trace.fraction < 1.0
+		and not down_trace.startsolid
+		and down_trace.plane
+		and down_trace.plane.z >= 0.7
+	then
+		if math.abs(origin.z - down_trace.endpos.z) > 0.5 then
+			origin.x, origin.y, origin.z = down_trace.endpos.x, down_trace.endpos.y, down_trace.endpos.z
+			return true
+		end
+	end
+	return false
+end
+
 ---Simulate one tick of player movement
 ---@param state table Player state (from PlayerSimState.getOrCreate)
 ---@param simCtx table Simulation context (from PlayerSimState.getSimContext)
@@ -139,102 +351,47 @@ function MovementSim.simulateTick(state, simCtx)
 	end
 
 	-- Phase 3: Wishdir acceleration
-	local wishdir = relativeToWorldWishDir(state.relativeWishDir, state.yaw)
+	local wishdirInfo = relativeToWorldWishDir(state.relativeWishDir, state.yaw)
+	local wishdir = { x = wishdirInfo.x, y = wishdirInfo.y, z = 0 }
+	local inputMagnitude = wishdirInfo.magnitude
 
 	if onGround then
-		accelerate(vel, wishdir, state.maxspeed, simCtx.sv_accelerate, tickInterval)
+		-- Ground: clamp wishspeed to maxspeed (class-specific cap)
+		local wishspeed = math.min(inputMagnitude, state.maxspeed)
+		accelerate(vel, wishdir, wishspeed, simCtx.sv_accelerate, tickInterval)
 	else
-		airAccelerate(vel, wishdir, state.maxspeed, simCtx.sv_airaccelerate, tickInterval)
+		-- Air: airAccelerate caps to 30 internally
+		airAccelerate(vel, wishdir, inputMagnitude, simCtx.sv_airaccelerate, tickInterval)
 	end
 
 	-- Phase 4: Strafe rotation (tracks velocity direction changes)
 	StrafeRotation.applyRotation(state.index, vel)
-	local newYaw = StrafeRotation.getCurrentYaw(state.index)
-	if newYaw ~= 0 then
-		state.yaw = newYaw
-	end
 
-	-- Phase 5: Movement with collision
-	local lastPos = Vector3(state.origin.x, state.origin.y, state.origin.z)
-	local pos =
-		Vector3(lastPos.x + vel.x * tickInterval, lastPos.y + vel.y * tickInterval, lastPos.z + vel.z * tickInterval)
+	-- Phase 5: Movement with collision (using src collision system)
+	local origin = Vector3(state.origin.x, state.origin.y, state.origin.z)
 
-	local vStep = Vector3(0, 0, STEP_SIZE)
-
-	-- Forward collision (wall trace)
-	local wallTrace = engine.TraceHull(
-		lastPos + vStep,
-		pos + vStep,
-		state.mins,
-		state.maxs,
-		MASK_PLAYERSOLID,
-		function(ent)
-			return shouldHitEntity(ent, state.index)
-		end
-	)
-
-	if wallTrace.fraction < 1 then
-		local normal = wallTrace.plane
-		if normal then
-			local angle = math.deg(math.acos(normal:Dot(vUp)))
-
-			if angle > 55 then
-				-- Wall too steep, clip velocity
-				local dot = vel:Dot(normal)
-				vel = vel - normal * dot
-			end
-
-			pos.x = wallTrace.endpos.x
-			pos.y = wallTrace.endpos.y
-		end
-	end
-
-	-- Ground collision
-	local downStep = onGround and vStep or Vector3(0, 0, 0)
-
-	local groundTrace = engine.TraceHull(
-		pos + vStep,
-		pos - downStep,
-		state.mins,
-		state.maxs,
-		MASK_PLAYERSOLID,
-		function(ent)
-			return shouldHitEntity(ent, state.index)
-		end
-	)
-
-	if groundTrace.fraction < 1 then
-		local normal = groundTrace.plane
-		if normal then
-			local angle = math.deg(math.acos(normal:Dot(vUp)))
-
-			if angle < 45 then
-				pos = groundTrace.endpos
-				onGround = true
-			elseif angle < 55 then
-				vel.x = 0
-				vel.y = 0
-				vel.z = 0
-				onGround = false
-			else
-				local dot = vel:Dot(normal)
-				vel = vel - normal * dot
-				onGround = true
-			end
-		end
+	if onGround then
+		stepMove(origin, vel, state.mins, state.maxs, state.index, tickInterval, STEP_SIZE)
+		stayOnGround(origin, state.mins, state.maxs, STEP_SIZE, state.index)
 	else
-		onGround = false
+		tryPlayerMove(origin, vel, state.mins, state.maxs, state.index, tickInterval)
 	end
 
-	-- Phase 6: Gravity (second half if in air)
+	-- Phase 6: Re-check ground state and final gravity
+	onGround = checkIsOnGround(origin, vel, state.mins, state.maxs, state.index)
+
 	if not onGround then
 		vel.z = vel.z - (gravity * 0.5 * tickInterval)
+	else
+		if vel.z < 0 then
+			vel.z = 0
+		end
 	end
 
 	-- Update state
-	state.origin.x = pos.x
-	state.origin.y = pos.y
-	state.origin.z = pos.z
+	state.origin.x = origin.x
+	state.origin.y = origin.y
+	state.origin.z = origin.z
 
 	state.velocity.x = vel.x
 	state.velocity.y = vel.y

@@ -91,7 +91,7 @@ local function simulatePlayerPath(entity, useStrafePred)
 
 	-- Initialize strafe rotation with initial yaw and velocity
 	if avgYawDelta and math.abs(avgYawDelta) > 0.001 then
-		StrafeRotation.initState(entity:GetIndex(), playerState.yaw, playerState.velocity)
+		StrafeRotation.initState(entity:GetIndex(), playerState.yaw, playerState.velocity, avgYawDelta)
 	end
 
 	table.insert(predictions, {
