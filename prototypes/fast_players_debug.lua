@@ -4,12 +4,13 @@
 -- Imports
 local TickProfiler = require("tick_profiler")
 local FastPlayers = require("fast_players")
+--dpo nto dare require glbols the yare globaly defined
 
 -- Constants
 local BOX_WIDTH = 400
-local BOX_HEIGHT = 320
+local BOX_HEIGHT = 600
 local PADDING = 10
-local DISPLAY_MAX_PLAYERS = 5
+local DISPLAY_MAX_PLAYERS = 50
 
 -- State
 local lastMemoryCheck = 0
@@ -61,7 +62,7 @@ local function drawDebugInfo()
 	-- Positioning
 	local _, screenH = draw.GetScreenSize()
 	local x = 10
-	local y = screenH - BOX_HEIGHT - 350
+	local y = screenH - BOX_HEIGHT - 50
 
 	-- Rendering Chain
 	draw.SetFont(debugFont)
@@ -76,7 +77,7 @@ local function drawDebugInfo()
 	draw.Color(0, 255, 0, 255)
 	draw.Text(x + PADDING, y + PADDING, "Standalone Player Debug Monitor")
 
-	-- Count active
+	-- Count active and iterate through all players sequentially
 	local activeCount = 0
 	for i = 1, 64 do
 		if allPlayers[i] then
@@ -103,30 +104,64 @@ local function drawDebugInfo()
 		draw.Text(x + PADDING, y + 75, "Local Player: Invalid")
 	end
 
-	draw.Color(255, 255, 100, 255)
 	draw.Text(x + PADDING, y + 100, string.format("Memory: %.2f KB", memoryUsageKb))
 	draw.Text(x + PADDING, y + 120, string.format("Tick: %d", currentTick))
 
 	-- Draw Player List
 	draw.Color(0, 255, 255, 255)
-	draw.Text(x + PADDING, y + 165, "Player List (FastPlayers Module):")
+	draw.Text(x + PADDING, y + 165, "Player List (FastPlayers Module - Sorted by Distance):")
 
-	local currentY = y + 185
-	local drawnCount = 0
+	-- Sort players by distance to local player
+	local localPlayer = FastPlayers.GetLocal()
+	local localOrigin
+	if localPlayer and localPlayer:IsValid() then
+		localOrigin = localPlayer:GetAbsOrigin()
+	else
+		localOrigin = { x = 0, y = 0, z = 0 }
+	end
+	local sortedPlayers = {}
 
-	for i = 1, 64 do
+	for i = 1, globals.MaxClients() do
 		local player = allPlayers[i]
 		if not player then
 			break
 		end
 
+		local origin = player:GetAbsOrigin()
+		if not origin or not localOrigin then
+			-- Skip players with invalid positions
+		else
+			local distance = (origin - localOrigin):Length()
+
+			sortedPlayers[#sortedPlayers + 1] = {
+				entity = player,
+				distance = distance,
+			}
+		end
+	end
+
+	-- Sort by distance
+	table.sort(sortedPlayers, function(a, b)
+		return a.distance < b.distance
+	end)
+
+	local currentY = y + 185
+	local drawnCount = 0
+
+	for i = 1, #sortedPlayers do
+		local playerData = sortedPlayers[i]
+		local player = playerData.entity
+
 		if drawnCount < DISPLAY_MAX_PLAYERS then
 			drawPlayerListItem(x, currentY, player, player:GetIndex(), player:GetIndex() == localIdx)
+			-- Add distance info
+			draw.Color(255, 255, 100, 255)
+			draw.Text(x + 250, currentY, string.format("%.1f units", playerData.distance))
 			currentY = currentY + 15
 			drawnCount = drawnCount + 1
 		else
 			draw.Color(255, 255, 255, 255)
-			draw.Text(x + 20, currentY, string.format("... and %d more players", activeCount - DISPLAY_MAX_PLAYERS))
+			draw.Text(x + 20, currentY, string.format("... and %d more players", #sortedPlayers - DISPLAY_MAX_PLAYERS))
 			break
 		end
 	end

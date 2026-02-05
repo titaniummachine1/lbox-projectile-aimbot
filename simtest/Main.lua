@@ -57,7 +57,7 @@ local function simulatePlayerPath(entity, useStrafePred)
 	playerState.yawDeltaPerTick = avgYawDelta
 
 	if avgYawDelta and math.abs(avgYawDelta) > 0.001 then
-		StrafeRotation.initState(entity:GetIndex(), playerState.yaw, playerState.velocity, avgYawDelta)
+		StrafeRotation.initState(entity:GetIndex(), playerState.yaw, avgYawDelta)
 	end
 
 	table.insert(

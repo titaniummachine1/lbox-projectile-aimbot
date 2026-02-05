@@ -351,7 +351,9 @@ function MovementSim.simulateTick(state, simCtx)
 	end
 
 	-- Phase 3: Wishdir acceleration
-	local wishdirInfo = relativeToWorldWishDir(state.relativeWishDir, state.yaw)
+	-- Amalgam-style: apply strafe rotation to yaw BEFORE calculating wishdir
+	local simYaw = StrafeRotation.applyRotation(state.index, state.yaw)
+	local wishdirInfo = relativeToWorldWishDir(state.relativeWishDir, simYaw)
 	local wishdir = { x = wishdirInfo.x, y = wishdirInfo.y, z = 0 }
 	local inputMagnitude = wishdirInfo.magnitude
 
@@ -363,9 +365,6 @@ function MovementSim.simulateTick(state, simCtx)
 		-- Air: airAccelerate caps to 30 internally
 		airAccelerate(vel, wishdir, inputMagnitude, simCtx.sv_airaccelerate, tickInterval)
 	end
-
-	-- Phase 4: Strafe rotation (tracks velocity direction changes)
-	StrafeRotation.applyRotation(state.index, vel)
 
 	-- Phase 5: Movement with collision (using src collision system)
 	local origin = Vector3(state.origin.x, state.origin.y, state.origin.z)

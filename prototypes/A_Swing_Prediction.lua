@@ -21,6 +21,8 @@ local Helpers = lnxLib.TF2.Helpers
 local Input = lnxLib.Utils.Input
 local Notify = lnxLib.UI.Notify
 
+local FastPlayers = require("fast_players")
+
 -- ============================================================================
 -- ADVANCED SIMULATION SYSTEM INTEGRATION
 -- ============================================================================
@@ -297,16 +299,34 @@ function PlayerTick.length2D(vec)
     return math.sqrt(vec.x * vec.x + vec.y * vec.y)
 end
 
-function PlayerTick.normalize2DInPlace(vec)
-    local len = PlayerTick.length2D(vec)
-    if len <= 0.0001 then
-        vec.x, vec.y, vec.z = 0, 0, 0
-        return 0
-    end
-    vec.x = vec.x / len
-    vec.y = vec.y / len
-    vec.z = 0
-    return len
+
+local vectorDivide = vector.Divide
+local vectorLength = vector.Length
+local vectorDistance = vector.Distance
+
+--- Normalize vector (fastest method)
+function Normalize(vec)
+	return vectorDivide(vec, vectorLength(vec)) -- Return the normalized vector
+end
+
+-- Distance2d posibly slower then distance 3D due to mroe instructions in lua then single call in cpp lib of dist 3d
+function Distance2D(a, b)
+	return (a - b):Length2D()
+end
+
+--distance3D check proly fastest posible in lua
+function Distance3D(a, b)
+	return vectorDistance(a, b)
+end
+
+--- Cross product of two vectors
+function Cross(a, b)
+	return a:Cross(b)
+end
+
+--- Dot product of two vectors
+function Dot(a, b)
+	return a:Dot(b)
 end
 
 function PlayerTick.rotateDirByAngle(dir, angleDeg)
@@ -318,13 +338,7 @@ function PlayerTick.rotateDirByAngle(dir, angleDeg)
 end
 
 function PlayerTick.normalizeAngleDeg(angle)
-    while angle > 180 do
-        angle = angle - 360
-    end
-    while angle < -180 do
-        angle = angle + 360
-    end
-    return angle
+    return ((angle + 180) % 360) - 180
 end
 
 function PlayerTick.checkVelocity(velocity, maxvelocity)
@@ -1333,7 +1347,14 @@ local function CalcStrafe()
     local OnGround = (flags & FL_ONGROUND) ~= 0
 
     for idx, entity in pairs(players) do
+        if not entity or not entity:IsValid() then
+            goto continue
+        end
+        
         local entityIndex = entity:GetIndex()
+        if not entityIndex then
+            goto continue
+        end
 
         if entity:IsDormant() or not entity:IsAlive() then
             lastAngles[entityIndex] = nil
@@ -1406,11 +1427,6 @@ local function CalcStrafe()
 
         ::continue::
     end
-end
-
-function Normalize(vec)
-    local length = vec:Length()
-    return Vector3(vec.x / length, vec.y / length, vec.z / length)
 end
 
 -- Normalize angle to [-180, 180] range (from Auto Trickstab)
@@ -1712,15 +1728,6 @@ local MAX_SPEED = 650                    -- Maximum speed the player can move
 local MoveDir = Vector3(0, 0, 0)         -- Variable to store the movement direction
 -- Using tick-scoped pLocal defined in OnCreateMove; avoid shadowing here
 
-local function NormalizeVector(vector)
-    local length = math.sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
-    if length == 0 then
-        return Vector3(0, 0, 0)
-    else
-        return Vector3(vector.x / length, vector.y / length, vector.z / length)
-    end
-end
-
 -- Function to compute the move direction
 local function ComputeMove(pCmd, a, b)
     local diff = (b - a)
@@ -1873,7 +1880,7 @@ local function GetBestTarget(me)
         if #cands == 0 then return nil end
         -- If more than one, apply health weight
         if #cands > 1 then
-            for _, c in ipairs(cands) do
+            for _, c in pairs(cands) do
                 local p = c.player
                 local hp = p:GetHealth() or 0
                 local maxhp = p:GetPropInt("m_iMaxHealth") or hp
@@ -2187,6 +2194,8 @@ local function OnCreateMove(pCmd)
         goto continue -- Return if the local player entity doesn't exist or is dead
     end
 
+    FastPlayers.Update()
+
     local hasChargeShield, shieldDefIndex = playerHasChargeShield(pLocal)
 
     -- Update stepSize per-tick based on current player
@@ -2353,7 +2362,7 @@ local function OnCreateMove(pCmd)
     local keybind = Menu.Keybind
 
     -- Get fresh player list each tick
-    players = entities.FindByClass("CTFPlayer")
+    players = FastPlayers.GetAll()
 
     if keybind == 0 then
         -- Check if player has no key bound
@@ -2443,7 +2452,7 @@ local function OnCreateMove(pCmd)
 
     -- Ensure players list is populated before using in CalcStrafe
     if not players then
-        players = entities.FindByClass("CTFPlayer")
+        players = FastPlayers.GetAll()
     end
     CalcStrafe()
 
