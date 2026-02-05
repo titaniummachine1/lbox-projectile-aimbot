@@ -144,6 +144,11 @@ local function cross(a, b, c)
 	return (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
 end
 
+--- Cross product of two vectors
+function Cross(a, b)
+	return a:Cross(b)
+end
+
 local function findDownwardPitch(speed, targetDistance, gravity, upwardVel)
 	local minPitch = -89
 	local maxPitch = 0
@@ -190,6 +195,7 @@ local DOWNWARD_SEARCH_STEPS = 24
 
 -- Calculate projectile range for given speed and pitch (in radians)
 local function calculateRange(speed, pitchRad, gravity, upwardVel)
+	assert(gravity ~= 0, "calculateRange: gravity cannot be zero")
 	local vx = speed * math.cos(pitchRad)
 	local vy = speed * math.sin(pitchRad) + upwardVel
 
@@ -228,9 +234,15 @@ local function solvePitchForDistance(speed, targetDistance, gravity, upwardVel)
 	local d = targetDistance
 	local u = upwardVel
 
+	-- Guard against division by zero
+	assert(g ~= 0, "solvePitchForDistance: gravity cannot be zero")
+	assert(d ~= 0, "solvePitchForDistance: targetDistance cannot be zero")
+
 	-- This is a quadratic in terms of tan(θ)
 	-- Let's solve it directly using the quadratic formula
-	local discriminant = speed * speed - g * (g * d * d - 4 * d * u * speed) / (4 * d * d)
+	local denom = 4 * d * d
+	assert(denom ~= 0, "solvePitchForDistance: division by zero in discriminant")
+	local discriminant = speed * speed - g * (g * d * d - 4 * d * u * speed) / denom
 
 	if discriminant < 0 then
 		return nil, nil -- No solution
@@ -239,8 +251,10 @@ local function solvePitchForDistance(speed, targetDistance, gravity, upwardVel)
 	local sqrt_disc = math.sqrt(discriminant)
 
 	-- Two solutions: low arc and high arc
-	local tan1 = (speed * speed - sqrt_disc) / (g * d)
-	local tan2 = (speed * speed + sqrt_disc) / (g * d)
+	local divisor = g * d
+	assert(divisor ~= 0, "solvePitchForDistance: division by zero in tan calculation")
+	local tan1 = (speed * speed - sqrt_disc) / divisor
+	local tan2 = (speed * speed + sqrt_disc) / divisor
 
 	-- Convert to pitch angles (negative because pitch is downward)
 	local pitch1 = -math.deg(math.atan(tan1))
@@ -304,13 +318,7 @@ local function initProjCamMaterials()
 end
 
 local function lerpAngle(a, b, t)
-	local diff = b - a
-	while diff > 180 do
-		diff = diff - 360
-	end
-	while diff < -180 do
-		diff = diff + 360
-	end
+	local diff = (b - a + 180) % 360 - 180
 	return a + diff * t
 end
 
@@ -327,13 +335,6 @@ local function getVelocityAngles(vel)
 	local pitch = -math.deg(math.asin(vel.z / speed))
 	local yaw = math.deg(math.atan(vel.y, vel.x))
 	return EulerAngles(pitch, yaw, 0)
-end
-
-local function isMouseInWindow()
-	local mx, my = table.unpack(input.GetMousePos())
-	local x, y = projCamConfig.x, projCamConfig.y
-	local w, h = projCamConfig.width, projCamConfig.height
-	return mx >= x and mx <= x + w and my >= y - 20 and my <= y + h
 end
 
 local function handleProjCamToggle()
@@ -376,6 +377,7 @@ end
 local function calculateMaxRange(charge)
 	local speed = STICKY_BASE_SPEED + charge * (STICKY_MAX_SPEED - STICKY_BASE_SPEED)
 	local g = STICKY_GRAVITY
+	assert(g ~= 0, "calculateMaxRange: STICKY_GRAVITY cannot be zero")
 	return (speed * speed) / g -- Max range at 45 degrees
 end
 
@@ -934,19 +936,16 @@ local PhysicsEnv = {}
 PhysicsEnv.__index = PhysicsEnv
 
 function PhysicsEnv:new()
-	if not physics or not physics.CreateEnvironment then
-		error("Physics API not available")
-	end
+	assert(physics and physics.CreateEnvironment, "PhysicsEnv:new: physics API not available")
 	local env = physics.CreateEnvironment()
-	if not env then
-		error("Failed to create physics environment")
-	end
+	assert(env, "PhysicsEnv:new: failed to create physics environment")
 	env:SetGravity(Vector3(0, 0, -800))
 	env:SetAirDensity(2.0)
 	env:SetSimulationTimestep(globals.TickInterval() or (1 / 66))
 	self = setmetatable({
 		env = env,
 		objects = {},
+		objectNames = {},
 		activeIndex = 0,
 	}, PhysicsEnv)
 	return self
@@ -956,7 +955,12 @@ function PhysicsEnv:initializeObjects()
 	if #self.objects > 0 then
 		return
 	end
-	local function addObject(path)
+	local objectPaths = {
+		"models/weapons/w_models/w_stickybomb.mdl",
+		"models/workshop/weapons/c_models/c_kingmaker_sticky/w_kingmaker_stickybomb.mdl",
+		"models/weapons/w_models/w_stickybomb_d.mdl",
+	}
+	for _, path in ipairs(objectPaths) do
 		if not physics or not physics.ParseModelByName then
 			error("Physics ParseModelByName API not available")
 		end
@@ -974,38 +978,52 @@ function PhysicsEnv:initializeObjects()
 			error("Failed to create physics object for: " .. tostring(path))
 		end
 		table.insert(self.objects, obj)
+		table.insert(self.objectNames, path)
 	end
-	addObject("models/weapons/w_models/w_stickybomb.mdl") -- Stickybomb
-	addObject("models/workshop/weapons/c_models/c_kingmaker_sticky/w_kingmaker_stickybomb.mdl") -- QuickieBomb
-	addObject("models/weapons/w_models/w_stickybomb_d.mdl") -- ScottishResistance, StickyJumper
 	if #self.objects > 0 then
-		self.objects[1]:Wake()
+		local firstObj = self.objects[1]
+		if firstObj and firstObj.Wake then
+			firstObj:Wake()
+		end
 		self.activeIndex = 1
 	end
 end
 
 function PhysicsEnv:destroyObjects()
 	self.activeIndex = 0
-	for i, obj in ipairs(self.objects) do
-		self.env:DestroyObject(obj)
+	for _, obj in pairs(self.objects) do
+		if obj and self.env then
+			self.env:DestroyObject(obj)
+		end
 	end
 	self.objects = {}
+	self.objectNames = {}
+end
+
+local function safeSleep(obj)
+	if obj and obj.Sleep then
+		obj:Sleep()
+	end
+end
+
+local function safeWake(obj)
+	if obj and obj.Wake then
+		obj:Wake()
+	end
 end
 
 function PhysicsEnv:getObject(index)
 	if index < 1 or index > #self.objects then
 		error("Invalid physics object index: " .. tostring(index))
 	end
+	-- Only switch if actually changing objects
 	if index ~= self.activeIndex then
-		local currentObj = self.objects[self.activeIndex]
-		if currentObj then
-			currentObj:Sleep()
-		end
+		safeSleep(self.objects[self.activeIndex])
 		local newObj = self.objects[index]
 		if not newObj then
 			error("Physics object at index " .. tostring(index) .. " is nil")
 		end
-		newObj:Wake()
+		safeWake(newObj)
 		self.activeIndex = index
 	end
 	return self.objects[self.activeIndex]
@@ -1020,8 +1038,12 @@ function PhysicsEnv:reset()
 end
 
 function PhysicsEnv:destroy()
+	if not self.env then
+		return
+	end
 	self:destroyObjects()
 	physics.DestroyEnvironment(self.env)
+	self.env = nil
 end
 
 -------------------------------
@@ -1165,8 +1187,8 @@ function ImpactPolygon:draw(plane, origin)
 		sum = sum + cross(pos, nextPos, positions[1])
 	end
 	local polyPts = (sum < 0) and ptsReversed or pts
-	if texturedPolygon and self.texture then
-		texturedPolygon(self.texture, polyPts, true)
+	if self.texture then
+		draw.TexturedPolygon(self.texture, polyPts, true)
 	end
 
 	-- Draw final outline.
@@ -1263,17 +1285,44 @@ local function GetProjectileInformation(pWeapon, bDucking, iCase, iDefIndex, iWe
 	end
 end
 
+-- Check if current weapon is a projectile weapon (not hitscan)
+local function isProjectileWeapon()
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
+		return false
+	end
+	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
+	if not pWeapon or not pWeapon:IsValid() then
+		return false
+	end
+	local projectileType = pWeapon:GetWeaponProjectileType()
+	return projectileType and projectileType >= 2
+end
+
+-- Lazy initialization of textures (only when needed)
+local function ensureImpactPolygon()
+	if not impactPolygon then
+		impactPolygon = ImpactPolygon:new()
+		projCamState.storedPolygonTexture = impactPolygon.texture
+	end
+	return impactPolygon
+end
+
+-- Lazy initialization of render texture
+local function ensureProjCamTexture()
+	if not projCamState.texture then
+		initProjCamMaterials()
+	end
+	return projCamState.texture
+end
+
 -------------------------------
--- GLOBALS & INITIALIZATION
+-- GLOBALS & INITIALIZATION (DEFERRED)
 -------------------------------
 local physicsEnv = PhysicsEnv:new()
-if not physicsEnv then
-	return -- Physics API unavailable, disable script
-end
+assert(physicsEnv, "Physics API unavailable, script disabled")
 local trajectoryLine = TrajectoryLine:new()
-local impactPolygon = ImpactPolygon:new()
-projCamState.storedPolygonTexture = impactPolygon.texture
-
+-- impactPolygon is lazy-loaded via ensureImpactPolygon()
 local g_fTraceInterval = clamp(config.measure_segment_size, 0.5, 8) / 66
 local g_fFlagInterval = g_fTraceInterval * 1320
 
@@ -1653,90 +1702,123 @@ local function UpdateProjectileSimulation(cmd)
 	projCamState.storedFlagOffset = cache.flagOffset
 end
 
-callbacks.Register("CreateMove", "LoadPhysicsObjects", function()
-	callbacks.Unregister("CreateMove", "LoadPhysicsObjects")
-	physicsEnv:initializeObjects()
+-------------------------------
+-- CALLBACK FUNCTIONS (Top Level)
+-------------------------------
 
-	callbacks.Register("CreateMove", "ArtilleryLogic", function(cmd)
-		-- 1. Handle Input Toggles
-		handleProjCamToggle()
-		handleBombardModeToggle()
-		handleBombardAimToggle()
+local physicsInitialized = false
 
-		-- 2. Run Aiming Logic (sets view angles)
-		ExecuteBombardingAim(cmd)
-
-		-- 3. Run Simulation & Refresh Cache
-		UpdateProjectileSimulation(cmd)
-
-		-- 4. Handle Preview Window Input
-		if projCamState.active then
-			handleProjCamInput()
-			updateProjCamSmoothing()
-		end
-	end)
-
-	callbacks.Register("Draw", "ArtilleryDraw", function()
-		if engine.Con_IsVisible() or engine.IsGameUIVisible() then
+local function onCreateMove(cmd)
+	-- Only initialize physics when player is valid and alive
+	if not physicsInitialized then
+		local pLocal = entities.GetLocalPlayer()
+		if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
 			return
 		end
+		physicsEnv:initializeObjects()
+		physicsInitialized = true
+	end
 
-		local cache = projCamState.trajectory
-		if not cache.isValid then
-			return
-		end
+	handleProjCamToggle()
+	handleBombardModeToggle()
+	handleBombardAimToggle()
+	ExecuteBombardingAim(cmd)
+	UpdateProjectileSimulation(cmd)
 
-		-- Draw Impact Polygon
-		if cache.impactPlane and cache.impactPos then
-			impactPolygon:draw(cache.impactPlane, cache.impactPos)
-		end
+	if projCamState.active then
+		handleProjCamInput()
+		updateProjCamSmoothing()
+	end
 
-		-- Draw World Trajectory
-		local num = #cache.positions
-		local lastScreen = nil
-		for i = num, 1, -1 do
-			local worldPos = cache.positions[i]
-			local screenPos = worldToScreen(worldPos)
-			local flagScreenPos = worldToScreen(worldPos + cache.flagOffset)
-			if lastScreen and screenPos then
-				if config.line.enabled then
-					if config.outline.line_and_flags then
-						drawOutlinedLine(lastScreen, screenPos)
-					end
-					setColor(config.line.r, config.line.g, config.line.b, config.line.a)
-					drawLine(lastScreen[1], lastScreen[2], screenPos[1], screenPos[2])
+	if not bombardMode.useStoredCharge then
+		return
+	end
+
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
+		return
+	end
+
+	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
+	if not pWeapon or not pWeapon:IsValid() then
+		return
+	end
+
+	local iItemDefinitionIndex = pWeapon:GetPropInt("m_iItemDefinitionIndex")
+	if not iItemDefinitionIndex then
+		return
+	end
+
+	local iItemDefinitionType = ItemDefinitions[iItemDefinitionIndex] or 0
+	if iItemDefinitionType ~= 1 then
+		return
+	end
+
+	local chargeBeginTime = pWeapon:GetPropFloat("m_flChargeBeginTime") or 0
+	local currentCharge = 0
+	if chargeBeginTime > 0 then
+		currentCharge = (globals.CurTime() - chargeBeginTime) / 4.0
+	end
+
+	local targetCharge = bombardMode.chargeLevel
+	if currentCharge >= targetCharge and chargeBeginTime > 0 then
+		cmd.buttons = cmd.buttons & ~IN_ATTACK
+	end
+end
+
+local function onDraw()
+	if engine.Con_IsVisible() or engine.IsGameUIVisible() then
+		return
+	end
+
+	if not isProjectileWeapon() then
+		return
+	end
+
+	local cache = projCamState.trajectory
+
+	if cache.impactPlane and cache.impactPos then
+		ensureImpactPolygon():draw(cache.impactPlane, cache.impactPos)
+	end
+
+	local num = #cache.positions
+	local lastScreen = nil
+	for i = num, 1, -1 do
+		local worldPos = cache.positions[i]
+		local screenPos = worldToScreen(worldPos)
+		local flagScreenPos = worldToScreen(worldPos + cache.flagOffset)
+		if lastScreen and screenPos then
+			if config.line.enabled then
+				if config.outline.line_and_flags then
+					drawOutlinedLine(lastScreen, screenPos)
 				end
-				if config.flags.enabled and flagScreenPos then
-					if config.outline.line_and_flags then
-						drawOutlinedLine(flagScreenPos, screenPos)
-					end
-					setColor(config.flags.r, config.flags.g, config.flags.b, config.flags.a)
-					drawLine(flagScreenPos[1], flagScreenPos[2], screenPos[1], screenPos[2])
-				end
+				setColor(config.line.r, config.line.g, config.line.b, config.line.a)
+				drawLine(lastScreen[1], lastScreen[2], screenPos[1], screenPos[2])
 			end
-			lastScreen = screenPos
+			if config.flags.enabled and flagScreenPos then
+				if config.outline.line_and_flags then
+					drawOutlinedLine(flagScreenPos, screenPos)
+				end
+				setColor(config.flags.r, config.flags.g, config.flags.b, config.flags.a)
+				drawLine(flagScreenPos[1], flagScreenPos[2], screenPos[1], screenPos[2])
+			end
 		end
+		lastScreen = screenPos
+	end
 
-		-- drawAimGuideMainView()
+	if isProjCamActive() then
+		drawProjCamTexture()
+		drawProjCamWindow()
+	end
+end
 
-		if isProjCamActive() then
-			drawProjCamTexture()
-			drawProjCamWindow()
-			-- drawAimGuideCamera()
-		end
-	end)
-end)
-
--------------------------------
--- PROJECTILE CAMERA RENDER
--------------------------------
-callbacks.Register("PostRenderView", "ProjCamStoreView", function(view)
+local function onPostRenderView(view)
 	if view then
 		projCamState.lastView = view
 	end
-end)
+end
 
-callbacks.Register("DoPostScreenSpaceEffects", "ProjCamRender", function()
+local function onDoPostScreenSpaceEffects()
 	if engine.Con_IsVisible() or engine.IsGameUIVisible() then
 		return
 	end
@@ -1764,64 +1846,34 @@ callbacks.Register("DoPostScreenSpaceEffects", "ProjCamRender", function()
 	end
 
 	renderProjCamView(projCamState.lastView)
-end)
+end
 
--------------------------------
--- STICKY SPAM FIRING LOGIC
--------------------------------
-callbacks.Register("CreateMove", "StickySpamFire", function(cmd)
-	if not bombardMode.useStoredCharge then
-		return
-	end
-
-	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
-		return
-	end
-
-	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
-	if not pWeapon or not pWeapon:IsValid() then
-		return
-	end
-
-	-- Only work with sticky bomb launcher (item definition type 1)
-	local iItemDefinitionIndex = pWeapon:GetPropInt("m_iItemDefinitionIndex")
-	if not iItemDefinitionIndex then
-		return
-	end
-	local iItemDefinitionType = ItemDefinitions[iItemDefinitionIndex] or 0
-	if iItemDefinitionType ~= 1 then
-		return
-	end
-
-	-- Get current charge percentage
-	local chargeBeginTime = pWeapon:GetPropFloat("m_flChargeBeginTime")
-	if not chargeBeginTime then
-		chargeBeginTime = 0
-	end
-	local currentCharge = 0
-	if chargeBeginTime > 0 then
-		currentCharge = (globals.CurTime() - chargeBeginTime) / 4.0 -- 4 seconds = 100%
-	end
-
-	-- Target charge level from scroll setting
-	local targetCharge = bombardMode.chargeLevel
-
-	-- When current charge reaches target, release attack to fire the sticky
-	if currentCharge >= targetCharge and chargeBeginTime > 0 then
-		cmd.buttons = cmd.buttons & ~IN_ATTACK
-	end
-end)
-
--------------------------------
--- UNLOAD CALLBACK
--------------------------------
-callbacks.Register("Unload", function()
+local function onUnload()
 	physicsEnv:destroy()
-	impactPolygon:destroy()
+	if impactPolygon then
+		impactPolygon:destroy()
+	end
 	projCamState.texture = nil
 	projCamState.material = nil
 	projCamState.materialsReady = false
 	projCamState.storedPositions = {}
 	projCamState.storedVelocities = {}
-end)
+end
+
+-------------------------------
+-- REGISTER ALL CALLBACKS (Top Level Only)
+-------------------------------
+callbacks.Unregister("CreateMove", "ArtilleryLogic")
+callbacks.Register("CreateMove", "ArtilleryLogic", onCreateMove)
+
+callbacks.Unregister("Draw", "ArtilleryDraw")
+callbacks.Register("Draw", "ArtilleryDraw", onDraw)
+
+callbacks.Unregister("PostRenderView", "ProjCamStoreView")
+callbacks.Register("PostRenderView", "ProjCamStoreView", onPostRenderView)
+
+callbacks.Unregister("DoPostScreenSpaceEffects", "ProjCamRender")
+callbacks.Register("DoPostScreenSpaceEffects", "ProjCamRender", onDoPostScreenSpaceEffects)
+
+callbacks.Unregister("Unload", "ArtilleryUnload")
+callbacks.Register("Unload", "ArtilleryUnload", onUnload)

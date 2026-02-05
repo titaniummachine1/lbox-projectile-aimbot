@@ -24,6 +24,43 @@ local Notify = lnxLib.UI.Notify
 local FastPlayers = require("fast_players")
 
 -- ============================================================================
+-- VECTOR HELPERS (defined first for use throughout)
+-- ============================================================================
+local vectorDivide = vector.Divide
+local vectorLength = vector.Length
+local vectorDistance = vector.Distance
+
+--- Normalize vector (fastest method)
+function Normalize(vec)
+	return vectorDivide(vec, vectorLength(vec))
+end
+
+--- Distance 2D using vector Length2D
+function Distance2D(a, b)
+	return (a - b):Length2D()
+end
+
+--- Distance 3D (fastest possible in Lua)
+function Distance3D(a, b)
+	return vectorDistance(a, b)
+end
+
+--- Cross product of two vectors
+function Cross(a, b)
+	return a:Cross(b)
+end
+
+--- Dot product of two vectors
+function Dot(a, b)
+	return a:Dot(b)
+end
+
+--- 2D vector length (horizontal only)
+function Length2D(vec)
+	return math.sqrt(vec.x * vec.x + vec.y * vec.y)
+end
+
+-- ============================================================================
 -- ADVANCED SIMULATION SYSTEM INTEGRATION
 -- ============================================================================
 -- Strafe prediction system for perfect wishdir resolution
@@ -154,7 +191,7 @@ function WishdirTracker.getEntityYaw(entity)
 end
 
 function WishdirTracker.clampVelocityTo8Directions(velocity, yaw)
-    local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
+    local horizLen = Length2D(velocity)
     if horizLen < WishdirTracker.STILL_SPEED_THRESHOLD then
         return Vector3(0, 0, 0)
     end
@@ -163,13 +200,14 @@ function WishdirTracker.clampVelocityTo8Directions(velocity, yaw)
     local cosYaw = math.cos(yawRad)
     local sinYaw = math.sin(yawRad)
 
-    local forwardX, forwardY = cosYaw, sinYaw
-    local rightX, rightY = sinYaw, -cosYaw
+    local forward = Vector3(cosYaw, sinYaw, 0)
+    local right = Vector3(sinYaw, -cosYaw, 0)
 
     local velNormX = velocity.x / horizLen
     local velNormY = velocity.y / horizLen
-    local relForward = forwardX * velNormX + forwardY * velNormY
-    local relRight = rightX * velNormX + rightY * velNormY
+    local velNorm = Vector3(velNormX, velNormY, 0)
+    local relForward = Dot(forward, velNorm)
+    local relRight = Dot(right, velNorm)
 
     local snapX = 0
     local snapY = 0
@@ -232,14 +270,14 @@ function WishdirTracker.update(entity)
         end
     end
 
-    local horizLen = math.sqrt(currentVel.x * currentVel.x + currentVel.y * currentVel.y)
+    local horizLen = Length2D(currentVel)
     if not detectedWishdir then
         detectedWishdir = Vector3(0, 0, 0)
         if horizLen >= WishdirTracker.STILL_SPEED_THRESHOLD then
             detectedWishdir = WishdirTracker.clampVelocityTo8Directions(currentVel, currentYaw)
         elseif s.lastPos then
             local movementDelta = currentPos - s.lastPos
-            local movementHorizLen = math.sqrt(movementDelta.x * movementDelta.x + movementDelta.y * movementDelta.y)
+            local movementHorizLen = Length2D(movementDelta)
             if movementHorizLen > 1.0 then
                 detectedWishdir = WishdirTracker.clampVelocityTo8Directions(movementDelta, currentYaw)
             end
@@ -286,6 +324,12 @@ function WishdirTracker.clearAllHistory()
     WishdirTracker.state = {}
 end
 
+-- Module-level trace filter to avoid closure allocations
+local currentTraceIndex = 0
+local function TraceFilterOtherPlayers(ent)
+    return ent:GetIndex() ~= currentTraceIndex
+end
+
 -- Enhanced PlayerTick simulation system
 local PlayerTick = {}
 PlayerTick.DEG2RAD = math.pi / 180
@@ -295,39 +339,7 @@ PlayerTick.GROUND_CHECK_OFFSET = 2.0
 PlayerTick.DIST_EPSILON = 0.03125
 PlayerTick.SV_MAXVELOCITY = 3500
 
-function PlayerTick.length2D(vec)
-    return math.sqrt(vec.x * vec.x + vec.y * vec.y)
-end
-
-
-local vectorDivide = vector.Divide
-local vectorLength = vector.Length
-local vectorDistance = vector.Distance
-
---- Normalize vector (fastest method)
-function Normalize(vec)
-	return vectorDivide(vec, vectorLength(vec)) -- Return the normalized vector
-end
-
--- Distance2d posibly slower then distance 3D due to mroe instructions in lua then single call in cpp lib of dist 3d
-function Distance2D(a, b)
-	return (a - b):Length2D()
-end
-
---distance3D check proly fastest posible in lua
-function Distance3D(a, b)
-	return vectorDistance(a, b)
-end
-
---- Cross product of two vectors
-function Cross(a, b)
-	return a:Cross(b)
-end
-
---- Dot product of two vectors
-function Dot(a, b)
-	return a:Dot(b)
-end
+-- Note: Length2D is defined in global helpers section
 
 function PlayerTick.rotateDirByAngle(dir, angleDeg)
     local currentAngle = math.atan(dir.y, dir.x) * PlayerTick.RAD2DEG
@@ -370,9 +382,8 @@ function PlayerTick.checkIsOnGround(origin, velocity, mins, maxs, index)
     end
 
     local down = Vector3(origin.x, origin.y, origin.z - PlayerTick.GROUND_CHECK_OFFSET)
-    local trace = engine.TraceHull(origin, down, mins, maxs, MASK_PLAYERSOLID, function(ent)
-        return ent:GetIndex() ~= index
-    end)
+    currentTraceIndex = index
+    local trace = engine.TraceHull(origin, down, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
 
     if trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7 then
         return true
@@ -478,15 +489,14 @@ function PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinter
             origin.z + velocity.z * time_left
         )
 
+        currentTraceIndex = index
         local trace = engine.TraceHull(
             origin,
             end_pos,
             mins,
             maxs,
             MASK_PLAYERSOLID,
-            function(ent, contentsMask)
-                return ent:GetIndex() ~= index
-            end
+            TraceFilterOtherPlayers
         )
 
         if trace.fraction > 0 then
@@ -568,15 +578,13 @@ function PlayerTick.stayOnGround(origin, mins, maxs, stepheight, index)
     local start_pos = Vector3(origin.x, origin.y, origin.z + 2)
     local end_pos = Vector3(origin.x, origin.y, origin.z - stepheight)
 
-    local up_trace = engine.TraceHull(origin, start_pos, mins, maxs, MASK_PLAYERSOLID, function(ent)
-        return ent:GetIndex() ~= index
-    end)
+    currentTraceIndex = index
+    local up_trace = engine.TraceHull(origin, start_pos, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
 
     local safe_start = up_trace.endpos
 
-    local down_trace = engine.TraceHull(safe_start, end_pos, mins, maxs, MASK_PLAYERSOLID, function(ent)
-        return ent:GetIndex() ~= index
-    end)
+    currentTraceIndex = index
+    local down_trace = engine.TraceHull(safe_start, end_pos, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
 
     if
         down_trace.fraction > 0
@@ -616,9 +624,8 @@ function PlayerTick.stepMove(origin, velocity, mins, maxs, index, tickinterval, 
 
     local step_up_dest = Vector3(origin.x, origin.y, origin.z + stepheight + PlayerTick.DIST_EPSILON)
 
-    local step_trace = engine.TraceHull(origin, step_up_dest, mins, maxs, MASK_PLAYERSOLID, function(ent)
-        return ent:GetIndex() ~= index
-    end)
+    currentTraceIndex = index
+    local step_trace = engine.TraceHull(origin, step_up_dest, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
 
     if not step_trace.startsolid and not step_trace.allsolid then
         origin.x = step_trace.endpos.x
@@ -629,15 +636,14 @@ function PlayerTick.stepMove(origin, velocity, mins, maxs, index, tickinterval, 
 
         local step_down_dest = Vector3(origin.x, origin.y, origin.z - stepheight - PlayerTick.DIST_EPSILON)
 
+        currentTraceIndex = index
         local step_down_trace = engine.TraceHull(
             origin,
             step_down_dest,
             mins,
             maxs,
             MASK_PLAYERSOLID,
-            function(ent)
-                return ent:GetIndex() ~= index
-            end
+            TraceFilterOtherPlayers
         )
 
         if step_down_trace.plane and step_down_trace.plane.z < 0.7 then
@@ -705,7 +711,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
     playerCtx.strafeYaw = playerCtx.strafeYaw or playerCtx.initialYaw
     playerCtx.totalStrafeDelta = playerCtx.totalStrafeDelta or 0
 
-    local speed2d = PlayerTick.length2D(playerCtx.velocity)
+    local speed2d = Length2D(playerCtx.velocity)
     if not playerCtx.initialVelocityYaw then
         if speed2d > 0.0001 then
             playerCtx.initialVelocityYaw = math.atan(playerCtx.velocity.y, playerCtx.velocity.x) * PlayerTick.RAD2DEG
@@ -722,7 +728,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 
     -- Resolve strafeDir from relativeWishDir, rotating by strafeYaw into world space
     local baseWish = playerCtx.relativeWishDir or Vector3(0, 0, 0)
-    local wishLen = PlayerTick.length2D(baseWish)
+    local wishLen = Length2D(baseWish)
     if wishLen > 0.0001 then
         local yawRad = playerCtx.strafeYaw * PlayerTick.DEG2RAD
         local cosYaw = math.cos(yawRad)
@@ -876,18 +882,14 @@ local function clonePlayerContext(src)
     }
 
     assert(src.origin, "clonePlayerContext: origin missing")
-    clone.origin = Vector3(src.origin:Unpack())
+    clone.origin = src.origin  -- No clone needed, gets replaced in simulation
 
     assert(src.velocity, "clonePlayerContext: velocity missing")
-    clone.velocity = Vector3(src.velocity:Unpack())
+    clone.velocity = Vector3(src.velocity:Unpack())  -- Must clone, gets mutated
 
-    if src.relativeWishDir then
-        clone.relativeWishDir = Vector3(src.relativeWishDir:Unpack())
-    end
-
-    if src.strafeDir then
-        clone.strafeDir = Vector3(src.strafeDir:Unpack())
-    end
+    -- These are assigned, not mutated, no cloning needed
+    clone.relativeWishDir = src.relativeWishDir
+    clone.strafeDir = src.strafeDir
 
     return clone
 end
@@ -902,15 +904,15 @@ local function simulateWishdirCandidates(baseCtx, simCtx)
         local dirVec = WishdirTracker.normalizeDirection(dirSpec.x, dirSpec.y)
         local ctxCopy = clonePlayerContext(baseCtx)
         ctxCopy.relativeWishDir = dirVec
-        ctxCopy.strafeDir = Vector3(dirVec:Unpack())
+        ctxCopy.strafeDir = dirVec  -- dirVec is already a Vector3, no need to clone
 
         local predictedPos = PlayerTick.simulateTick(ctxCopy, simCtx)
 
         results[#results + 1] = {
             name = dirSpec.name,
             dir = dirVec,
-            pos = Vector3(predictedPos:Unpack()),
-            vel = Vector3(ctxCopy.velocity:Unpack()),
+            pos = predictedPos,  -- simulateTick already returns Vector3, no need to clone
+            vel = ctxCopy.velocity,  -- already a Vector3, no need to clone
         }
     end
 
@@ -947,7 +949,7 @@ local function createPlayerContext(entity, relativeWishDir)
         relativeWishDir = WishdirTracker.getRelativeWishdir(entity)
         if not relativeWishDir then
             -- Fallback: clamp current velocity to 8 directions
-            local horizLen = math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
+            local horizLen = Length2D(velocity)
             if horizLen < 50 then
                 relativeWishDir = Vector3(0, 0, 0)
             else
@@ -958,10 +960,12 @@ local function createPlayerContext(entity, relativeWishDir)
                 local forward = Vector3(cosYaw, sinYaw, 0)
                 local right = Vector3(sinYaw, -cosYaw, 0)
 
-                local velNorm = Vector3(velocity.x / horizLen, velocity.y / horizLen, 0)
+                local velNormX = velocity.x / horizLen
+                local velNormY = velocity.y / horizLen
+                local velNorm = Vector3(velNormX, velNormY, 0)
 
-                local relX = forward.x * velNorm.x + forward.y * velNorm.y
-                local relY = right.x * velNorm.x + right.y * velNorm.y
+                local relX = Dot(forward, velNorm)
+                local relY = Dot(right, velNorm)
 
                 local relLen = math.sqrt(relX * relX + relY * relY)
                 if relLen > 0.001 then
@@ -975,8 +979,8 @@ local function createPlayerContext(entity, relativeWishDir)
 
     return {
         entity = entity,
-        origin = Vector3(originWithOffset:Unpack()),
-        velocity = Vector3(velocity:Unpack()),
+        origin = originWithOffset,  -- Already a Vector3 from line 937, no need to clone
+        velocity = Vector3(velocity:Unpack()),  -- Clone once for mutation safety
         mins = mins,
         maxs = maxs,
         maxspeed = maxspeed,
@@ -984,8 +988,8 @@ local function createPlayerContext(entity, relativeWishDir)
         stepheight = 18,
         yaw = yaw,
         yawDeltaPerTick = yawDeltaPerTick,
-        relativeWishDir = relativeWishDir and Vector3(relativeWishDir:Unpack()) or nil,
-        strafeDir = relativeWishDir and Vector3(relativeWishDir:Unpack()) or nil,
+        relativeWishDir = relativeWishDir,  -- Already a Vector3, no need to clone
+        strafeDir = relativeWishDir,  -- Same reference, gets mutated later if needed
     }
 end
 
@@ -1507,6 +1511,33 @@ end
 -- Position history for lag compensation (1 second = 66 ticks at 66 tick server)
 local POSITION_HISTORY_SIZE = 66
 local positionHistory = {} -- Queue: index 1 = newest, index 66 = oldest
+
+-- Cleanup stale entries from unbounded caches
+local function cleanupStaleCacheEntries()
+    -- Clean up WishdirTracker.state for invalid entities
+    for idx, _ in pairs(WishdirTracker.state) do
+        local ent = entities.GetByIndex(idx)
+        if not ent or not ent:IsValid() or not ent:IsAlive() then
+            WishdirTracker.state[idx] = nil
+        end
+    end
+    
+    -- Clean up positionHistory for invalid entities
+    for idx, _ in pairs(positionHistory) do
+        local ent = entities.GetByIndex(idx)
+        if not ent or not ent:IsValid() or not ent:IsAlive() then
+            positionHistory[idx] = nil
+        end
+    end
+    
+    -- Clean up StrafePredictor.velocityHistory for invalid entities
+    for idx, _ in pairs(StrafePredictor.velocityHistory) do
+        local ent = entities.GetByIndex(idx)
+        if not ent or not ent:IsValid() or not ent:IsAlive() then
+            StrafePredictor.velocityHistory[idx] = nil
+        end
+    end
+end
 
 -- Lag compensation function from Auto Trickstab
 -- Predicts enemy position ahead by half our ping to account for network latency
@@ -2182,6 +2213,13 @@ local function OnCreateMove(pCmd)
     pLocalPath = {}
     vPlayerPath = {}
     drawVhitbox = {}
+
+    -- Periodic cleanup of stale cache entries (once every 5 seconds)
+    local currentTime = globals.RealTime()
+    if currentTime - (lastCacheCleanup or 0) > 5 then
+        lastCacheCleanup = currentTime
+        cleanupStaleCacheEntries()
+    end
 
     -- Reset state flags
     isMelee = false
