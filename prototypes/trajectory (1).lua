@@ -89,6 +89,7 @@ end
 local VEC_ROT = function(a, b)
 	return (b:Forward() * a.x) + (b:Right() * a.y) + (b:Up() * a.z)
 end
+
 local FLOOR = math.floor
 local TRACE_HULL = engine.TraceHull
 local TRACE_LINE = engine.TraceLine

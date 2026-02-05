@@ -1,6 +1,15 @@
 -------------------------------
 -- CONFIGURATION
 -------------------------------
+local startTime = os.clock()
+local lastTime = startTime
+local function logStep(name)
+	local now = os.clock()
+	local elapsed = (now - lastTime) * 1000
+	print(string.format("[ArtileryAiming] %s (%.2f ms since last)", name, elapsed))
+	lastTime = now
+end
+
 local config = {
 	polygon = {
 		enabled = true, -- Set to true to display impact circle
@@ -36,16 +45,15 @@ local config = {
 	},
 	measure_segment_size = 2.5, -- Range: 0.5 to 8; lower values = worse performance
 }
+logStep("Config done")
 
 -------------------------------
 -- CONSTANTS
 -------------------------------
+logStep("Loading constants...")
 local IN_ATTACK = 1
-local STICKY_BASE_SPEED = 900
-local STICKY_MAX_SPEED = 2400
-local STICKY_UPWARD_VEL = 200
-local STICKY_GRAVITY = 800
 local DOWNWARD_SEARCH_STEPS = 24
+logStep("Constants done")
 
 -------------------------------
 -- PROJECTILE CAMERA CONFIG
@@ -61,10 +69,12 @@ local projCamConfig = {
 	fov = 90,
 	toggle = true,
 }
+logStep("projCamConfig done")
 
 -------------------------------
 -- PROJECTILE CAMERA STATE
 -------------------------------
+logStep("Loading projCamState...")
 local projCamState = {
 	pathPercent = 0.5,
 	smoothedAngles = EulerAngles(0, 0, 0),
@@ -96,58 +106,53 @@ local projCamState = {
 		isValid = false,
 	},
 }
+logStep("projCamState done")
 
 -------------------------------
 -- BOMBARDING MODE STATE
 -------------------------------
 local bombardMode = {
-	chargeMode = false, -- false = scroll controls position, true = scroll controls charge
+	chargeMode = false,
 	lastVKeyState = false,
-	chargeLevel = 0.5, -- 0.0 to 1.0
-	scrollStep = 0.05, -- How much charge changes per scroll
-	useStoredCharge = false, -- true = use stored charge for trajectory, reset when window toggled
+	chargeLevel = 0.5,
+	scrollStep = 0.05,
+	useStoredCharge = false,
 }
+logStep("bombardMode done")
 
 -------------------------------
 -- BOMBARDING AIM STATE
 -------------------------------
 local bombardAim = {
-	enabled = true, -- Always active when preview visible
+	enabled = true,
 	lastCKeyState = false,
-	targetDistance = 500, -- Distance in units we want to hit
-	targetYaw = 0, -- Yaw offset from player view
-	scrollMode = 0, -- 0=position, 1=charge, 2=distance
-	minDistance = 10, -- Allow very close targets
-	maxDistance = 3000, -- Will be calculated dynamically
+	targetDistance = 500,
+	targetYaw = 0,
+	scrollMode = 0,
+	minDistance = 10,
+	maxDistance = 3000,
 	distanceStep = 50,
-	useHighArc = false, -- false = low arc (direct), true = high arc (lob)
+	useHighArc = false,
 	calculatedPitch = -45,
 	targetPoint = nil,
 	originPoint = nil,
 	lastMouseX = 0,
 	lastMouseY = 0,
-	sensitivity = 1.0, -- Increased sensitivity
-	useTopAngle = false, -- C key toggles between top angle and dynamic angle
-	-- Caching to prevent expensive recalculation
+	sensitivity = 1.0,
+	useTopAngle = false,
 	lastCalculatedDistance = -1,
 	cachedCharge = 0,
 	cachedPitch = -45,
 	cachedValid = false,
 }
+logStep("bombardAim done")
 
 local projCamFont = draw.CreateFont("Tahoma", 12, 800, FONTFLAG_OUTLINE)
+logStep("Font created")
 
 -------------------------------
 -- UTILITY FUNCTIONS
 -------------------------------
-local function cross(a, b, c)
-	return (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
-end
-
---- Cross product of two vectors
-function Cross(a, b)
-	return a:Cross(b)
-end
 
 local function findDownwardPitch(speed, targetDistance, gravity, upwardVel)
 	local minPitch = -89
@@ -176,14 +181,16 @@ local function findDownwardPitch(speed, targetDistance, gravity, upwardVel)
 	return bestPitch
 end
 
-local function clamp(val, minVal, maxVal)
-	if val < minVal then
-		return minVal
-	end
-	if val > maxVal then
-		return maxVal
-	end
-	return val
+-- Boring shit ahead!
+local cross = function(a, b, c)
+	return (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
+end
+
+local clamp = function(a, b, c)
+	return (a < b) and b or (a > c) and c or a
+end
+local VEC_ROT = function(a, b)
+	return (b:Forward() * a.x) + (b:Right() * a.y) + (b:Up() * a.z)
 end
 
 -- Sticky bomb physics constants
@@ -192,76 +199,6 @@ local STICKY_MAX_SPEED = 2400
 local STICKY_UPWARD_VEL = 200
 local STICKY_GRAVITY = 800
 local DOWNWARD_SEARCH_STEPS = 24
-
--- Calculate projectile range for given speed and pitch (in radians)
-local function calculateRange(speed, pitchRad, gravity, upwardVel)
-	assert(gravity ~= 0, "calculateRange: gravity cannot be zero")
-	local vx = speed * math.cos(pitchRad)
-	local vy = speed * math.sin(pitchRad) + upwardVel
-
-	-- Solve quadratic: 0.5*g*t^2 - vy*t = 0 for time to hit ground
-	-- t = 0 (start) or t = 2*vy/g
-	-- For downward trajectories (vy < 0), we need to solve: 0.5*g*t^2 - vy*t - h = 0
-	-- For simplicity, use absolute value and handle both cases
-	if vy > 0 then
-		-- Upward trajectory
-		local flightTime = (2 * vy) / gravity
-		local range = vx * flightTime
-		return range
-	else
-		-- Downward trajectory - hits ground faster
-		-- Approximate time to hit ground from current height
-		local flightTime = math.abs(vy) / gravity
-		local range = vx * flightTime
-		return range
-	end
-end
-
--- Direct mathematical solution for pitch angles (no iterations)
-local function solvePitchForDistance(speed, targetDistance, gravity, upwardVel)
-	-- Using the quartic equation from "Cannons that Never Miss"
-	-- |ΔP - ½gt²|² = (st)² where ΔP is horizontal distance, g is gravity
-
-	-- For sticky bombs with upward velocity, we need to account for it
-	-- Modified equation: (v*cos(θ))*t = distance, where t = 2*(v*sin(θ) + upwardVel)/gravity
-
-	-- This gives us: distance = v*cos(θ) * 2*(v*sin(θ) + upwardVel)/gravity
-	-- Simplifying: distance*gravity = 2*v²*cos(θ)*sin(θ) + 2*v*cos(θ)*upwardVel
-	-- Using trig identity: 2*cos(θ)*sin(θ) = sin(2θ)
-	-- distance*gravity = v²*sin(2θ) + 2*v*cos(θ)*upwardVel
-
-	local g = gravity
-	local d = targetDistance
-	local u = upwardVel
-
-	-- Guard against division by zero
-	assert(g ~= 0, "solvePitchForDistance: gravity cannot be zero")
-	assert(d ~= 0, "solvePitchForDistance: targetDistance cannot be zero")
-
-	-- This is a quadratic in terms of tan(θ)
-	-- Let's solve it directly using the quadratic formula
-	local denom = 4 * d * d
-	assert(denom ~= 0, "solvePitchForDistance: division by zero in discriminant")
-	local discriminant = speed * speed - g * (g * d * d - 4 * d * u * speed) / denom
-
-	if discriminant < 0 then
-		return nil, nil -- No solution
-	end
-
-	local sqrt_disc = math.sqrt(discriminant)
-
-	-- Two solutions: low arc and high arc
-	local divisor = g * d
-	assert(divisor ~= 0, "solvePitchForDistance: division by zero in tan calculation")
-	local tan1 = (speed * speed - sqrt_disc) / divisor
-	local tan2 = (speed * speed + sqrt_disc) / divisor
-
-	-- Convert to pitch angles (negative because pitch is downward)
-	local pitch1 = -math.deg(math.atan(tan1))
-	local pitch2 = -math.deg(math.atan(tan2))
-
-	return pitch1, pitch2
-end
 
 -- Aliases for external functions:
 local traceHull = engine.TraceHull
@@ -814,124 +751,115 @@ local function drawProjCamTexture()
 end
 
 -------------------------------
--- ITEM DEFINITIONS MAPPING
+-- ITEM DEFINITIONS MAPPING (sparse table for fast load)
 -------------------------------
-local ItemDefinitions = {}
-do
-	local defs = {
-		[222] = 11,
-		[812] = 12,
-		[833] = 12,
-		[1121] = 11,
-		[18] = -1,
-		[205] = -1,
-		[127] = -1,
-		[228] = -1,
-		[237] = -1,
-		[414] = -1,
-		[441] = -1,
-		[513] = -1,
-		[658] = -1,
-		[730] = -1,
-		[800] = -1,
-		[809] = -1,
-		[889] = -1,
-		[898] = -1,
-		[907] = -1,
-		[916] = -1,
-		[965] = -1,
-		[974] = -1,
-		[1085] = -1,
-		[1104] = -1,
-		[15006] = -1,
-		[15014] = -1,
-		[15028] = -1,
-		[15043] = -1,
-		[15052] = -1,
-		[15057] = -1,
-		[15081] = -1,
-		[15104] = -1,
-		[15105] = -1,
-		[15129] = -1,
-		[15130] = -1,
-		[15150] = -1,
-		[442] = -1,
-		[1178] = -1,
-		[39] = 8,
-		[351] = 8,
-		[595] = 8,
-		[740] = 8,
-		[1180] = 0,
-		[19] = 5,
-		[206] = 5,
-		[308] = 5,
-		[996] = 6,
-		[1007] = 5,
-		[1151] = 4,
-		[15077] = 5,
-		[15079] = 5,
-		[15091] = 5,
-		[15092] = 5,
-		[15116] = 5,
-		[15117] = 5,
-		[15142] = 5,
-		[15158] = 5,
-		[20] = 1,
-		[207] = 1,
-		[130] = 3,
-		[265] = 3,
-		[661] = 1,
-		[797] = 1,
-		[806] = 1,
-		[886] = 1,
-		[895] = 1,
-		[904] = 1,
-		[913] = 1,
-		[962] = 1,
-		[971] = 1,
-		[1150] = 2,
-		[15009] = 1,
-		[15012] = 1,
-		[15024] = 1,
-		[15038] = 1,
-		[15045] = 1,
-		[15048] = 1,
-		[15082] = 1,
-		[15083] = 1,
-		[15084] = 1,
-		[15113] = 1,
-		[15137] = 1,
-		[15138] = 1,
-		[15155] = 1,
-		[588] = -1,
-		[997] = 9,
-		[17] = 10,
-		[204] = 10,
-		[36] = 10,
-		[305] = 9,
-		[412] = 10,
-		[1079] = 9,
-		[56] = 7,
-		[1005] = 7,
-		[1092] = 7,
-		[58] = 11,
-		[1083] = 11,
-		[1105] = 11,
-	}
-	local maxIndex = 0
-	for k, _ in pairs(defs) do
-		if k > maxIndex then
-			maxIndex = k
-		end
-	end
-	for i = 1, maxIndex do
-		ItemDefinitions[i] = defs[i] or false
-	end
-end
+logStep("Loading ItemDefinitions...")
+local ItemDefinitions = {
+	[222] = 11,
+	[812] = 12,
+	[833] = 12,
+	[1121] = 11,
+	[18] = -1,
+	[205] = -1,
+	[127] = -1,
+	[228] = -1,
+	[237] = -1,
+	[414] = -1,
+	[441] = -1,
+	[513] = -1,
+	[658] = -1,
+	[730] = -1,
+	[800] = -1,
+	[809] = -1,
+	[889] = -1,
+	[898] = -1,
+	[907] = -1,
+	[916] = -1,
+	[965] = -1,
+	[974] = -1,
+	[1085] = -1,
+	[1104] = -1,
+	[15006] = -1,
+	[15014] = -1,
+	[15028] = -1,
+	[15043] = -1,
+	[15052] = -1,
+	[15057] = -1,
+	[15081] = -1,
+	[15104] = -1,
+	[15105] = -1,
+	[15129] = -1,
+	[15130] = -1,
+	[15150] = -1,
+	[442] = -1,
+	[1178] = -1,
+	[39] = 8,
+	[351] = 8,
+	[595] = 8,
+	[740] = 8,
+	[1180] = 0,
+	[19] = 5,
+	[206] = 5,
+	[308] = 5,
+	[996] = 6,
+	[1007] = 5,
+	[1151] = 4,
+	[15077] = 5,
+	[15079] = 5,
+	[15091] = 5,
+	[15092] = 5,
+	[15116] = 5,
+	[15117] = 5,
+	[15142] = 5,
+	[15158] = 5,
+	[20] = 1,
+	[207] = 1,
+	[130] = 3,
+	[265] = 3,
+	[661] = 1,
+	[797] = 1,
+	[806] = 1,
+	[886] = 1,
+	[895] = 1,
+	[904] = 1,
+	[913] = 1,
+	[962] = 1,
+	[971] = 1,
+	[1150] = 2,
+	[15009] = 1,
+	[15012] = 1,
+	[15024] = 1,
+	[15038] = 1,
+	[15045] = 1,
+	[15048] = 1,
+	[15082] = 1,
+	[15083] = 1,
+	[15084] = 1,
+	[15113] = 1,
+	[15137] = 1,
+	[15138] = 1,
+	[15155] = 1,
+	[588] = -1,
+	[997] = 9,
+	[17] = 10,
+	[204] = 10,
+	[36] = 10,
+	[305] = 9,
+	[412] = 10,
+	[1079] = 9,
+	[56] = 7,
+	[1005] = 7,
+	[1092] = 7,
+	[58] = 11,
+	[1083] = 11,
+	[1105] = 11,
+}
+logStep("ItemDefinitions done")
 
 -------------------------------
 -- PHYSICS ENVIRONMENT CLASS
 -------------------------------
+logStep("Defining PhysicsEnv class...")
 local PhysicsEnv = {}
 PhysicsEnv.__index = PhysicsEnv
 
@@ -962,24 +890,43 @@ function PhysicsEnv:initializeObjects()
 	}
 	for _, path in ipairs(objectPaths) do
 		if not physics or not physics.ParseModelByName then
-			error("Physics ParseModelByName API not available")
+			print("[ArtileryAiming] Physics ParseModelByName API not available")
+			goto continue
 		end
-		local solid, model = physics.ParseModelByName(path)
-		if not solid or not model then
-			error("Failed to parse model: " .. tostring(path))
+
+		-- Wrap in pcall to catch qhull precision errors
+		local success, result = pcall(function()
+			local solid, model = physics.ParseModelByName(path)
+			if not solid or not model then
+				return nil, "Failed to parse model: " .. tostring(path)
+			end
+			local surfaceProp = solid:GetSurfacePropName()
+			local objParams = solid:GetObjectParameters()
+			if not surfaceProp or not objParams then
+				return nil, "Failed to get model properties for: " .. tostring(path)
+			end
+			local obj = self.env:CreatePolyObject(model, surfaceProp, objParams)
+			if not obj then
+				return nil, "Failed to create physics object for: " .. tostring(path)
+			end
+			return obj
+		end)
+
+		if success and result then
+			table.insert(self.objects, result)
+			table.insert(self.objectNames, path)
+		else
+			print("[ArtileryAiming] Skipping model " .. path .. ": " .. tostring(result))
 		end
-		local surfaceProp = solid:GetSurfacePropName()
-		local objParams = solid:GetObjectParameters()
-		if not surfaceProp or not objParams then
-			error("Failed to get model properties for: " .. tostring(path))
-		end
-		local obj = self.env:CreatePolyObject(model, surfaceProp, objParams)
-		if not obj then
-			error("Failed to create physics object for: " .. tostring(path))
-		end
-		table.insert(self.objects, obj)
-		table.insert(self.objectNames, path)
+
+		::continue::
 	end
+
+	if #self.objects == 0 then
+		print("[ArtileryAiming] WARNING: No physics objects created - all models failed")
+		return
+	end
+
 	if #self.objects > 0 then
 		local firstObj = self.objects[1]
 		if firstObj and firstObj.Wake then
@@ -1046,9 +993,12 @@ function PhysicsEnv:destroy()
 	self.env = nil
 end
 
+logStep("PhysicsEnv class done")
+
 -------------------------------
 -- TRAJECTORY LINE CLASS
 -------------------------------
+logStep("Defining TrajectoryLine class...")
 local TrajectoryLine = {}
 TrajectoryLine.__index = TrajectoryLine
 
@@ -1096,116 +1046,169 @@ function TrajectoryLine:render()
 		lastScreen = screenPos
 	end
 end
+logStep("TrajectoryLine class done")
 
 -------------------------------
--- IMPACT POLYGON CLASS
+-- IMPACT POLYGON (trajectory.lua style)
 -------------------------------
+logStep("Creating polygon texture...")
+local g_iPolygonTexture = draw.CreateTextureRGBA("\xff\xff\xff" .. string.char(config.polygon.a), 1, 1)
+logStep("Polygon texture done")
+
+logStep("Defining ImpactPolygon...")
 local ImpactPolygon = {}
-ImpactPolygon.__index = ImpactPolygon
+do
+	local vPlane, vOrigin = Vector3(0, 0, 0), Vector3(0, 0, 0)
+	local iSegments = config.polygon.segments
+	local fSegmentAngleOffset = math.pi / iSegments
+	local fSegmentAngle = fSegmentAngleOffset * 2
 
-function ImpactPolygon.new()
-	local tex = draw.CreateTextureRGBA(
-		string.char(
-			0xff,
-			0xff,
-			0xff,
-			config.polygon.a,
-			0xff,
-			0xff,
-			0xff,
-			config.polygon.a,
-			0xff,
-			0xff,
-			0xff,
-			config.polygon.a,
-			0xff,
-			0xff,
-			0xff,
-			config.polygon.a
-		),
-		2,
-		2
-	)
-	local instance = setmetatable({
-		texture = tex,
-		segments = config.polygon.segments,
-		segAngleOffset = math.pi / config.polygon.segments,
-		segAngle = (math.pi / config.polygon.segments) * 2,
-	}, ImpactPolygon)
-	return instance
-end
+	local metatable = { __call = function(self, plane, origin) end }
+	if config.polygon.enabled then
+		if config.outline.polygon then
+			function metatable:__call(plane, origin)
+				vPlane, vOrigin = plane or vPlane, origin or vOrigin
 
-function ImpactPolygon:draw(plane, origin)
-	if not config.polygon.enabled then
-		return
-	end
-	local positions = {}
-	local radius = config.polygon.size
-	if math.abs(plane.z) >= 0.99 then
-		for i = 1, self.segments do
-			local ang = i * self.segAngle + self.segAngleOffset
-			local pos = worldToScreen(origin + Vector3(radius * math.cos(ang), radius * math.sin(ang), 0))
-			if not pos then
-				return
+				local positions = {}
+				local radius = config.polygon.size
+
+				if math.abs(vPlane.z) >= 0.99 then
+					for i = 1, iSegments do
+						local ang = i * fSegmentAngle + fSegmentAngleOffset
+						positions[i] =
+							worldToScreen(vOrigin + Vector3(radius * math.cos(ang), radius * math.sin(ang), 0))
+						if not positions[i] then
+							return
+						end
+					end
+				else
+					local right = Vector3(-vPlane.y, vPlane.x, 0)
+					local up =
+						Vector3(vPlane.z * right.y, -vPlane.z * right.x, (vPlane.y * right.x) - (vPlane.x * right.y))
+
+					radius = radius / math.cos(math.asin(vPlane.z))
+
+					for i = 1, iSegments do
+						local ang = i * fSegmentAngle + fSegmentAngleOffset
+						positions[i] = worldToScreen(
+							vOrigin + (right * (radius * math.cos(ang))) + (up * (radius * math.sin(ang)))
+						)
+
+						if not positions[i] then
+							return
+						end
+					end
+				end
+
+				draw.Color(config.outline.r, config.outline.g, config.outline.b, config.outline.a)
+				local last = positions[#positions]
+				for i = 1, #positions do
+					local new = positions[i]
+
+					if math.abs(new[1] - last[1]) > math.abs(new[2] - last[2]) then
+						draw.Line(last[1], last[2] + 1, new[1], new[2] + 1)
+						draw.Line(last[1], last[2] - 1, new[1], new[2] - 1)
+					else
+						draw.Line(last[1] + 1, last[2], new[1] + 1, new[2])
+						draw.Line(last[1] - 1, last[2], new[1] - 1, new[2])
+					end
+
+					last = new
+				end
+
+				draw.Color(config.polygon.r, config.polygon.g, config.polygon.b, 255)
+				do
+					local cords, reverse_cords = {}, {}
+					local sizeof = #positions
+					local sum = 0
+
+					for i, pos in pairs(positions) do
+						local convertedTbl = { pos[1], pos[2], 0, 0 }
+
+						cords[i], reverse_cords[sizeof - i + 1] = convertedTbl, convertedTbl
+
+						sum = sum + cross(pos, positions[(i % sizeof) + 1], positions[1])
+					end
+
+					draw.TexturedPolygon(g_iPolygonTexture, (sum < 0) and reverse_cords or cords, true)
+				end
+
+				local last = positions[#positions]
+				for i = 1, #positions do
+					local new = positions[i]
+
+					draw.Line(last[1], last[2], new[1], new[2])
+
+					last = new
+				end
 			end
-			positions[i] = pos
-		end
-	else
-		local right = Vector3(-plane.y, plane.x, 0)
-		local up = Vector3(plane.z * right.y, -plane.z * right.x, (plane.y * right.x) - (plane.x * right.y))
-		radius = radius / math.cos(math.asin(plane.z))
-		for i = 1, self.segments do
-			local ang = i * self.segAngle + self.segAngleOffset
-			local pos = worldToScreen(origin + (right * (radius * math.cos(ang))) + (up * (radius * math.sin(ang))))
-			if not pos then
-				return
+		else
+			function metatable:__call(plane, origin)
+				vPlane, vOrigin = plane or vPlane, origin or vOrigin
+
+				local positions = {}
+				local radius = config.polygon.size
+
+				if math.abs(vPlane.z) >= 0.99 then
+					for i = 1, iSegments do
+						local ang = i * fSegmentAngle + fSegmentAngleOffset
+						positions[i] =
+							worldToScreen(vOrigin + Vector3(radius * math.cos(ang), radius * math.sin(ang), 0))
+						if not positions[i] then
+							return
+						end
+					end
+				else
+					local right = Vector3(-vPlane.y, vPlane.x, 0)
+					local up =
+						Vector3(vPlane.z * right.y, -vPlane.z * right.x, (vPlane.y * right.x) - (vPlane.x * right.y))
+
+					radius = radius / math.cos(math.asin(vPlane.z))
+
+					for i = 1, iSegments do
+						local ang = i * fSegmentAngle + fSegmentAngleOffset
+						positions[i] = worldToScreen(
+							vOrigin + (right * (radius * math.cos(ang))) + (up * (radius * math.sin(ang)))
+						)
+
+						if not positions[i] then
+							return
+						end
+					end
+				end
+
+				draw.Color(config.polygon.r, config.polygon.g, config.polygon.b, 255)
+				do
+					local cords, reverse_cords = {}, {}
+					local sizeof = #positions
+					local sum = 0
+
+					for i, pos in pairs(positions) do
+						local convertedTbl = { pos[1], pos[2], 0, 0 }
+
+						cords[i], reverse_cords[sizeof - i + 1] = convertedTbl, convertedTbl
+
+						sum = sum + cross(pos, positions[(i % sizeof) + 1], positions[1])
+					end
+
+					draw.TexturedPolygon(g_iPolygonTexture, (sum < 0) and reverse_cords or cords, true)
+				end
+
+				local last = positions[#positions]
+				for i = 1, #positions do
+					local new = positions[i]
+
+					draw.Line(last[1], last[2], new[1], new[2])
+
+					last = new
+				end
 			end
-			positions[i] = pos
 		end
 	end
 
-	-- Draw outline if enabled.
-	if config.outline.polygon then
-		setColor(config.outline.r, config.outline.g, config.outline.b, config.outline.a)
-		local last = positions[#positions]
-		for i = 1, #positions do
-			local cur = positions[i]
-			drawLine(last[1], last[2], cur[1], cur[2])
-			last = cur
-		end
-	end
-
-	-- Draw filled polygon.
-	setColor(config.polygon.r, config.polygon.g, config.polygon.b, 255)
-	local pts, ptsReversed = {}, {}
-	local sum = 0
-	for i, pos in ipairs(positions) do
-		local pt = { pos[1], pos[2], 0, 0 }
-		pts[i] = pt
-		ptsReversed[#positions - i + 1] = pt
-		local nextPos = positions[(i % #positions) + 1]
-		sum = sum + cross(pos, nextPos, positions[1])
-	end
-	local polyPts = (sum < 0) and ptsReversed or pts
-	if self.texture then
-		draw.TexturedPolygon(self.texture, polyPts, true)
-	end
-
-	-- Draw final outline.
-	local last = positions[#positions]
-	for i = 1, #positions do
-		local cur = positions[i]
-		drawLine(last[1], last[2], cur[1], cur[2])
-		last = cur
-	end
+	setmetatable(ImpactPolygon, metatable)
 end
-
-function ImpactPolygon:destroy()
-	if self.texture then
-		draw.DeleteTexture(self.texture)
-		self.texture = nil
-	end
-end
+logStep("ImpactPolygon done")
 
 ----------------------------------------
 -- PROJECTILE INFORMATION FUNCTION
@@ -1298,14 +1301,9 @@ local function isProjectileWeapon()
 	local projectileType = pWeapon:GetWeaponProjectileType()
 	return projectileType and projectileType >= 2
 end
-
--- Lazy initialization of textures (only when needed)
+-- Lazy initialization of impact polygon (just returns the callable object)
 local function ensureImpactPolygon()
-	if not impactPolygon then
-		impactPolygon = ImpactPolygon:new()
-		projCamState.storedPolygonTexture = impactPolygon.texture
-	end
-	return impactPolygon
+	return ImpactPolygon
 end
 
 -- Lazy initialization of render texture
@@ -1317,14 +1315,22 @@ local function ensureProjCamTexture()
 end
 
 -------------------------------
--- GLOBALS & INITIALIZATION (DEFERRED)
+-- GLOBALS & DEFERRED INITIALIZATION
 -------------------------------
-local physicsEnv = PhysicsEnv:new()
-assert(physicsEnv, "Physics API unavailable, script disabled")
+local physicsEnv = nil
+local function getPhysicsEnv()
+	if not physicsEnv then
+		physicsEnv = PhysicsEnv:new()
+	end
+	return physicsEnv
+end
+
 local trajectoryLine = TrajectoryLine:new()
--- impactPolygon is lazy-loaded via ensureImpactPolygon()
+logStep("TrajectoryLine instantiated")
+-- impactPolygon is the callable ImpactPolygon object
 local g_fTraceInterval = clamp(config.measure_segment_size, 0.5, 8) / 66
 local g_fFlagInterval = g_fTraceInterval * 1320
+logStep("Globals initialized")
 
 -------------------------------
 -- BOMBARDING AIM LOGIC
@@ -1664,7 +1670,11 @@ local function UpdateProjectileSimulation(cmd)
 			end
 		end
 	else
-		local obj = physicsEnv:getObject(iItemDefinitionType)
+		local pEnv = getPhysicsEnv()
+		if not pEnv or iItemDefinitionType < 1 or iItemDefinitionType > #pEnv.objects then
+			return
+		end
+		local obj = pEnv:getObject(iItemDefinitionType)
 		obj:SetPosition(vStartPosition, vStartAngle, true)
 		obj:SetVelocity(vVelocity, Vector3(0, 0, 0))
 		local prevPos = vStartPosition
@@ -1683,9 +1693,9 @@ local function UpdateProjectileSimulation(cmd)
 			if results.fraction ~= 1 then
 				break
 			end
-			physicsEnv:simulate(g_fTraceInterval)
+			pEnv:simulate(g_fTraceInterval)
 		end
-		physicsEnv:reset()
+		pEnv:reset()
 	end
 
 	if results and results.plane then
@@ -1715,7 +1725,10 @@ local function onCreateMove(cmd)
 		if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
 			return
 		end
-		physicsEnv:initializeObjects()
+		local initOk, initErr = pcall(getPhysicsEnv().initializeObjects, getPhysicsEnv())
+		if not initOk then
+			print("[ArtileryAiming] Physics init failed: " .. tostring(initErr))
+		end
 		physicsInitialized = true
 	end
 
@@ -1778,7 +1791,7 @@ local function onDraw()
 	local cache = projCamState.trajectory
 
 	if cache.impactPlane and cache.impactPos then
-		ensureImpactPolygon():draw(cache.impactPlane, cache.impactPos)
+		ensureImpactPolygon()(cache.impactPlane, cache.impactPos)
 	end
 
 	local num = #cache.positions
@@ -1849,9 +1862,13 @@ local function onDoPostScreenSpaceEffects()
 end
 
 local function onUnload()
-	physicsEnv:destroy()
-	if impactPolygon then
-		impactPolygon:destroy()
+	if physicsEnv then
+		physicsEnv:destroy()
+		physicsEnv = nil
+	end
+	if g_iPolygonTexture then
+		draw.DeleteTexture(g_iPolygonTexture)
+		g_iPolygonTexture = nil
 	end
 	projCamState.texture = nil
 	projCamState.material = nil
@@ -1863,6 +1880,7 @@ end
 -------------------------------
 -- REGISTER ALL CALLBACKS (Top Level Only)
 -------------------------------
+logStep("Registering callbacks...")
 callbacks.Unregister("CreateMove", "ArtilleryLogic")
 callbacks.Register("CreateMove", "ArtilleryLogic", onCreateMove)
 
@@ -1877,3 +1895,4 @@ callbacks.Register("DoPostScreenSpaceEffects", "ProjCamRender", onDoPostScreenSp
 
 callbacks.Unregister("Unload", "ArtilleryUnload")
 callbacks.Register("Unload", "ArtilleryUnload", onUnload)
+logStep("Load complete!")
