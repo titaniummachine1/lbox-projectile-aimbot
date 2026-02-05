@@ -860,6 +860,13 @@ logStep("ItemDefinitions done")
 -- PHYSICS ENVIRONMENT CLASS
 -------------------------------
 logStep("Defining PhysicsEnv class...")
+
+local PHYSICS_MODEL_PATHS = {
+	[1] = "models/weapons/w_models/w_stickybomb.mdl",
+	[2] = "models/workshop/weapons/c_models/c_kingmaker_sticky/w_kingmaker_stickybomb.mdl",
+	[3] = "models/weapons/w_models/w_stickybomb_d.mdl",
+}
+
 local PhysicsEnv = {}
 PhysicsEnv.__index = PhysicsEnv
 
@@ -869,111 +876,47 @@ function PhysicsEnv:new()
 	assert(env, "PhysicsEnv:new: failed to create physics environment")
 	env:SetGravity(Vector3(0, 0, -800))
 	env:SetAirDensity(2.0)
-	env:SetSimulationTimestep(globals.TickInterval() or (1 / 66))
-	self = setmetatable({
+	env:SetSimulationTimestep(1 / 66)
+	local self = setmetatable({
 		env = env,
 		objects = {},
-		objectNames = {},
-		activeIndex = 0,
+		activeKey = "",
 	}, PhysicsEnv)
 	return self
 end
 
-function PhysicsEnv:initializeObjects()
-	if #self.objects > 0 then
-		return
+function PhysicsEnv:getObject(modelPath)
+	assert(modelPath and #modelPath > 0, "PhysicsEnv:getObject: modelPath required")
+
+	local obj = self.objects[modelPath]
+	if self.activeKey == modelPath then
+		return obj
 	end
-	local objectPaths = {
-		"models/weapons/w_models/w_stickybomb.mdl",
-		"models/workshop/weapons/c_models/c_kingmaker_sticky/w_kingmaker_stickybomb.mdl",
-		"models/weapons/w_models/w_stickybomb_d.mdl",
-	}
-	for _, path in ipairs(objectPaths) do
-		if not physics or not physics.ParseModelByName then
-			print("[ArtileryAiming] Physics ParseModelByName API not available")
-			goto continue
+
+	local activeObj = self.objects[self.activeKey]
+	if activeObj then
+		activeObj:Sleep()
+	end
+
+	if not obj then
+		local solid, model = physics.ParseModelByName(modelPath)
+		if not solid or not model then
+			print("[ArtileryAiming] Failed to parse model: " .. modelPath)
+			return nil
 		end
 
-		-- Wrap in pcall to catch qhull precision errors
-		local success, result = pcall(function()
-			local solid, model = physics.ParseModelByName(path)
-			if not solid or not model then
-				return nil, "Failed to parse model: " .. tostring(path)
-			end
-			local surfaceProp = solid:GetSurfacePropName()
-			local objParams = solid:GetObjectParameters()
-			if not surfaceProp or not objParams then
-				return nil, "Failed to get model properties for: " .. tostring(path)
-			end
-			local obj = self.env:CreatePolyObject(model, surfaceProp, objParams)
-			if not obj then
-				return nil, "Failed to create physics object for: " .. tostring(path)
-			end
-			return obj
-		end)
-
-		if success and result then
-			table.insert(self.objects, result)
-			table.insert(self.objectNames, path)
-		else
-			print("[ArtileryAiming] Skipping model " .. path .. ": " .. tostring(result))
+		obj = self.env:CreatePolyObject(model, solid:GetSurfacePropName(), solid:GetObjectParameters())
+		if not obj then
+			print("[ArtileryAiming] Failed to create physics object: " .. modelPath)
+			return nil
 		end
 
-		::continue::
+		self.objects[modelPath] = obj
 	end
 
-	if #self.objects == 0 then
-		print("[ArtileryAiming] WARNING: No physics objects created - all models failed")
-		return
-	end
-
-	if #self.objects > 0 then
-		local firstObj = self.objects[1]
-		if firstObj and firstObj.Wake then
-			firstObj:Wake()
-		end
-		self.activeIndex = 1
-	end
-end
-
-function PhysicsEnv:destroyObjects()
-	self.activeIndex = 0
-	for _, obj in pairs(self.objects) do
-		if obj and self.env then
-			self.env:DestroyObject(obj)
-		end
-	end
-	self.objects = {}
-	self.objectNames = {}
-end
-
-local function safeSleep(obj)
-	if obj and obj.Sleep then
-		obj:Sleep()
-	end
-end
-
-local function safeWake(obj)
-	if obj and obj.Wake then
-		obj:Wake()
-	end
-end
-
-function PhysicsEnv:getObject(index)
-	if index < 1 or index > #self.objects then
-		error("Invalid physics object index: " .. tostring(index))
-	end
-	-- Only switch if actually changing objects
-	if index ~= self.activeIndex then
-		safeSleep(self.objects[self.activeIndex])
-		local newObj = self.objects[index]
-		if not newObj then
-			error("Physics object at index " .. tostring(index) .. " is nil")
-		end
-		safeWake(newObj)
-		self.activeIndex = index
-	end
-	return self.objects[self.activeIndex]
+	self.activeKey = modelPath
+	obj:Wake()
+	return obj
 end
 
 function PhysicsEnv:simulate(dt)
@@ -988,7 +931,13 @@ function PhysicsEnv:destroy()
 	if not self.env then
 		return
 	end
-	self:destroyObjects()
+	self.activeKey = ""
+	for _, obj in pairs(self.objects) do
+		if obj then
+			self.env:DestroyObject(obj)
+		end
+	end
+	self.objects = {}
 	physics.DestroyEnvironment(self.env)
 	self.env = nil
 end
@@ -1670,11 +1619,18 @@ local function UpdateProjectileSimulation(cmd)
 			end
 		end
 	else
-		local pEnv = getPhysicsEnv()
-		if not pEnv or iItemDefinitionType < 1 or iItemDefinitionType > #pEnv.objects then
+		local modelPath = PHYSICS_MODEL_PATHS[iItemDefinitionType]
+		if not modelPath then
 			return
 		end
-		local obj = pEnv:getObject(iItemDefinitionType)
+		local pEnv = getPhysicsEnv()
+		if not pEnv then
+			return
+		end
+		local obj = pEnv:getObject(modelPath)
+		if not obj then
+			return
+		end
 		obj:SetPosition(vStartPosition, vStartAngle, true)
 		obj:SetVelocity(vVelocity, Vector3(0, 0, 0))
 		local prevPos = vStartPosition
@@ -1716,22 +1672,7 @@ end
 -- CALLBACK FUNCTIONS (Top Level)
 -------------------------------
 
-local physicsInitialized = false
-
 local function onCreateMove(cmd)
-	-- Only initialize physics when player is valid and alive
-	if not physicsInitialized then
-		local pLocal = entities.GetLocalPlayer()
-		if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
-			return
-		end
-		local initOk, initErr = pcall(getPhysicsEnv().initializeObjects, getPhysicsEnv())
-		if not initOk then
-			print("[ArtileryAiming] Physics init failed: " .. tostring(initErr))
-		end
-		physicsInitialized = true
-	end
-
 	handleProjCamToggle()
 	handleBombardModeToggle()
 	handleBombardAimToggle()
