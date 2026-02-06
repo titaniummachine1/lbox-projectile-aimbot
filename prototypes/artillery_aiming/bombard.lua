@@ -4,9 +4,7 @@ local Utils = require("utils")
 local Entity = require("entity")
 
 local clamp = Utils.clamp
-local STICKY_BASE_SPEED = Config.physics.sticky_base_speed
-local STICKY_MAX_SPEED = Config.physics.sticky_max_speed
-local STICKY_GRAVITY = Config.physics.sticky_gravity
+local DEFAULT_GRAVITY = Config.physics.default_gravity
 
 local Bombard = {}
 
@@ -155,6 +153,10 @@ local function solveFixedSpeedWeapon(speed, upwardVel, gravity, dx, dz)
 end
 
 function Bombard.handleInput(cmd)
+	if not Config.bombard.enabled then
+		return
+	end
+
 	local cfg = Config.keybinds
 	local st = State.bombard
 	local inp = State.input
@@ -207,11 +209,17 @@ function Bombard.lockCurrentAim()
 	local viewOffset = pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 	local eyePos = absOrigin + viewOffset
 
-	local forward = viewAngles:Forward()
-	local traceEnd = eyePos + forward * 5000
-	local res = engine.TraceLine(eyePos, traceEnd, Config.TRACE_MASK)
+	local traj = State.trajectory
+	local hitPoint
+	if traj.isValid and traj.impactPos then
+		hitPoint = traj.impactPos
+	else
+		local forward = viewAngles:Forward()
+		local traceEnd = eyePos + forward * 5000
+		local res = engine.TraceLine(eyePos, traceEnd, Config.TRACE_MASK)
+		hitPoint = res.endpos
+	end
 
-	local hitPoint = res.endpos
 	local dx = hitPoint.x - eyePos.x
 	local dy = hitPoint.y - eyePos.y
 	local horizontalDist = math.sqrt(dx * dx + dy * dy)
@@ -225,6 +233,9 @@ end
 
 function Bombard.execute(cmd)
 	if not State.camera.active then
+		return
+	end
+	if not Config.bombard.enabled then
 		return
 	end
 
@@ -271,22 +282,33 @@ function Bombard.execute(cmd)
 	st.originPoint = vHeadPos
 	st.targetPoint = vHeadPos + (direction * st.lockedDistance) + Vector3(0, 0, st.targetZHeight)
 
-	local chargeOverride = nil
-	if st.useStoredCharge and ctx.hasCharge then
-		chargeOverride = st.chargeLevel * 4.0
+	local _, baseSpeed, fUpwardVelocity, _, fGravityRaw =
+		Entity.GetProjectileInformation(pWeapon, ctx.isDucking, ctx.itemCase, ctx.itemDefIndex, ctx.weaponID, pLocal, 0)
+
+	local maxSpeed = baseSpeed
+	if ctx.hasCharge and ctx.chargeMaxTime > 0 then
+		local _, fullChargeSpeed = Entity.GetProjectileInformation(
+			pWeapon,
+			ctx.isDucking,
+			ctx.itemCase,
+			ctx.itemDefIndex,
+			ctx.weaponID,
+			pLocal,
+			ctx.chargeMaxTime
+		)
+		maxSpeed = fullChargeSpeed
 	end
 
-	local vOffset, fForwardVelocity, fUpwardVelocity, vCollisionMax, fGravity, fDrag = Entity.GetProjectileInformation(
-		pWeapon,
-		ctx.isDucking,
-		ctx.itemCase,
-		ctx.itemDefIndex,
-		ctx.weaponID,
-		pLocal,
-		chargeOverride
-	)
+	local apiGravityMult = pWeapon:GetProjectileGravity()
+	local gravity
+	if apiGravityMult and apiGravityMult > 0 then
+		gravity = DEFAULT_GRAVITY * apiGravityMult
+	elseif fGravityRaw and fGravityRaw > 0 then
+		gravity = fGravityRaw
+	else
+		gravity = DEFAULT_GRAVITY
+	end
 
-	local gravity = fGravity > 0 and fGravity or STICKY_GRAVITY
 	local dx = st.lockedDistance
 	local dz = st.targetZHeight
 
@@ -295,11 +317,10 @@ function Bombard.execute(cmd)
 	local bestError = math.huge
 
 	if ctx.hasCharge then
-		bestPitch, bestCharge, bestError =
-			solveChargeWeapon(STICKY_BASE_SPEED, STICKY_MAX_SPEED, fUpwardVelocity, gravity, dx, dz)
+		bestPitch, bestCharge, bestError = solveChargeWeapon(baseSpeed, maxSpeed, fUpwardVelocity, gravity, dx, dz)
 		st.chargeLevel = bestCharge
 	else
-		bestPitch, bestError = solveFixedSpeedWeapon(fForwardVelocity, fUpwardVelocity, gravity, dx, dz)
+		bestPitch, bestError = solveFixedSpeedWeapon(baseSpeed, fUpwardVelocity, gravity, dx, dz)
 	end
 
 	st.calculatedPitch = bestPitch
@@ -362,7 +383,7 @@ function Bombard.handleChargeRelease(cmd)
 	end
 
 	local ctx = Entity.getWeaponContext(pLocal, pWeapon)
-	if not ctx or ctx.itemCase ~= 1 then
+	if not ctx or not ctx.hasCharge then
 		return
 	end
 
@@ -371,7 +392,12 @@ function Bombard.handleChargeRelease(cmd)
 		return
 	end
 
-	local currentCharge = (globals.CurTime() - chargeBeginTime) / 4.0
+	local chargeMaxTime = ctx.chargeMaxTime
+	if chargeMaxTime <= 0 then
+		chargeMaxTime = 4.0
+	end
+
+	local currentCharge = (globals.CurTime() - chargeBeginTime) / chargeMaxTime
 	local targetCharge = State.bombard.chargeLevel
 
 	if currentCharge >= targetCharge then
