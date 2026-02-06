@@ -186,12 +186,6 @@ function Bombard.handleInput(cmd)
 
 	local highGroundDown = input.IsButtonDown(cfg.high_ground)
 	st.highGroundHeld = highGroundDown
-
-	local scrollToggleDown = input.IsButtonDown(cfg.scroll_mode_toggle)
-	if scrollToggleDown and not inp.lastScrollModeState then
-		st.chargeMode = not st.chargeMode
-	end
-	inp.lastScrollModeState = scrollToggleDown
 end
 
 function Bombard.lockCurrentAim()

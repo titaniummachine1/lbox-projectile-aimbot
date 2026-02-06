@@ -51,7 +51,6 @@ Config.keybinds = {
 	activate_mode = "hold",
 	high_ground = KEY_Q,
 	high_ground_mode = "hold",
-	scroll_mode_toggle = KEY_V,
 }
 
 Config.bombard = {

@@ -89,10 +89,12 @@ function Camera.handleInput()
 		cam.isDragging = false
 	end
 
-	if input.IsButtonPressed(MOUSE_WHEEL_UP) then
-		cam.pathPercent = Utils.clamp(cam.pathPercent + cfg.scrollStep, 0, 0.9)
-	elseif input.IsButtonPressed(MOUSE_WHEEL_DOWN) then
-		cam.pathPercent = Utils.clamp(cam.pathPercent - cfg.scrollStep, 0, 0.9)
+	if not menuOpen then
+		if input.IsButtonPressed(MOUSE_WHEEL_UP) then
+			cam.pathPercent = Utils.clamp(cam.pathPercent + cfg.scrollStep, 0, 0.9)
+		elseif input.IsButtonPressed(MOUSE_WHEEL_DOWN) then
+			cam.pathPercent = Utils.clamp(cam.pathPercent - cfg.scrollStep, 0, 0.9)
+		end
 	end
 end
 
