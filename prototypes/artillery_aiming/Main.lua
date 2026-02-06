@@ -53,6 +53,7 @@ local function onDrawInner()
 
 	if Camera.isActive() then
 		Camera.drawTexture()
+		Camera.drawCameraTrajectory()
 		Camera.drawWindow()
 		Visuals.drawAimGuide()
 	end
