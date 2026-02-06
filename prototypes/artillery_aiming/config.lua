@@ -33,7 +33,7 @@ Config.visual = {
 		b = 0,
 		a = 155,
 	},
-	measure_segment_size = 2.5,
+	accuracy = 75, -- percent
 }
 
 Config.camera = {
@@ -64,6 +64,10 @@ Config.bombard = {
 
 Config.physics = {
 	default_gravity = 800,
+	sticky_base_speed = 900,
+	sticky_max_speed = 2400,
+	sticky_upward_vel = 200,
+	sticky_gravity = 800,
 }
 
 Config.simulation = {
@@ -74,11 +78,25 @@ Config.simulation = {
 	lazy_collision_grow_factor = 1.5,
 }
 
-local traceInterval = math.max(0.5, math.min(8, Config.visual.measure_segment_size)) / 66
+local function mapAccuracyToStep()
+	local acc = math.max(1, math.min(100, Config.visual.accuracy))
+	local minStep = 0.5
+	local maxStep = 8.0
+	local step = maxStep - (acc / 100) * (maxStep - minStep)
+	return step
+end
+
+function Config.recomputeComputed()
+	local traceInterval = mapAccuracyToStep() / 66
+	Config.computed.trace_interval = traceInterval
+	Config.computed.flag_interval = traceInterval * 1320
+end
+
 Config.computed = {
-	trace_interval = traceInterval,
-	flag_interval = traceInterval * 1320,
+	trace_interval = 0,
+	flag_interval = 0,
 }
+Config.recomputeComputed()
 
 Config.IN_ATTACK = 1
 Config.TRACE_MASK = 100679691

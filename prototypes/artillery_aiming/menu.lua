@@ -86,6 +86,8 @@ local function drawVisualsTab()
 
 	TimMenu.EndSector()
 
+	TimMenu.NextLine()
+
 	TimMenu.BeginSector("Line Color")
 
 	local lineRGBA = { Config.visual.line.r, Config.visual.line.g, Config.visual.line.b, Config.visual.line.a }
@@ -96,6 +98,8 @@ local function drawVisualsTab()
 	Config.visual.line.a = lineRGBA[4]
 
 	TimMenu.EndSector()
+
+	TimMenu.NextLine()
 
 	TimMenu.BeginSector("Flag Color")
 
@@ -110,6 +114,8 @@ local function drawVisualsTab()
 	Config.visual.flags.size = TimMenu.Slider("Flag Size", Config.visual.flags.size, 1, 20, 1)
 
 	TimMenu.EndSector()
+
+	TimMenu.NextLine()
 
 	TimMenu.BeginSector("Impact Polygon")
 
@@ -133,6 +139,8 @@ local function drawVisualsTab()
 
 	TimMenu.EndSector()
 
+	TimMenu.NextLine()
+
 	TimMenu.BeginSector("Outline Color")
 
 	local outRGBA = {
@@ -151,8 +159,11 @@ local function drawVisualsTab()
 
 	TimMenu.BeginSector("Performance")
 
-	Config.visual.measure_segment_size =
-		TimMenu.Slider("Segment Size", Config.visual.measure_segment_size, 0.5, 8.0, 0.5)
+	local newAcc = TimMenu.Slider("Accuracy (%)", Config.visual.accuracy, 1, 100, 1)
+	if newAcc ~= Config.visual.accuracy then
+		Config.visual.accuracy = newAcc
+		Config.recomputeComputed()
+	end
 
 	TimMenu.EndSector()
 end
