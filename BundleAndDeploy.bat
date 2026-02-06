@@ -76,13 +76,33 @@ if /I "%BUNDLE_PATH%"=="%DEPLOY_PATH%" (
 
 echo [BundleAndDeploy] Deployed to %DEPLOY_PATH%
 
+rem Bundle artillery_aiming if present
+set "ARTILLERY_DIR=%SCRIPT_DIR%prototypes\artillery_aiming"
+if exist "%ARTILLERY_DIR%\Main.lua" (
+  echo [BundleAndDeploy] Bundling artillery_aiming...
+  if not exist "%ARTILLERY_DIR%\build\" mkdir "%ARTILLERY_DIR%\build"
+  node "%SCRIPT_DIR%bundle-artillery.js"
+  if errorlevel 1 (
+    echo [BundleAndDeploy] Artillery Aiming bundle failed.
+    exit /b 1
+  )
+  if exist "%ARTILLERY_DIR%\build\artillery_aiming.lua" (
+    copy /Y "%ARTILLERY_DIR%\build\artillery_aiming.lua" "%DEPLOY_DIR%\artillery_aiming.lua" >nul
+    echo [BundleAndDeploy] Artillery Aiming deployed to %DEPLOY_DIR%\artillery_aiming.lua
+  ) else (
+    echo [BundleAndDeploy] Artillery Aiming bundle output not found.
+    exit /b 1
+  )
+)
+
 rem Deploy prototypes if present (directly from source, never from build)
+rem Exclude artillery_aiming subfolder (bundled separately) and old monolith
 set "PROTOS_SOURCE=%SCRIPT_DIR%prototypes"
 set "PROTOS_DEPLOY=%DEPLOY_DIR%"
 
 if exist "%PROTOS_SOURCE%" (
   if not exist "!PROTOS_DEPLOY!" mkdir "!PROTOS_DEPLOY!"
-  robocopy "%PROTOS_SOURCE%" "!PROTOS_DEPLOY!" *.lua /E /NFL /NDL /NJH /NJS /NC /NS /NP >nul
+  robocopy "%PROTOS_SOURCE%" "!PROTOS_DEPLOY!" *.lua /XD artillery_aiming /XF ArtileryAiming.lua /NFL /NDL /NJH /NJS /NC /NS /NP >nul
   set "RC=!ERRORLEVEL!"
   if !RC! GEQ 8 (
     echo [BundleAndDeploy] Prototype deploy failed with code !RC!.

@@ -57,7 +57,7 @@ end
 
 --- 2D vector length (horizontal only)
 function Length2D(vec)
-	return math.sqrt(vec.x * vec.x + vec.y * vec.y)
+	return vec:Length2D()
 end
 
 -- ============================================================================
