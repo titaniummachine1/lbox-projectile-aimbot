@@ -9,6 +9,9 @@ local DEFAULT_BASE_SPEED = Config.physics.sticky_base_speed
 local DEFAULT_MAX_SPEED = Config.physics.sticky_max_speed
 local DEFAULT_UPWARD_VEL = Config.physics.sticky_upward_vel
 
+local warnedSpeedFallback = {}
+local warnedGravityFallback = {}
+
 local Bombard = {}
 
 local function predictImpactZ(speed, pitchDeg, upwardVel, gravity, horizontalDist)
@@ -283,7 +286,11 @@ function Bombard.execute(cmd)
 		Entity.GetProjectileInformation(pWeapon, ctx.isDucking, ctx.itemCase, ctx.itemDefIndex, ctx.weaponID, pLocal, 0)
 
 	if not baseSpeed or baseSpeed <= 0 then
-		print("[ArtilleryAiming] projectile speed missing; using defaults")
+		local warnKey = ctx.weaponID or "unknown"
+		if not warnedSpeedFallback[warnKey] then
+			print("[ArtilleryAiming] projectile speed missing; using defaults for weapon " .. tostring(warnKey))
+			warnedSpeedFallback[warnKey] = true
+		end
 		baseSpeed = DEFAULT_BASE_SPEED
 		fUpwardVelocity = DEFAULT_UPWARD_VEL
 		fGravityRaw = DEFAULT_GRAVITY
@@ -311,7 +318,11 @@ function Bombard.execute(cmd)
 		gravity = fGravityRaw
 	else
 		gravity = DEFAULT_GRAVITY
-		print("[ArtilleryAiming] gravity missing; using default")
+		local warnKey = ctx.weaponID or "unknown"
+		if not warnedGravityFallback[warnKey] then
+			print("[ArtilleryAiming] gravity missing; using default for weapon " .. tostring(warnKey))
+			warnedGravityFallback[warnKey] = true
+		end
 	end
 
 	local dx = st.lockedDistance
