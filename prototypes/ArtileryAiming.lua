@@ -514,12 +514,8 @@ local function updateProjCamSmoothing()
 	)
 end
 
-local function renderProjCamView(view)
-	if not view or #projCamState.storedPositions < 2 then
-		return
-	end
-
-	if not render or not render.Push3DView or not render.ViewDrawScene or not render.PopView then
+local function renderProjCamView()
+	if #projCamState.storedPositions < 2 then
 		return
 	end
 
@@ -527,34 +523,16 @@ local function renderProjCamView(view)
 		return
 	end
 
-	-- Configure for preview window
-	local savedOrigin = view.origin
-	local savedAngles = view.angles
-	local savedFov = view.fov
-	local savedX, savedY = view.x, view.y
-	local savedW, savedH = view.width, view.height
+	local ctx = client.GetPlayerView()
+	assert(ctx, "renderProjCamView: client.GetPlayerView() returned nil")
 
-	view.origin = projCamState.smoothedPos
-	view.angles = projCamState.smoothedAngles
-	view.fov = projCamConfig.fov
+	ctx.origin = projCamState.smoothedPos
+	ctx.angles = projCamState.smoothedAngles
+	ctx.fov = projCamConfig.fov
 
-	-- CRITICAL: Set viewport to match the render target size
-	view.x = 0
-	view.y = 0
-	view.width = projCamConfig.width
-	view.height = projCamConfig.height
-
-	render.Push3DView(view, E_ClearFlags.VIEW_CLEAR_COLOR | E_ClearFlags.VIEW_CLEAR_DEPTH, projCamState.texture)
-	render.ViewDrawScene(true, true, view)
+	render.Push3DView(ctx, 0x37, projCamState.texture)
+	render.ViewDrawScene(true, true, ctx)
 	render.PopView()
-
-	view.origin = savedOrigin
-	view.angles = savedAngles
-	view.fov = savedFov
-	view.x = savedX
-	view.y = savedY
-	view.width = savedW
-	view.height = savedH
 end
 
 local function projectToCamera(worldPos, camOrigin, camAngles, fov, winX, winY, winW, winH)
@@ -1672,7 +1650,19 @@ end
 -- CALLBACK FUNCTIONS (Top Level)
 -------------------------------
 
-local function onCreateMove(cmd)
+local lastErrorTime = 0
+local lastErrorMsg = ""
+local function reportError(source, err)
+	local now = os.clock()
+	local msg = tostring(err)
+	if msg ~= lastErrorMsg or (now - lastErrorTime) > 1 then
+		print("[ArtileryAiming] ERROR in " .. source .. ": " .. msg)
+		lastErrorMsg = msg
+		lastErrorTime = now
+	end
+end
+
+local function onCreateMoveInner(cmd)
 	handleProjCamToggle()
 	handleBombardModeToggle()
 	handleBombardAimToggle()
@@ -1720,7 +1710,14 @@ local function onCreateMove(cmd)
 	end
 end
 
-local function onDraw()
+local function onCreateMove(cmd)
+	local ok, err = pcall(onCreateMoveInner, cmd)
+	if not ok then
+		reportError("CreateMove", err)
+	end
+end
+
+local function onDrawInner()
 	if engine.Con_IsVisible() or engine.IsGameUIVisible() then
 		return
 	end
@@ -1766,32 +1763,19 @@ local function onDraw()
 	end
 end
 
-local function onPostRenderView(view)
-	if view then
-		projCamState.lastView = view
+local function onDraw()
+	local ok, err = pcall(onDrawInner)
+	if not ok then
+		reportError("Draw", err)
 	end
 end
 
-local function onDoPostScreenSpaceEffects()
-	if engine.Con_IsVisible() or engine.IsGameUIVisible() then
-		return
+local function onPostRenderViewInner(view)
+	if view then
+		projCamState.lastView = view
 	end
 
 	if not isProjCamActive() then
-		return
-	end
-
-	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
-		return
-	end
-
-	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
-	if not pWeapon or not pWeapon:IsValid() or pWeapon:GetWeaponProjectileType() < 2 then
-		return
-	end
-
-	if not projCamState.lastView then
 		return
 	end
 
@@ -1799,7 +1783,14 @@ local function onDoPostScreenSpaceEffects()
 		return
 	end
 
-	renderProjCamView(projCamState.lastView)
+	renderProjCamView()
+end
+
+local function onPostRenderView(view)
+	local ok, err = pcall(onPostRenderViewInner, view)
+	if not ok then
+		reportError("PostRenderView", err)
+	end
 end
 
 local function onUnload()
@@ -1830,9 +1821,6 @@ callbacks.Register("Draw", "ArtilleryDraw", onDraw)
 
 callbacks.Unregister("PostRenderView", "ProjCamStoreView")
 callbacks.Register("PostRenderView", "ProjCamStoreView", onPostRenderView)
-
-callbacks.Unregister("DoPostScreenSpaceEffects", "ProjCamRender")
-callbacks.Register("DoPostScreenSpaceEffects", "ProjCamRender", onDoPostScreenSpaceEffects)
 
 callbacks.Unregister("Unload", "ArtilleryUnload")
 callbacks.Register("Unload", "ArtilleryUnload", onUnload)
