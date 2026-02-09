@@ -210,6 +210,39 @@ local function projectToCamera(worldPos)
 	return sx, sy
 end
 
+local function drawImpactInCamera()
+	local traj = State.trajectory
+	if not traj.isValid or not traj.impactPos then
+		return
+	end
+
+	local visCfg = Config.visual
+	local ix, iy = projectToCamera(traj.impactPos)
+	if not ix then
+		return
+	end
+
+	local r = visCfg.polygon.size * 0.5
+	setColor(visCfg.polygon.r, visCfg.polygon.g, visCfg.polygon.b, 220)
+	drawLine(math.floor(ix - r), math.floor(iy), math.floor(ix + r), math.floor(iy))
+	drawLine(math.floor(ix), math.floor(iy - r), math.floor(ix), math.floor(iy + r))
+
+	if visCfg.polygon.enabled then
+		local segments = visCfg.polygon.segments
+		local angStep = (math.pi * 2) / segments
+		local lastX, lastY = nil, nil
+		for i = 0, segments do
+			local ang = i * angStep
+			local px = traj.impactPos + Vector3(math.cos(ang) * r, math.sin(ang) * r, 0)
+			local sx, sy = projectToCamera(px)
+			if sx and lastX then
+				drawLine(math.floor(lastX), math.floor(lastY), math.floor(sx), math.floor(sy))
+			end
+			lastX, lastY = sx, sy
+		end
+	end
+end
+
 function Camera.drawCameraTrajectory()
 	local traj = State.trajectory
 	if not traj.isValid or #traj.positions < 2 then
@@ -318,6 +351,8 @@ function Camera.drawImpactPolygonInCamera(plane, origin)
 			last = new
 		end
 	end
+
+	drawImpactInCamera()
 end
 
 function Camera.drawWindow()

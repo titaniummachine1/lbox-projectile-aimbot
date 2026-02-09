@@ -5,6 +5,12 @@ local Entity = require("entity")
 
 local clamp = Utils.clamp
 local DEFAULT_GRAVITY = Config.physics.default_gravity
+local DEFAULT_BASE_SPEED = Config.physics.sticky_base_speed
+local DEFAULT_MAX_SPEED = Config.physics.sticky_max_speed
+local DEFAULT_UPWARD_VEL = Config.physics.sticky_upward_vel
+
+local warnedSpeedFallback = {}
+local warnedGravityFallback = {}
 
 local Bombard = {}
 
@@ -279,6 +285,17 @@ function Bombard.execute(cmd)
 	local _, baseSpeed, fUpwardVelocity, _, fGravityRaw =
 		Entity.GetProjectileInformation(pWeapon, ctx.isDucking, ctx.itemCase, ctx.itemDefIndex, ctx.weaponID, pLocal, 0)
 
+	if not baseSpeed or baseSpeed <= 0 then
+		local warnKey = ctx.weaponID or "unknown"
+		if not warnedSpeedFallback[warnKey] then
+			print("[ArtilleryAiming] projectile speed missing; using defaults for weapon " .. tostring(warnKey))
+			warnedSpeedFallback[warnKey] = true
+		end
+		baseSpeed = DEFAULT_BASE_SPEED
+		fUpwardVelocity = DEFAULT_UPWARD_VEL
+		fGravityRaw = DEFAULT_GRAVITY
+	end
+
 	local maxSpeed = baseSpeed
 	if ctx.hasCharge and ctx.chargeMaxTime > 0 then
 		local _, fullChargeSpeed = Entity.GetProjectileInformation(
@@ -301,6 +318,11 @@ function Bombard.execute(cmd)
 		gravity = fGravityRaw
 	else
 		gravity = DEFAULT_GRAVITY
+		local warnKey = ctx.weaponID or "unknown"
+		if not warnedGravityFallback[warnKey] then
+			print("[ArtilleryAiming] gravity missing; using default for weapon " .. tostring(warnKey))
+			warnedGravityFallback[warnKey] = true
+		end
 	end
 
 	local dx = st.lockedDistance

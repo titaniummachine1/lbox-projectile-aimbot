@@ -106,6 +106,11 @@ Entity.ItemDefinitions = {
 
 local clamp = Utils.clamp
 
+local DEFAULT_BASE_SPEED = Config.physics.sticky_base_speed
+local DEFAULT_MAX_SPEED = Config.physics.sticky_max_speed
+local DEFAULT_UPWARD_VEL = Config.physics.sticky_upward_vel
+local DEFAULT_GRAVITY = Config.physics.sticky_gravity
+
 function Entity.GetProjectileInformation(pWeapon, bDucking, iCase, iDefIndex, iWepID, pLocal, chargeOverride)
 	local chargeTime = chargeOverride or pWeapon:GetPropFloat("m_flChargeBeginTime") or 0
 
@@ -174,6 +179,9 @@ function Entity.GetProjectileInformation(pWeapon, bDucking, iCase, iDefIndex, iW
 	elseif iCase == 12 then
 		return Vector3(23.5, 8, -3), 3000, 300, collisionMaxs[3], 900, 1.3
 	end
+
+	-- Fallback: generic sticky-like values to avoid nils breaking callers
+	return offsets[1], DEFAULT_BASE_SPEED, DEFAULT_UPWARD_VEL, collisionMaxs[3], DEFAULT_GRAVITY, nil
 end
 
 function Entity.isProjectileWeapon()
