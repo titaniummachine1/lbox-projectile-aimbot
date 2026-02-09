@@ -23,6 +23,7 @@ end
 local function onCreateMoveInner(cmd)
 	Bombard.handleInput(cmd)
 	Bombard.execute(cmd)
+	Simulation.run(cmd)
 
 	if Camera.isActive() then
 		Camera.handleInput()
@@ -47,9 +48,6 @@ local function onDrawInner()
 	if not Entity.isProjectileWeapon() then
 		return
 	end
-
-	-- Only run simulation in draw callback, never in camera-related callbacks
-	Simulation.run()
 
 	Visuals.drawTrajectory()
 

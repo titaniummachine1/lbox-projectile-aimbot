@@ -137,18 +137,32 @@ end
 
 function Camera.renderView()
 	if #State.camera.storedPositions < 2 then
+		client.ChatPrintf("\x07FF0000Camera: Not enough positions")
 		return
 	end
 	if not State.camera.texture then
+		client.ChatPrintf("\x07FF0000Camera: No texture")
 		return
 	end
 
 	local ctx = client.GetPlayerView()
 	assert(ctx, "Camera.renderView: client.GetPlayerView() returned nil")
 
+	-- Modify the view for the camera
 	ctx.origin = State.camera.smoothedPos
 	ctx.angles = State.camera.smoothedAngles
 	ctx.fov = Config.camera.fov
+
+	-- Set viewport to match camera texture size
+	ctx.x = 0
+	ctx.y = 0
+	ctx.width = Config.camera.width
+	ctx.height = Config.camera.height
+
+	-- Store THIS view for WorldToScreen calls
+	State.camera.lastView = ctx
+
+	client.ChatPrintf("\x0700FF00Camera: Rendering at " .. tostring(ctx.origin))
 
 	render.Push3DView(ctx, 0x37, State.camera.texture)
 	render.ViewDrawScene(true, true, ctx)
@@ -183,64 +197,24 @@ function Camera.drawTexture()
 end
 
 local function projectToCamera(worldPos)
-	local cam = State.camera
-	local cfg = Config.camera
-	local delta = worldPos - cam.smoothedPos
-	local fwd = cam.smoothedAngles:Forward()
-	local rt = cam.smoothedAngles:Right()
-	local up = cam.smoothedAngles:Up()
-
-	local z = delta.x * fwd.x + delta.y * fwd.y + delta.z * fwd.z
-	if z < 1 then
+	local view = State.camera.lastView
+	if not view then
 		return nil
 	end
 
-	local xd = delta.x * rt.x + delta.y * rt.y + delta.z * rt.z
-	local yd = delta.x * up.x + delta.y * up.y + delta.z * up.z
-
-	local halfFovTan = math.tan(math.rad(cfg.fov) * 0.5)
-	local aspect = cfg.width / cfg.height
-
-	local sx = cfg.x + cfg.width * 0.5 + (xd / (z * halfFovTan * aspect)) * cfg.width * 0.5
-	local sy = cfg.y + cfg.height * 0.5 - (yd / (z * halfFovTan)) * cfg.height * 0.5
-
-	if sx < cfg.x or sx > cfg.x + cfg.width or sy < cfg.y or sy > cfg.y + cfg.height then
+	-- client.WorldToScreen accepts a ViewSetup as second parameter!
+	local screen = client.WorldToScreen(worldPos, view)
+	if not screen then
 		return nil
 	end
-	return sx, sy
-end
 
-local function drawImpactInCamera()
-	local traj = State.trajectory
-	if not traj.isValid or not traj.impactPos then
-		return
+	local sx, sy = screen[1], screen[2]
+	if not sx or not sy then
+		return nil
 	end
 
-	local visCfg = Config.visual
-	local ix, iy = projectToCamera(traj.impactPos)
-	if not ix then
-		return
-	end
-
-	local r = visCfg.polygon.size * 0.5
-	setColor(visCfg.polygon.r, visCfg.polygon.g, visCfg.polygon.b, 220)
-	drawLine(math.floor(ix - r), math.floor(iy), math.floor(ix + r), math.floor(iy))
-	drawLine(math.floor(ix), math.floor(iy - r), math.floor(ix), math.floor(iy + r))
-
-	if visCfg.polygon.enabled then
-		local segments = visCfg.polygon.segments
-		local angStep = (math.pi * 2) / segments
-		local lastX, lastY = nil, nil
-		for i = 0, segments do
-			local ang = i * angStep
-			local px = traj.impactPos + Vector3(math.cos(ang) * r, math.sin(ang) * r, 0)
-			local sx, sy = projectToCamera(px)
-			if sx and lastX then
-				drawLine(math.floor(lastX), math.floor(lastY), math.floor(sx), math.floor(sy))
-			end
-			lastX, lastY = sx, sy
-		end
-	end
+	-- Convert from camera texture coordinates to screen coordinates
+	return Config.camera.x + sx, Config.camera.y + sy
 end
 
 function Camera.drawCameraTrajectory()
@@ -251,6 +225,8 @@ function Camera.drawCameraTrajectory()
 
 	local cfg = Config.camera
 	local visCfg = Config.visual
+	assert(visCfg.line, "drawCameraTrajectory: visCfg.line is nil")
+	assert(visCfg.flags, "drawCameraTrajectory: visCfg.flags is nil")
 
 	local lastSx, lastSy = nil, nil
 	for i = #traj.positions, 1, -1 do
@@ -266,6 +242,7 @@ function Camera.drawCameraTrajectory()
 				local fx, fy = projectToCamera(flagPos)
 				if fx then
 					setColor(visCfg.flags.r, visCfg.flags.g, visCfg.flags.b, visCfg.flags.a)
+
 					drawLine(math.floor(fx), math.floor(fy), math.floor(sx), math.floor(sy))
 				end
 			end
@@ -351,8 +328,6 @@ function Camera.drawImpactPolygonInCamera(plane, origin)
 			last = new
 		end
 	end
-
-	drawImpactInCamera()
 end
 
 function Camera.drawWindow()
@@ -401,15 +376,14 @@ function Camera.drawWindow()
 end
 
 function Camera.onPostRenderView(view)
-	if view then
-		State.camera.lastView = view
-	end
 	if not Camera.isActive() then
 		return
 	end
+
 	if not initMaterials() then
 		return
 	end
+
 	Camera.renderView()
 end
 

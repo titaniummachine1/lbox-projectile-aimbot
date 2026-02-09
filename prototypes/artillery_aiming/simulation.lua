@@ -64,6 +64,16 @@ function Simulation.run(cmd)
 	local vStartAngle = cmd and EulerAngles(cmd.viewangles.x, cmd.viewangles.y, cmd.viewangles.z)
 		or engine.GetViewAngles()
 
+	-- When camera is active, use the original player angles from the first cached position
+	-- to prevent trajectory changes when camera view angles differ from player view angles
+	if Camera.isActive() and #State.camera.storedPositions > 0 then
+		-- Use the real player's angles, not the camera's angles
+		local eyeAngles = entities.GetLocalPlayer():GetPropVector("localdata", "m_angEyeAngles[0]")
+		if eyeAngles then
+			vStartAngle = EulerAngles(eyeAngles.x, eyeAngles.y, eyeAngles.z)
+		end
+	end
+
 	local results = traceHull(
 		vStartPosition,
 		vStartPosition
