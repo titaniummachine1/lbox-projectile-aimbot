@@ -13,6 +13,7 @@ local Simulation = {}
 function Simulation.run(cmd)
 	local traj = State.trajectory
 
+	-- Always run simulation to get current trajectory
 	traj.positions = {}
 	traj.velocities = {}
 	traj.impactPos = nil
@@ -22,39 +23,6 @@ function Simulation.run(cmd)
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsValid() or pLocal:InCond(7) or not pLocal:IsAlive() then
 		return
-	end
-
-	-- When camera is active, use the original player position from stored positions
-	-- to prevent trajectory bending when camera scrolls through path
-	if Camera.isActive() and #State.camera.storedPositions > 0 then
-		local originalPos = State.camera.storedPositions[1]
-		if originalPos then
-			-- Create a temporary entity-like object with the original position
-			pLocal = {
-				GetPropEntity = function(self, propName)
-					local realWeapon = entities.GetLocalPlayer():GetPropEntity(propName)
-					return realWeapon
-				end,
-				IsValid = function(self)
-					return true
-				end,
-				InCond = function(self, cond)
-					return false
-				end,
-				IsAlive = function(self)
-					return true
-				end,
-				GetTeamNumber = function(self)
-					return entities.GetLocalPlayer():GetTeamNumber()
-				end,
-				GetAbsOrigin = function(self)
-					return originalPos
-				end,
-				GetEyeAngles = function(self)
-					return entities.GetLocalPlayer():GetEyeAngles()
-				end,
-			}
-		end
 	end
 
 	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
@@ -95,6 +63,13 @@ function Simulation.run(cmd)
 	local vStartPosition = pLocal:GetAbsOrigin() + pLocal:GetPropVector("localdata", "m_vecViewOffset[0]")
 	local vStartAngle = cmd and EulerAngles(cmd.viewangles.x, cmd.viewangles.y, cmd.viewangles.z)
 		or engine.GetViewAngles()
+
+	-- When camera is active, use the original player angles from the first cached position
+	-- to prevent trajectory changes when camera view angles differ from player view angles
+	if Camera.isActive() and #State.camera.storedPositions > 0 then
+		-- Use the real player's angles, not the camera's angles
+		vStartAngle = entities.GetLocalPlayer():GetEyeAngles()
+	end
 
 	local results = traceHull(
 		vStartPosition,
