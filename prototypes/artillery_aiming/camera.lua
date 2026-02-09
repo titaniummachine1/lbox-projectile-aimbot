@@ -9,6 +9,8 @@ local getScreenSize = draw.GetScreenSize
 
 local Camera = {}
 
+local g_iPolygonTexture = draw.CreateTextureRGBA("\xff\xff\xff" .. string.char(Config.visual.polygon.a), 1, 1)
+
 local projCamFont = draw.CreateFont("Tahoma", 12, 800, FONTFLAG_OUTLINE)
 
 local function initMaterials()
@@ -296,6 +298,18 @@ function Camera.drawImpactPolygonInCamera(plane, origin)
 	end
 
 	setColor(Config.visual.polygon.r, Config.visual.polygon.g, Config.visual.polygon.b, 255)
+	do
+		local cords, reverse_cords = {}, {}
+		local sizeof = #positions
+		local sum = 0
+		for i, pos in pairs(positions) do
+			local convertedTbl = { pos[1], pos[2], 0, 0 }
+			cords[i], reverse_cords[sizeof - i + 1] = convertedTbl, convertedTbl
+			sum = sum + Utils.cross2D(pos, positions[(i % sizeof) + 1], positions[1])
+		end
+		draw.TexturedPolygon(g_iPolygonTexture, (sum < 0) and reverse_cords or cords, true)
+	end
+
 	do
 		local last = positions[#positions]
 		for i = 1, #positions do
