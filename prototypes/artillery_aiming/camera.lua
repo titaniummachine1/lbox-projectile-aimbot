@@ -137,11 +137,9 @@ end
 
 function Camera.renderView()
 	if #State.camera.storedPositions < 2 then
-		client.ChatPrintf("\x07FF0000Camera: Not enough positions")
 		return
 	end
 	if not State.camera.texture then
-		client.ChatPrintf("\x07FF0000Camera: No texture")
 		return
 	end
 
@@ -161,8 +159,6 @@ function Camera.renderView()
 
 	-- Store THIS view for WorldToScreen calls
 	State.camera.lastView = ctx
-
-	client.ChatPrintf("\x0700FF00Camera: Rendering at " .. tostring(ctx.origin))
 
 	render.Push3DView(ctx, 0x37, State.camera.texture)
 	render.ViewDrawScene(true, true, ctx)
