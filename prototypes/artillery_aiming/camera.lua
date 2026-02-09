@@ -210,7 +210,16 @@ local function projectToCamera(worldPos)
 	end
 
 	-- Convert from camera texture coordinates to screen coordinates
-	return Config.camera.x + sx, Config.camera.y + sy
+	sx = Config.camera.x + sx
+	sy = Config.camera.y + sy
+
+	-- Check if within camera window bounds
+	local cfg = Config.camera
+	if sx < cfg.x or sx > cfg.x + cfg.width or sy < cfg.y or sy > cfg.y + cfg.height then
+		return nil
+	end
+
+	return sx, sy
 end
 
 function Camera.drawCameraTrajectory()
