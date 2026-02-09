@@ -64,6 +64,7 @@ Config.bombard = {
 
 Config.physics = {
 	default_gravity = 800,
+	sticky_gravity = 800,
 }
 
 Config.simulation = {

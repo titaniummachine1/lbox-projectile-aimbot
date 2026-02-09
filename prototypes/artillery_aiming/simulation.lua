@@ -68,7 +68,10 @@ function Simulation.run(cmd)
 	-- to prevent trajectory changes when camera view angles differ from player view angles
 	if Camera.isActive() and #State.camera.storedPositions > 0 then
 		-- Use the real player's angles, not the camera's angles
-		vStartAngle = entities.GetLocalPlayer():GetEyeAngles()
+		local eyeAngles = entities.GetLocalPlayer():GetPropVector("localdata", "m_angEyeAngles[0]")
+		if eyeAngles then
+			vStartAngle = EulerAngles(eyeAngles.x, eyeAngles.y, eyeAngles.z)
+		end
 	end
 
 	local results = traceHull(
