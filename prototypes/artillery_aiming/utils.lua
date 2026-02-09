@@ -1,13 +1,11 @@
 local Utils = {}
 
+local vectorDivide = vector.Divide
+local vectorLength = vector.Length
+local vectorDistance = vector.Distance
+
 function Utils.clamp(value, minVal, maxVal)
-	if value < minVal then
-		return minVal
-	end
-	if value > maxVal then
-		return maxVal
-	end
-	return value
+	return math.max(minVal, math.min(maxVal, value))
 end
 
 function Utils.cross2D(a, b, c)
@@ -23,8 +21,8 @@ function Utils.lerpAngle(a, b, t)
 	return a + diff * t
 end
 
-function Utils.lerpVector(a, b, t)
-	return Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t)
+function Utils.lerpVector(startVector, endVector, interpolationFactor)
+	return startVector + (endVector - startVector) * interpolationFactor
 end
 
 function Utils.velocityToAngles(vel)
@@ -37,22 +35,12 @@ function Utils.velocityToAngles(vel)
 	return EulerAngles(pitch, yaw, 0)
 end
 
-function Utils.horizontalDistance(a, b)
-	local dx = a.x - b.x
-	local dy = a.y - b.y
-	return math.sqrt(dx * dx + dy * dy)
-end
-
 function Utils.surfaceFacesDown(plane, threshold)
 	return plane.z < -threshold
 end
 
 function Utils.normalize(vec)
-	local len = vec:Length()
-	if len < 0.001 then
-		return vec
-	end
-	return vec / len
+	return vectorDivide(vec, vectorLength(vec))
 end
 
 function Utils.dot(a, b)
@@ -78,5 +66,11 @@ end
 function Utils.anglesFromVector(vec)
 	return vec:Angles()
 end
+
+-- Test lerpVector on load
+local start = Vector3(0, 0, 0)
+local finish = Vector3(100, 200, 300)
+local result = Utils.lerpVector(start, finish, 0.5)
+print("lerpVector test:", result.x, result.y, result.z)
 
 return Utils

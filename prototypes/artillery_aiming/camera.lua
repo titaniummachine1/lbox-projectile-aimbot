@@ -238,13 +238,70 @@ function Camera.drawCameraTrajectory()
 		lastSx, lastSy = sx, sy
 	end
 
-	if traj.impactPos then
-		local ix, iy = projectToCamera(traj.impactPos)
-		if ix then
-			setColor(visCfg.polygon.r, visCfg.polygon.g, visCfg.polygon.b, 200)
-			local r = 4
-			drawLine(math.floor(ix - r), math.floor(iy), math.floor(ix + r), math.floor(iy))
-			drawLine(math.floor(ix), math.floor(iy - r), math.floor(ix), math.floor(iy + r))
+	if traj.impactPos and traj.impactPlane then
+		Camera.drawImpactPolygonInCamera(traj.impactPlane, traj.impactPos)
+	end
+end
+
+function Camera.drawImpactPolygonInCamera(plane, origin)
+	if not Config.visual.polygon.enabled then
+		return
+	end
+
+	local iSegments = Config.visual.polygon.segments
+	local fSegmentAngleOffset = math.pi / iSegments
+	local fSegmentAngle = fSegmentAngleOffset * 2
+	local radius = Config.visual.polygon.size
+	local positions = {}
+
+	if math.abs(plane.z) >= 0.99 then
+		for i = 1, iSegments do
+			local ang = i * fSegmentAngle + fSegmentAngleOffset
+			local worldPos = origin + Vector3(radius * math.cos(ang), radius * math.sin(ang), 0)
+			local sx, sy = projectToCamera(worldPos)
+			if not sx then
+				return
+			end
+			positions[i] = { sx, sy }
+		end
+	else
+		local right = Vector3(-plane.y, plane.x, 0)
+		local up = Vector3(plane.z * right.y, -plane.z * right.x, (plane.y * right.x) - (plane.x * right.y))
+		radius = radius / math.cos(math.asin(plane.z))
+		for i = 1, iSegments do
+			local ang = i * fSegmentAngle + fSegmentAngleOffset
+			local worldPos = origin + (right * (radius * math.cos(ang))) + (up * (radius * math.sin(ang)))
+			local sx, sy = projectToCamera(worldPos)
+			if not sx then
+				return
+			end
+			positions[i] = { sx, sy }
+		end
+	end
+
+	if Config.visual.outline.polygon then
+		setColor(Config.visual.outline.r, Config.visual.outline.g, Config.visual.outline.b, Config.visual.outline.a)
+		local last = positions[#positions]
+		for i = 1, #positions do
+			local new = positions[i]
+			if math.abs(new[1] - last[1]) > math.abs(new[2] - last[2]) then
+				drawLine(math.floor(last[1]), math.floor(last[2] + 1), math.floor(new[1]), math.floor(new[2] + 1))
+				drawLine(math.floor(last[1]), math.floor(last[2] - 1), math.floor(new[1]), math.floor(new[2] - 1))
+			else
+				drawLine(math.floor(last[1] + 1), math.floor(last[2]), math.floor(new[1] + 1), math.floor(new[2]))
+				drawLine(math.floor(last[1] - 1), math.floor(last[2]), math.floor(new[1] - 1), math.floor(new[2]))
+			end
+			last = new
+		end
+	end
+
+	setColor(Config.visual.polygon.r, Config.visual.polygon.g, Config.visual.polygon.b, 255)
+	do
+		local last = positions[#positions]
+		for i = 1, #positions do
+			local new = positions[i]
+			drawLine(math.floor(last[1]), math.floor(last[2]), math.floor(new[1]), math.floor(new[2]))
+			last = new
 		end
 	end
 end
