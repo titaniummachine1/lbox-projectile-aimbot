@@ -2,6 +2,7 @@ local Config = require("config")
 local State = require("state")
 local Entity = require("entity")
 local PhysicsEnvModule = require("physics_env")
+local Camera = require("camera")
 
 local traceHull = engine.TraceHull
 local traceLine = engine.TraceLine
@@ -21,6 +22,39 @@ function Simulation.run(cmd)
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsValid() or pLocal:InCond(7) or not pLocal:IsAlive() then
 		return
+	end
+
+	-- When camera is active, use the original player position from stored positions
+	-- to prevent trajectory bending when camera scrolls through path
+	if Camera.isActive() and #State.camera.storedPositions > 0 then
+		local originalPos = State.camera.storedPositions[1]
+		if originalPos then
+			-- Create a temporary entity-like object with the original position
+			pLocal = {
+				GetPropEntity = function(self, propName)
+					local realWeapon = entities.GetLocalPlayer():GetPropEntity(propName)
+					return realWeapon
+				end,
+				IsValid = function(self)
+					return true
+				end,
+				InCond = function(self, cond)
+					return false
+				end,
+				IsAlive = function(self)
+					return true
+				end,
+				GetTeamNumber = function(self)
+					return entities.GetLocalPlayer():GetTeamNumber()
+				end,
+				GetAbsOrigin = function(self)
+					return originalPos
+				end,
+				GetEyeAngles = function(self)
+					return entities.GetLocalPlayer():GetEyeAngles()
+				end,
+			}
+		end
 	end
 
 	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
