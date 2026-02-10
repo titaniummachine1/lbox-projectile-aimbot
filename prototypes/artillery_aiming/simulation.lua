@@ -48,6 +48,7 @@ function Simulation.run(cmd)
 			chargeMaxTime = 4.0
 		end
 		chargeOverride = State.bombard.chargeLevel * chargeMaxTime
+		print("[DEBUG] Simulation chargeLevel:", State.bombard.chargeLevel, "chargeOverride:", chargeOverride)
 	end
 
 	local vOffset, fForwardVelocity, fUpwardVelocity, vCollisionMax, fGravity, fDrag = Entity.GetProjectileInformation(

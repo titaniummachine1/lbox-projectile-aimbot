@@ -31,7 +31,7 @@ local function onCreateMoveInner(cmd)
 
 	Bombard.handleChargeRelease(cmd)
 
-	-- Run simulation after bombard calculates the correct charge level
+	-- Run simulation after all bombard logic including charge release
 	Simulation.run(cmd)
 end
 
