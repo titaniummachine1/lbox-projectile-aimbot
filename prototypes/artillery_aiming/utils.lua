@@ -70,8 +70,7 @@ end
 local ZeroVector = Vector3(0, 0, 0)
 
 function Utils.TraceHit(Result)
-	--print(Result.plane ~= ZeroVector)
-	return Result.plane ~= ZeroVector
+	return Result.plane ~= ZeroVector and Result.fraction > 0.99
 end
 
 return Utils
