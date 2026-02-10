@@ -99,7 +99,7 @@ Config.computed = {
 Config.recomputeComputed()
 
 Config.IN_ATTACK = 1
-Config.TRACE_MASK = MASK_SHOT_HULL or 100679691
+Config.TRACE_MASK = MASK_SHOT_BRUSHONLY or 100679691
 
 Config.PHYSICS_MODEL_PATHS = {
 	[1] = "models/weapons/w_models/w_stickybomb.mdl",

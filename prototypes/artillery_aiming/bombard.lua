@@ -207,7 +207,7 @@ function Bombard.handleInput(cmd)
 end
 
 function Bombard.lockCurrentAim()
-	if not input.IsButtonPressed(Config.bombard.activate) then
+	if not input.IsButtonPressed(Config.keybinds.activate) then
 		return
 	end
 
