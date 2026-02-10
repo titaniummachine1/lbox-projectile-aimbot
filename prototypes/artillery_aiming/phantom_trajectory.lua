@@ -1,95 +1,104 @@
 local PhantomTrajectory = {}
 local Config = require("config")
 
--- Store the most recent phantom trajectory
+-- Store the most recent phantom trajectory (read-only after creation)
 local phantomTrajectory = nil
 
 -- Called when we shoot a projectile
 function PhantomTrajectory.onProjectileFired(simulationData, fireTime)
-	if not simulationData or not simulationData.positions or #simulationData.positions == 0 then
-		print("[PhantomTrajectory] No simulation data!")
-		return
+	assert(simulationData, "PhantomTrajectory.onProjectileFired: simulationData is nil")
+	assert(simulationData.positions, "PhantomTrajectory.onProjectileFired: positions is nil")
+	assert(#simulationData.positions > 0, "PhantomTrajectory.onProjectileFired: positions is empty")
+
+	-- Create deep copy of simulation data — this data is NEVER mutated after creation
+	local positions = {}
+	local times = {}
+	local velocities = {}
+
+	for i, pos in ipairs(simulationData.positions) do
+		positions[i] = Vector3(pos.x, pos.y, pos.z)
+		times[i] = simulationData.times[i] or (i * (Config.computed.trace_interval or 0.015))
+		if simulationData.velocities and simulationData.velocities[i] then
+			velocities[i] =
+				Vector3(simulationData.velocities[i].x, simulationData.velocities[i].y, simulationData.velocities[i].z)
+		end
 	end
 
-	print("[PhantomTrajectory] Creating phantom with", #simulationData.positions, "points")
+	assert(#positions == #times, "PhantomTrajectory.onProjectileFired: position/time count mismatch")
 
-	-- Create deep copy of simulation data with time stamps
 	phantomTrajectory = {
-		positions = {},
-		velocities = {},
-		times = {}, -- Copy actual time data from simulation
-		lastTime = 0,
-		currentTime = 0,
-		currentPos = nil,
+		positions = positions, -- immutable after creation
+		times = times, -- immutable after creation
+		velocities = velocities, -- immutable after creation
+		pointCount = #positions,
 		isValid = simulationData.isValid,
 		impactPos = simulationData.impactPos,
 		impactPlane = simulationData.impactPlane,
 		flagOffset = simulationData.flagOffset,
 		fireTime = fireTime,
 	}
-
-	-- Copy positions, velocities, and times from simulation
-	for i, pos in ipairs(simulationData.positions) do
-		phantomTrajectory.positions[i] = Vector3(pos.x, pos.y, pos.z)
-		phantomTrajectory.times[i] = simulationData.times[i] or (i * (Config.computed.trace_interval or 0.015))
-		if simulationData.velocities[i] then
-			phantomTrajectory.velocities[i] =
-				Vector3(simulationData.velocities[i].x, simulationData.velocities[i].y, simulationData.velocities[i].z)
-		end
-	end
-
-	print("[PhantomTrajectory] Created phantom trajectory with", #phantomTrajectory.positions, "points")
 end
 
--- Update phantom trajectory (remove points based on actual time stamps with interpolation)
+-- Update: only check if trajectory expired. NEVER mutate positions/times.
 function PhantomTrajectory.update()
-	if not phantomTrajectory or not phantomTrajectory.positions or #phantomTrajectory.positions == 0 then
+	if not phantomTrajectory then
 		return
 	end
 
-	if not phantomTrajectory.times or #phantomTrajectory.times == 0 then
-		phantomTrajectory = nil
-		return
-	end
+	local timeSinceFire = globals.CurTime() - phantomTrajectory.fireTime
+	local lastTime = phantomTrajectory.times[phantomTrajectory.pointCount]
 
-	phantomTrajectory.elapsed = globals.CurTime() - phantomTrajectory.fireTime
-	local timeSinceFire = phantomTrajectory.elapsed
-
-	-- Remove all points already passed and track last passed time (epsilon to avoid trailing)
-	while #phantomTrajectory.times > 0 do
-		local nextTime = phantomTrajectory.times[1]
-		if not nextTime or nextTime > timeSinceFire + 0.0001 then
-			break
-		end
-		phantomTrajectory.lastTime = phantomTrajectory.times[1]
-		table.remove(phantomTrajectory.positions, 1)
-		table.remove(phantomTrajectory.times, 1)
-		if phantomTrajectory.velocities and #phantomTrajectory.velocities > 0 then
-			table.remove(phantomTrajectory.velocities, 1)
-		end
-	end
-
-	-- Calculate interpolation for current projectile position
-	if #phantomTrajectory.positions >= 2 then
-		local prevTime = phantomTrajectory.lastTime or 0
-		local nextTime = phantomTrajectory.times[1] or prevTime
-		local timeBetween = nextTime - prevTime
-		if timeBetween > 0 then
-			phantomTrajectory.interpolationProgress = (timeSinceFire - prevTime) / timeBetween
-			phantomTrajectory.interpolationProgress = math.max(0, math.min(1, phantomTrajectory.interpolationProgress))
-		else
-			phantomTrajectory.interpolationProgress = 0
-		end
-	elseif #phantomTrajectory.positions == 1 then
-		phantomTrajectory.interpolationProgress = 1
-	else
-		phantomTrajectory.interpolationProgress = 0
-	end
-
-	-- Clear trajectory if no points left
-	if #phantomTrajectory.positions == 0 then
+	-- Only expire trajectory when projectile is past the LAST point
+	if timeSinceFire > lastTime then
 		phantomTrajectory = nil
 	end
+end
+
+-- Find interpolated position along trajectory for given elapsed time.
+-- Returns: interpolatedPos, segmentIndex (1-based index of segment START point)
+-- segmentIndex is the index i such that times[i] <= timeSinceFire <= times[i+1]
+local function findInterpolatedPosition(traj, timeSinceFire)
+	local positions = traj.positions
+	local times = traj.times
+	local count = traj.pointCount
+
+	-- Before the first point — clamp to start
+	if timeSinceFire <= times[1] then
+		return positions[1], 1
+	end
+
+	-- Past the last point — clamp to end
+	if timeSinceFire >= times[count] then
+		return positions[count], count
+	end
+
+	-- Find segment: times[i] <= timeSinceFire <= times[i+1]
+	for i = 1, count - 1 do
+		local t0 = times[i]
+		local t1 = times[i + 1]
+
+		if timeSinceFire >= t0 and timeSinceFire <= t1 then
+			local segmentDuration = t1 - t0
+			if segmentDuration <= 0 then
+				return positions[i], i
+			end
+
+			local progress = (timeSinceFire - t0) / segmentDuration
+			-- progress is already in [0, 1] since timeSinceFire is in [t0, t1]
+
+			local p0 = positions[i]
+			local p1 = positions[i + 1]
+			local interpPos = Vector3(
+				p0.x + (p1.x - p0.x) * progress,
+				p0.y + (p1.y - p0.y) * progress,
+				p0.z + (p1.z - p0.z) * progress
+			)
+			return interpPos, i
+		end
+	end
+
+	-- Should never reach here, but clamp to last as safety
+	return positions[count], count
 end
 
 -- Draw phantom trajectory
@@ -98,97 +107,55 @@ function PhantomTrajectory.draw()
 		return
 	end
 
-	if not phantomTrajectory or not phantomTrajectory.positions or #phantomTrajectory.positions == 0 then
+	if not phantomTrajectory then
 		return
 	end
 
-	-- Find current position along trajectory without modifying the trajectory points
-	local currentPos = nil
-	local timeSinceFire = globals.CurTime() - phantomTrajectory.fireTime
-	local currentSegmentIndex = nil
+	local traj = phantomTrajectory
+	local timeSinceFire = globals.CurTime() - traj.fireTime
 
-	-- Find the correct segment and interpolate position
-	for i = 1, #phantomTrajectory.times - 1 do
-		local segmentStartTime = phantomTrajectory.times[i]
-		local segmentEndTime = phantomTrajectory.times[i + 1]
+	-- Find interpolated yellow point position and which segment it's in
+	local currentPos, currentSegmentIdx = findInterpolatedPosition(traj, timeSinceFire)
+	assert(currentPos, "PhantomTrajectory.draw: interpolation returned nil position")
+	assert(currentSegmentIdx, "PhantomTrajectory.draw: interpolation returned nil segment index")
 
-		if
-			segmentStartTime
-			and segmentEndTime
-			and timeSinceFire >= segmentStartTime
-			and timeSinceFire <= segmentEndTime
-		then
-			local segmentDuration = segmentEndTime - segmentStartTime
-			local timeInSegment = timeSinceFire - segmentStartTime
-			local progress = (segmentDuration > 0) and (timeInSegment / segmentDuration) or 0
-			progress = math.max(0, math.min(1, progress))
-
-			local pos1 = phantomTrajectory.positions[i]
-			local pos2 = phantomTrajectory.positions[i + 1]
-			if pos1 and pos2 then
-				local currentX = pos1.x + (pos2.x - pos1.x) * progress
-				local currentY = pos1.y + (pos2.y - pos1.y) * progress
-				local currentZ = pos1.z + (pos2.z - pos1.z) * progress
-				currentPos = Vector3(currentX, currentY, currentZ)
-				currentSegmentIndex = i
-			end
-			break
-		end
-	end
-
-	-- If we're past the last point, use the last position
-	if not currentPos and #phantomTrajectory.positions > 0 then
-		local lastTime = phantomTrajectory.times[#phantomTrajectory.times]
-		if lastTime and timeSinceFire >= lastTime then
-			currentPos = phantomTrajectory.positions[#phantomTrajectory.positions]
-			currentSegmentIndex = #phantomTrajectory.positions
-		end
-	end
-
-	-- Draw line starting from current segment (remove segments behind yellow point)
+	-- Draw white trajectory line (only segments from currentSegmentIdx forward)
 	local color = Config.visual.line
 	draw.Color(color.r, color.g, color.b, color.a)
 
-	-- Start drawing from current segment to avoid showing segments behind yellow point
-	local startSegment = currentSegmentIndex or 1
-
-	for i = startSegment, #phantomTrajectory.positions - 1 do
-		local p1 = phantomTrajectory.positions[i]
-		local p2 = phantomTrajectory.positions[i + 1]
-
-		if p1 and p2 then
-			-- If this is the current segment with yellow point, draw from yellow point
-			if currentSegmentIndex and i == currentSegmentIndex and currentPos then
-				local s1 = client.WorldToScreen(currentPos)
-				local s2 = client.WorldToScreen(p2)
-				if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
-					draw.Line(s1[1], s1[2], s2[1], s2[2])
-				end
-			-- Otherwise draw normal segment
-			else
-				local s1 = client.WorldToScreen(p1)
-				local s2 = client.WorldToScreen(p2)
-				if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
-					draw.Line(s1[1], s1[2], s2[1], s2[2])
-				end
-			end
+	-- Current segment: draw from yellow point to segment end point
+	-- (this is the segment where currentSegmentIdx <= timeSinceFire <= currentSegmentIdx+1)
+	if currentSegmentIdx < traj.pointCount then
+		local segEnd = traj.positions[currentSegmentIdx + 1]
+		local s1 = client.WorldToScreen(currentPos)
+		local s2 = client.WorldToScreen(segEnd)
+		if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
+			draw.Line(s1[1], s1[2], s2[1], s2[2])
 		end
 	end
 
-	-- Draw interpolated projectile position indicator
-	if currentPos then
-		local screen = client.WorldToScreen(currentPos)
-		if screen and screen[1] and screen[2] then
-			draw.Color(255, 255, 0, 255) -- Yellow color
-			draw.FilledRect(screen[1] - 4, screen[2] - 4, screen[1] + 4, screen[2] + 4)
+	-- Future segments: draw normally (from currentSegmentIdx+1 onward)
+	for i = currentSegmentIdx + 1, traj.pointCount - 1 do
+		local p1 = traj.positions[i]
+		local p2 = traj.positions[i + 1]
+		local s1 = client.WorldToScreen(p1)
+		local s2 = client.WorldToScreen(p2)
+		if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
+			draw.Line(s1[1], s1[2], s2[1], s2[2])
 		end
+	end
+
+	-- Draw yellow interpolated projectile indicator
+	local screen = client.WorldToScreen(currentPos)
+	if screen and screen[1] and screen[2] then
+		draw.Color(255, 255, 0, 255)
+		draw.FilledRect(screen[1] - 4, screen[2] - 4, screen[1] + 4, screen[2] + 4)
 	end
 end
 
 -- Clear phantom trajectory
 function PhantomTrajectory.clear()
 	phantomTrajectory = nil
-	print("[PhantomTrajectory] Cleared phantom trajectory")
 end
 
 return PhantomTrajectory

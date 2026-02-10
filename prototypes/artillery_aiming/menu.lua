@@ -79,10 +79,6 @@ local function drawVisualsTab()
 	Config.visual.polygon.enabled = TimMenu.Checkbox("Impact Polygon", Config.visual.polygon.enabled)
 	TimMenu.NextLine()
 
-	Config.visual.phantom_trajectory.enabled =
-	TimMenu.Checkbox("Phantom Trajectory", Config.visual.phantom_trajectory.enabled)
-	TimMenu.NextLine()
-
 	Config.visual.outline.line_and_flags = TimMenu.Checkbox("Line Outline", Config.visual.outline.line_and_flags)
 	TimMenu.NextLine()
 
@@ -172,6 +168,84 @@ local function drawVisualsTab()
 	TimMenu.EndSector()
 end
 
+local function drawLiveProjectilesTab()
+	local cfg = Config.visual.live_projectiles
+
+	TimMenu.BeginSector("Live Projectile Tracking")
+
+	cfg.enabled = TimMenu.Checkbox("Enable Tracking", cfg.enabled)
+	TimMenu.NextLine()
+
+	if cfg.enabled then
+		cfg.max_distance = TimMenu.Slider("Max Distance", cfg.max_distance, 500, 8000, 100)
+		TimMenu.NextLine()
+
+		cfg.revalidate_distance = TimMenu.Slider("Recalc Distance", cfg.revalidate_distance, 10, 200, 5)
+		TimMenu.NextLine()
+
+		cfg.revalidate_angle = TimMenu.Slider("Recalc Angle (deg)", cfg.revalidate_angle, 10, 90, 5)
+	end
+
+	TimMenu.EndSector()
+
+	if cfg.enabled then
+		TimMenu.NextLine()
+
+		TimMenu.BeginSector("Projectile Types")
+
+		cfg.rockets = TimMenu.Checkbox("Rockets", cfg.rockets)
+		TimMenu.NextLine()
+
+		cfg.stickies = TimMenu.Checkbox("Stickies", cfg.stickies)
+		TimMenu.NextLine()
+
+		cfg.pipes = TimMenu.Checkbox("Pipes", cfg.pipes)
+		TimMenu.NextLine()
+
+		cfg.flares = TimMenu.Checkbox("Flares", cfg.flares)
+		TimMenu.NextLine()
+
+		cfg.arrows = TimMenu.Checkbox("Arrows", cfg.arrows)
+		TimMenu.NextLine()
+
+		cfg.energy = TimMenu.Checkbox("Energy Balls", cfg.energy)
+		TimMenu.NextLine()
+
+		cfg.fireballs = TimMenu.Checkbox("Fireballs", cfg.fireballs)
+
+		TimMenu.EndSector()
+
+		TimMenu.NextLine()
+
+		TimMenu.BeginSector("Line Color")
+
+		local lineRGBA = { cfg.line.r, cfg.line.g, cfg.line.b, cfg.line.a }
+		lineRGBA = TimMenu.ColorPicker("Trajectory", lineRGBA)
+		cfg.line.r = lineRGBA[1]
+		cfg.line.g = lineRGBA[2]
+		cfg.line.b = lineRGBA[3]
+		cfg.line.a = lineRGBA[4]
+
+		TimMenu.EndSector()
+
+		TimMenu.NextLine()
+
+		TimMenu.BeginSector("Marker")
+
+		local markerRGBA = { cfg.marker.r, cfg.marker.g, cfg.marker.b, cfg.marker.a }
+		markerRGBA = TimMenu.ColorPicker("Marker", markerRGBA)
+		cfg.marker.r = markerRGBA[1]
+		cfg.marker.g = markerRGBA[2]
+		cfg.marker.b = markerRGBA[3]
+		cfg.marker.a = markerRGBA[4]
+		TimMenu.NextLine()
+
+		cfg.marker_size = TimMenu.Slider("Size", cfg.marker_size, 1, 8, 1)
+
+		TimMenu.EndSector()
+	end
+end
+
 function Menu.draw()
 	if not tryInitMenu() then
 		return
@@ -179,7 +253,7 @@ function Menu.draw()
 
 	TimMenu.Begin("Artillery Aiming", gui.IsMenuOpen())
 	if gui.IsMenuOpen() then
-		local tabs = { "Artillery", "Visuals" }
+		local tabs = { "Artillery", "Weapon Trajectory", "Live Projectiles" }
 		selectedTab = TimMenu.TabControl("ArtilleryTabs", tabs, selectedTab)
 		TimMenu.NextLine()
 
@@ -187,6 +261,8 @@ function Menu.draw()
 			drawArtilleryTab()
 		elseif selectedTab == 2 then
 			drawVisualsTab()
+		elseif selectedTab == 3 then
+			drawLiveProjectilesTab()
 		end
 	end
 end

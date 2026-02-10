@@ -7,12 +7,10 @@ local Visuals = require("visuals")
 local Camera = require("camera")
 local Menu = require("menu")
 local PhysicsEnvModule = require("physics_env")
-local PhantomTrajectory = require("phantom_trajectory")
+local ProjectileTracker = require("projectile_tracker")
 
 local lastErrorTime = 0
 local lastErrorMsg = ""
-local lastWasFiring = false
-local lastFireTime = 0
 
 local function reportError(source, err)
 	local now = os.clock()
@@ -25,8 +23,6 @@ local function reportError(source, err)
 end
 
 local function onCreateMoveInner(cmd)
-	local isFiring = (cmd.buttons & Config.IN_ATTACK) ~= 0
-
 	Bombard.handleInput(cmd)
 	Bombard.execute(cmd)
 
@@ -37,25 +33,7 @@ local function onCreateMoveInner(cmd)
 
 	Bombard.handleChargeRelease(cmd)
 
-	-- Check for fire button release (when projectile actually fires)
-	if Entity.isProjectileWeapon() and State.trajectory and State.trajectory.isValid then
-		if lastWasFiring and not isFiring then
-			local currentTime = globals.CurTime() -- Use engine time, not real time
-			-- Add cooldown to prevent spam (0.1 seconds)
-			if currentTime - lastFireTime > 0.1 then
-				-- We just released the fire button - projectile fired
-				print("[Main] Fire detected! lastWasFiring:", lastWasFiring, "isFiring:", isFiring)
-				PhantomTrajectory.onProjectileFired(State.trajectory, globals.CurTime())
-				lastFireTime = currentTime
-			end
-		end
-	end
-
-	-- Update phantom trajectory (remove points based on elapsed time)
-	PhantomTrajectory.update()
-
-	-- Store current fire state for next frame
-	lastWasFiring = isFiring
+	ProjectileTracker.update()
 end
 
 local function onCreateMove(cmd)
@@ -78,8 +56,7 @@ local function onDrawInner()
 		Visuals.drawTrajectory()
 	end
 
-	-- Draw phantom trajectory independently (if enabled) - no weapon check
-	PhantomTrajectory.draw()
+	ProjectileTracker.draw()
 
 	if Camera.isActive() then
 		Camera.drawTexture()

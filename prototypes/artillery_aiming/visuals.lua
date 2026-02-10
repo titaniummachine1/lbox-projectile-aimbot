@@ -22,7 +22,7 @@ local function drawOutlinedLine(from, to)
 	end
 end
 
-local function drawImpactPolygon(plane, origin)
+function Visuals.drawImpactPolygon(plane, origin)
 	if not Config.visual.polygon.enabled then
 		return
 	end

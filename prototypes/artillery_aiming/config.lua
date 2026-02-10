@@ -25,8 +25,21 @@ Config.visual = {
 		a = 255,
 		size = 5,
 	},
-	phantom_trajectory = {
+	live_projectiles = {
 		enabled = true,
+		line = { r = 255, g = 100, b = 100, a = 200 },
+		marker = { r = 255, g = 50, b = 50, a = 255 },
+		marker_size = 3,
+		max_distance = 4000,
+		rockets = true,
+		stickies = true,
+		pipes = true,
+		flares = true,
+		arrows = true,
+		energy = true,
+		fireballs = true,
+		revalidate_angle = 45,
+		revalidate_distance = 2,
 	},
 	outline = {
 		line_and_flags = true,
