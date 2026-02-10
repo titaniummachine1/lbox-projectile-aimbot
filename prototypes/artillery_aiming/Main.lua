@@ -23,7 +23,6 @@ end
 local function onCreateMoveInner(cmd)
 	Bombard.handleInput(cmd)
 	Bombard.execute(cmd)
-	Simulation.run(cmd)
 
 	if Camera.isActive() then
 		Camera.handleInput()
@@ -31,6 +30,9 @@ local function onCreateMoveInner(cmd)
 	end
 
 	Bombard.handleChargeRelease(cmd)
+
+	-- Run simulation after bombard calculates the correct charge level
+	Simulation.run(cmd)
 end
 
 local function onCreateMove(cmd)
