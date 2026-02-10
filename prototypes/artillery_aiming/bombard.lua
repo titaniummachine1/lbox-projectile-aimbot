@@ -15,22 +15,15 @@ local warnedGravityFallback = {}
 local Bombard = {}
 
 -- Calculate maximum ballistic range for projectile
--- Uses physics: d_max = (v^2 * sin(2θ)) / g for optimal angle (45°)
--- For projectiles with upward velocity component, we need to account for the combined velocity
+-- Uses basic physics: d_max = v^2 / g at optimal 45° angle
 local function calculateMaxRange(forwardSpeed, upwardVel, gravity)
-	-- Total velocity magnitude
+	-- Total velocity magnitude at max charge
 	local totalSpeed = math.sqrt(forwardSpeed * forwardSpeed + upwardVel * upwardVel)
 
-	-- Maximum range occurs at 45° in vacuum, but with upward component we need adjustment
-	-- For projectiles with upward velocity, the effective launch angle is higher
-	-- We use the full velocity magnitude for max range calculation
+	-- Maximum range at 45°: d_max = v^2 / g
 	local maxRange = (totalSpeed * totalSpeed) / gravity
 
-	-- Apply a realistic factor (0.8) to account for:
-	-- - Air resistance (even though Source engine has minimal drag)
-	-- - Terrain obstacles
-	-- - Practical firing angles (can't always use optimal 45° due to terrain)
-	return maxRange * 0.8
+	return maxRange
 end
 
 local function predictImpactZ(speed, pitchDeg, upwardVel, gravity, horizontalDist)
