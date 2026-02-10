@@ -109,7 +109,7 @@ function Visuals.drawTrajectory()
 
 	local num = #traj.positions
 	local lastScreen = nil
-	for i = num, 1, -1 do
+	for i = 1, num do
 		local worldPos = traj.positions[i]
 		local screenPos = worldToScreen(worldPos)
 		local flagScreenPos = worldToScreen(worldPos + traj.flagOffset)
