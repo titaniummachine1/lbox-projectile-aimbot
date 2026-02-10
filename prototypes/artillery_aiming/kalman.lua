@@ -7,21 +7,23 @@ function KalmanFilter:new(q, r, initialVal, initialP)
 		Q = q or 1, -- Process noise covariance
 		R = r or 10, -- Measurement noise covariance
 		x = initialVal or 0, -- Value (state)
-		P = initialP or 100, -- Estimation error covariance
+		P = initialP or 1000, -- Estimation error covariance
 	}, KalmanFilter)
 end
 
-function KalmanFilter:update(measurement)
-	-- Prediction update (Constant value model: x = x)
-	-- Time update: P = P + Q
-	self.P = self.P + self.Q
+function KalmanFilter:predict(u, Q)
+	-- Prediction update: x = x + u, P = P + Q
+	self.x = self.x + (u or 0)
+	self.P = self.P + (Q or self.Q)
+end
 
+function KalmanFilter:update(z, R)
 	-- Measurement update
 	-- K = P / (P + R)
-	local K = self.P / (self.P + self.R)
+	local K = self.P / (self.P + (R or self.R))
 
 	-- x = x + K * (z - x)
-	self.x = self.x + K * (measurement - self.x)
+	self.x = self.x + K * (z - self.x)
 
 	-- P = (1 - K) * P
 	self.P = (1 - K) * self.P
@@ -40,6 +42,12 @@ function VectorKalman:new(q, r, initialVec)
 		ky = KalmanFilter:new(q, r, v.y),
 		kz = KalmanFilter:new(q, r, v.z),
 	}, VectorKalman)
+end
+
+function VectorKalman:predict(vec)
+	self.kx:predict(vec and vec.x)
+	self.ky:predict(vec and vec.y)
+	self.kz:predict(vec and vec.z)
 end
 
 function VectorKalman:update(vec)

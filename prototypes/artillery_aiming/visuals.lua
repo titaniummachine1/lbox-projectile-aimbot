@@ -9,7 +9,7 @@ local getScreenSize = draw.GetScreenSize
 
 local Visuals = {}
 
-local g_iPolygonTexture = draw.CreateTextureRGBA("\xff\xff\xff" .. string.char(Config.visual.polygon.a), 1, 1)
+local g_iPolygonTexture = draw.CreateTextureRGBA("\xff\xff\xff\xff", 1, 1)
 
 local function drawOutlinedLine(from, to)
 	setColor(Config.visual.outline.r, Config.visual.outline.g, Config.visual.outline.b, Config.visual.outline.a)
@@ -22,7 +22,7 @@ local function drawOutlinedLine(from, to)
 	end
 end
 
-function Visuals.drawImpactPolygon(plane, origin, radiusOverride)
+function Visuals.drawImpactPolygon(plane, origin, radiusOverride, colorOverride)
 	if not Config.visual.polygon.enabled then
 		return
 	end
@@ -55,7 +55,11 @@ function Visuals.drawImpactPolygon(plane, origin, radiusOverride)
 	end
 
 	if Config.visual.outline.polygon then
-		setColor(Config.visual.outline.r, Config.visual.outline.g, Config.visual.outline.b, Config.visual.outline.a)
+		if colorOverride then
+			setColor(colorOverride.r, colorOverride.g, colorOverride.b, colorOverride.a or Config.visual.outline.a)
+		else
+			setColor(Config.visual.outline.r, Config.visual.outline.g, Config.visual.outline.b, Config.visual.outline.a)
+		end
 		local last = positions[#positions]
 		for i = 1, #positions do
 			local new = positions[i]
@@ -70,7 +74,11 @@ function Visuals.drawImpactPolygon(plane, origin, radiusOverride)
 		end
 	end
 
-	setColor(Config.visual.polygon.r, Config.visual.polygon.g, Config.visual.polygon.b, 255)
+	if colorOverride then
+		setColor(colorOverride.r, colorOverride.g, colorOverride.b, colorOverride.a or Config.visual.polygon.a)
+	else
+		setColor(Config.visual.polygon.r, Config.visual.polygon.g, Config.visual.polygon.b, Config.visual.polygon.a)
+	end
 	do
 		local cords, reverse_cords = {}, {}
 		local sizeof = #positions
@@ -104,7 +112,7 @@ function Visuals.drawTrajectory()
 	end
 
 	if traj.impactPlane and traj.impactPos then
-		drawImpactPolygon(traj.impactPlane, traj.impactPos)
+		Visuals.drawImpactPolygon(traj.impactPlane, traj.impactPos)
 	end
 
 	local num = #traj.positions

@@ -200,8 +200,8 @@ function ProjectileTracker.update()
 	end
 
 	local curTime = globals.CurTime()
-	local traceInterval = Config.computed.trace_interval or 0.015
-	local traceMask = Config.TRACE_MASK
+	local traceInterval = (Config.computed and Config.computed.trace_interval) or 0.015
+	local traceMask = Config.TRACE_MASK or 0x4600400B -- MASK_SHOT
 	-- Use configured distance or default low value (2-5)
 	local distThreshold = cfg.revalidate_distance or 5
 	local distThresholdSq = distThreshold * distThreshold
@@ -262,13 +262,29 @@ function ProjectileTracker.update()
 
 			-- 1. Update/Init Kalman Filter
 			-- Q=5 (Process Noise - agility), R=100 (Measurement Noise - jitter)
-			-- Tweaked for "super unstable" velocity description
+			local dt = globals.TickInterval()
 			local smoothedVel
+
 			if data then
+				-- Predict with gravity
+				local g = 0
+				if isSticky then
+					g = (Config.physics and Config.physics.sticky_gravity) or 800
+				elseif projDef.gravity then
+					g = projDef.gravity
+				end
+
+				if g ~= 0 then
+					data.kalman:predict(Vector3(0, 0, -g * dt))
+				else
+					data.kalman:predict(nil) -- Just increases uncertainty
+				end
+
 				smoothedVel = data.kalman:update(rawVel)
 			else
 				local kRequest = VectorKalman:new(5, 100, rawVel)
-				smoothedVel = kRequest:update(rawVel)
+				-- Don't predict/update on first frame, trust raw velocity
+				smoothedVel = rawVel
 				data = {
 					kalman = kRequest,
 					positions = {},
@@ -423,7 +439,7 @@ function ProjectileTracker.draw()
 			-- User asked for "splash radius of the weapon".
 			-- We should support size override in drawImpactPolygon.
 			-- For now, default call.
-			Visuals.drawImpactPolygon(data.impactPlane, data.impactPos, data.radius)
+			Visuals.drawImpactPolygon(data.impactPlane, data.impactPos, data.radius, color)
 		end
 	end
 end
