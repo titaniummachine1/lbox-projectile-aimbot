@@ -67,10 +67,8 @@ function Utils.anglesFromVector(vec)
 	return vec:Angles()
 end
 
-local ZeroVector = Vector3(0, 0, 0)
-
 function Utils.TraceHit(Result)
-	return Result.plane ~= ZeroVector and Result.fraction > 0.99
+	return Result.fraction ~= 1
 end
 
 return Utils
