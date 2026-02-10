@@ -102,54 +102,75 @@ function PhantomTrajectory.draw()
 		return
 	end
 
-	-- Calculate exact time since fire for smooth interpolation
-	local timeSinceFire = globals.CurTime() - phantomTrajectory.fireTime
-
-	-- Find which segment we're in based on time
-	local segmentIndex = 1
-	local segmentStartTime = 0
-	while segmentIndex < #phantomTrajectory.times and phantomTrajectory.times[segmentIndex + 1] <= timeSinceFire do
-		segmentIndex = segmentIndex + 1
-		segmentStartTime = phantomTrajectory.times[segmentIndex] or segmentStartTime
-	end
-
-	-- Compute interpolated position within current segment
+	-- Find current position along trajectory without modifying the trajectory points
 	local currentPos = nil
-	if segmentIndex < #phantomTrajectory.positions then
-		local nextTime = phantomTrajectory.times[segmentIndex + 1] or segmentStartTime + 0.015
-		local timeInSegment = timeSinceFire - segmentStartTime
-		local segmentDuration = nextTime - segmentStartTime
-		local progress = (segmentDuration > 0) and (timeInSegment / segmentDuration) or 0
-		progress = math.max(0, math.min(1, progress))
+	local timeSinceFire = globals.CurTime() - phantomTrajectory.fireTime
+	local currentSegmentIndex = nil
 
-		local pos1 = phantomTrajectory.positions[segmentIndex]
-		local pos2 = phantomTrajectory.positions[segmentIndex + 1]
-		if pos1 and pos2 then
-			local currentX = pos1.x + (pos2.x - pos1.x) * progress
-			local currentY = pos1.y + (pos2.y - pos1.y) * progress
-			local currentZ = pos1.z + (pos2.z - pos1.z) * progress
-			currentPos = Vector3(currentX, currentY, currentZ)
+	-- Find the correct segment and interpolate position
+	for i = 1, #phantomTrajectory.times - 1 do
+		local segmentStartTime = phantomTrajectory.times[i]
+		local segmentEndTime = phantomTrajectory.times[i + 1]
+
+		if
+			segmentStartTime
+			and segmentEndTime
+			and timeSinceFire >= segmentStartTime
+			and timeSinceFire <= segmentEndTime
+		then
+			local segmentDuration = segmentEndTime - segmentStartTime
+			local timeInSegment = timeSinceFire - segmentStartTime
+			local progress = (segmentDuration > 0) and (timeInSegment / segmentDuration) or 0
+			progress = math.max(0, math.min(1, progress))
+
+			local pos1 = phantomTrajectory.positions[i]
+			local pos2 = phantomTrajectory.positions[i + 1]
+			if pos1 and pos2 then
+				local currentX = pos1.x + (pos2.x - pos1.x) * progress
+				local currentY = pos1.y + (pos2.y - pos1.y) * progress
+				local currentZ = pos1.z + (pos2.z - pos1.z) * progress
+				currentPos = Vector3(currentX, currentY, currentZ)
+				currentSegmentIndex = i
+			end
+			break
 		end
-	elseif segmentIndex == #phantomTrajectory.positions then
-		currentPos = phantomTrajectory.positions[segmentIndex]
 	end
 
-	-- Snap first point to interpolated position so nothing is behind the yellow marker
-	if currentPos then
-		phantomTrajectory.positions[1] = currentPos
+	-- If we're past the last point, use the last position
+	if not currentPos and #phantomTrajectory.positions > 0 then
+		local lastTime = phantomTrajectory.times[#phantomTrajectory.times]
+		if lastTime and timeSinceFire >= lastTime then
+			currentPos = phantomTrajectory.positions[#phantomTrajectory.positions]
+			currentSegmentIndex = #phantomTrajectory.positions
+		end
 	end
 
-	-- Draw line from first point forward
+	-- Draw line starting from current segment (remove segments behind yellow point)
 	local color = Config.visual.line
 	draw.Color(color.r, color.g, color.b, color.a)
-	for i = 1, #phantomTrajectory.positions - 1 do
+
+	-- Start drawing from current segment to avoid showing segments behind yellow point
+	local startSegment = currentSegmentIndex or 1
+
+	for i = startSegment, #phantomTrajectory.positions - 1 do
 		local p1 = phantomTrajectory.positions[i]
 		local p2 = phantomTrajectory.positions[i + 1]
+
 		if p1 and p2 then
-			local s1 = client.WorldToScreen(p1)
-			local s2 = client.WorldToScreen(p2)
-			if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
-				draw.Line(s1[1], s1[2], s2[1], s2[2])
+			-- If this is the current segment with yellow point, draw from yellow point
+			if currentSegmentIndex and i == currentSegmentIndex and currentPos then
+				local s1 = client.WorldToScreen(currentPos)
+				local s2 = client.WorldToScreen(p2)
+				if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
+					draw.Line(s1[1], s1[2], s2[1], s2[2])
+				end
+			-- Otherwise draw normal segment
+			else
+				local s1 = client.WorldToScreen(p1)
+				local s2 = client.WorldToScreen(p2)
+				if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
+					draw.Line(s1[1], s1[2], s2[1], s2[2])
+				end
 			end
 		end
 	end
