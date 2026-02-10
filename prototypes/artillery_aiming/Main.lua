@@ -54,6 +54,9 @@ local function onCreateMoveInner(cmd)
 	-- Update phantom trajectory (remove points based on elapsed time)
 	PhantomTrajectory.update()
 
+	-- Update phantom trajectory (remove points based on elapsed time)
+	PhantomTrajectory.update()
+
 	-- Store current fire state for next frame
 	lastWasFiring = isFiring
 end
@@ -72,6 +75,9 @@ local function onDrawInner()
 
 	-- Run simulation per frame (matches legacy draw-based behavior)
 	Simulation.run(nil)
+
+	-- Update phantom trajectory in draw callback for smooth interpolation
+	PhantomTrajectory.update()
 
 	-- Draw main trajectory if enabled and holding projectile weapon
 	if Config.visual.line.enabled and Entity.isProjectileWeapon() then
