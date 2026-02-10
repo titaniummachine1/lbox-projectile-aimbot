@@ -47,34 +47,41 @@ function PhantomTrajectory.update()
 	local currentTime = globals.CurTime() -- Use engine time, not real time
 	local timeSinceFire = currentTime - phantomTrajectory.fireTime
 
-	-- Find how many complete points have passed
-	local pointsPassed = 0
-	while pointsPassed < #phantomTrajectory.times and phantomTrajectory.times[pointsPassed + 1] <= timeSinceFire do
-		pointsPassed = pointsPassed + 1
+	-- Find the exact position where projectile should be based on elapsed time
+	local currentIndex = 1
+	while currentIndex <= #phantomTrajectory.times and phantomTrajectory.times[currentIndex] <= timeSinceFire do
+		currentIndex = currentIndex + 1
 	end
 
-	-- Remove complete points that have passed
-	for i = 1, pointsPassed do
-		table.remove(phantomTrajectory.positions, 1)
-		table.remove(phantomTrajectory.times, 1)
-		if phantomTrajectory.velocities and #phantomTrajectory.velocities > 0 then
-			table.remove(phantomTrajectory.velocities, 1)
+	-- Remove all points that have been passed
+	for i = 1, currentIndex - 1 do
+		if #phantomTrajectory.positions > 0 then
+			table.remove(phantomTrajectory.positions, 1)
+			table.remove(phantomTrajectory.times, 1)
+			if phantomTrajectory.velocities and #phantomTrajectory.velocities > 0 then
+				table.remove(phantomTrajectory.velocities, 1)
+			end
 		end
 	end
 
-	-- Store interpolation data for smooth drawing
-	if #phantomTrajectory.positions > 0 and pointsPassed < #phantomTrajectory.times + pointsPassed then
-		local prevTime = pointsPassed > 0 and phantomTrajectory.times[0] or 0
-		local nextTime = phantomTrajectory.times[1] or 0
-		local timeBetweenPoints = nextTime - prevTime
+	-- Calculate interpolation for current projectile position
+	if #phantomTrajectory.positions >= 2 then
+		-- We have at least 2 points, interpolate between first two
+		local prevTime = (currentIndex > 1) and phantomTrajectory.times[1] or 0
+		local nextTime = phantomTrajectory.times[2]
+		local timeBetween = nextTime - prevTime
 
-		if timeBetweenPoints > 0 then
-			phantomTrajectory.interpolationProgress = (timeSinceFire - prevTime) / timeBetweenPoints
+		if timeBetween > 0 then
+			phantomTrajectory.interpolationProgress = (timeSinceFire - prevTime) / timeBetween
 			phantomTrajectory.interpolationProgress = math.max(0, math.min(1, phantomTrajectory.interpolationProgress))
 		else
 			phantomTrajectory.interpolationProgress = 0
 		end
+	elseif #phantomTrajectory.positions == 1 then
+		-- Only one point left
+		phantomTrajectory.interpolationProgress = 1
 	else
+		-- No points left
 		phantomTrajectory.interpolationProgress = 0
 	end
 
