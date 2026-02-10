@@ -102,22 +102,36 @@ function PhantomTrajectory.draw()
 		return
 	end
 
-	local timeSinceFire = phantomTrajectory.elapsed or 0
+	-- Calculate exact time since fire for smooth interpolation
+	local timeSinceFire = globals.CurTime() - phantomTrajectory.fireTime
 
-	-- Compute current interpolated projectile position
+	-- Find which segment we're in based on time
+	local segmentIndex = 1
+	local segmentStartTime = 0
+	while segmentIndex < #phantomTrajectory.times and phantomTrajectory.times[segmentIndex + 1] <= timeSinceFire do
+		segmentIndex = segmentIndex + 1
+		segmentStartTime = phantomTrajectory.times[segmentIndex] or segmentStartTime
+	end
+
+	-- Compute interpolated position within current segment
 	local currentPos = nil
-	local progress = phantomTrajectory.interpolationProgress or 0
-	if #phantomTrajectory.positions >= 2 then
-		local pos1 = phantomTrajectory.positions[1]
-		local pos2 = phantomTrajectory.positions[2]
+	if segmentIndex < #phantomTrajectory.positions then
+		local nextTime = phantomTrajectory.times[segmentIndex + 1] or segmentStartTime + 0.015
+		local timeInSegment = timeSinceFire - segmentStartTime
+		local segmentDuration = nextTime - segmentStartTime
+		local progress = (segmentDuration > 0) and (timeInSegment / segmentDuration) or 0
+		progress = math.max(0, math.min(1, progress))
+
+		local pos1 = phantomTrajectory.positions[segmentIndex]
+		local pos2 = phantomTrajectory.positions[segmentIndex + 1]
 		if pos1 and pos2 then
 			local currentX = pos1.x + (pos2.x - pos1.x) * progress
 			local currentY = pos1.y + (pos2.y - pos1.y) * progress
 			local currentZ = pos1.z + (pos2.z - pos1.z) * progress
 			currentPos = Vector3(currentX, currentY, currentZ)
 		end
-	elseif #phantomTrajectory.positions == 1 then
-		currentPos = phantomTrajectory.positions[1]
+	elseif segmentIndex == #phantomTrajectory.positions then
+		currentPos = phantomTrajectory.positions[segmentIndex]
 	end
 
 	-- Snap first point to interpolated position so nothing is behind the yellow marker
