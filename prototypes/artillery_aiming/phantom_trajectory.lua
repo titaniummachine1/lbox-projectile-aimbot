@@ -19,11 +19,14 @@ function PhantomTrajectory.onProjectileFired(simulationData, fireTime)
 		velocities = {},
 		times = {}, -- Copy actual time data from simulation
 		lastTime = 0,
+		currentTime = 0,
+		currentPos = nil,
 		isValid = simulationData.isValid,
 		impactPos = simulationData.impactPos,
 		impactPlane = simulationData.impactPlane,
 		flagOffset = simulationData.flagOffset,
 		fireTime = fireTime,
+		elapsed = 0,
 	}
 
 	-- Copy positions, velocities, and times from simulation
@@ -45,11 +48,21 @@ function PhantomTrajectory.update()
 		return
 	end
 
-	local currentTime = globals.CurTime() -- Use engine time, not real time
-	local timeSinceFire = currentTime - phantomTrajectory.fireTime
+	if not phantomTrajectory.times or #phantomTrajectory.times == 0 then
+		phantomTrajectory = nil
+		return
+	end
+
+	local dt = globals.FrameTime() or 0
+	phantomTrajectory.elapsed = (phantomTrajectory.elapsed or 0) + dt
+	local timeSinceFire = phantomTrajectory.elapsed
 
 	-- Remove all points already passed and track last passed time (epsilon to avoid trailing)
-	while #phantomTrajectory.times > 0 and phantomTrajectory.times[1] <= timeSinceFire + 0.0001 do
+	while #phantomTrajectory.times > 0 do
+		local nextTime = phantomTrajectory.times[1]
+		if not nextTime or nextTime > timeSinceFire + 0.0001 then
+			break
+		end
 		phantomTrajectory.lastTime = phantomTrajectory.times[1]
 		table.remove(phantomTrajectory.positions, 1)
 		table.remove(phantomTrajectory.times, 1)
@@ -91,22 +104,22 @@ function PhantomTrajectory.draw()
 		return
 	end
 
+	local timeSinceFire = phantomTrajectory.elapsed or 0
+
 	-- Compute current interpolated projectile position
 	local currentPos = nil
-	if phantomTrajectory.interpolationProgress and #phantomTrajectory.positions >= 1 then
-		local progress = phantomTrajectory.interpolationProgress
-		if #phantomTrajectory.positions >= 2 then
-			local pos1 = phantomTrajectory.positions[1]
-			local pos2 = phantomTrajectory.positions[2]
-			if pos1 and pos2 then
-				local currentX = pos1.x + (pos2.x - pos1.x) * progress
-				local currentY = pos1.y + (pos2.y - pos1.y) * progress
-				local currentZ = pos1.z + (pos2.z - pos1.z) * progress
-				currentPos = Vector3(currentX, currentY, currentZ)
-			end
-		else
-			currentPos = phantomTrajectory.positions[1]
+	local progress = phantomTrajectory.interpolationProgress or 0
+	if #phantomTrajectory.positions >= 2 then
+		local pos1 = phantomTrajectory.positions[1]
+		local pos2 = phantomTrajectory.positions[2]
+		if pos1 and pos2 then
+			local currentX = pos1.x + (pos2.x - pos1.x) * progress
+			local currentY = pos1.y + (pos2.y - pos1.y) * progress
+			local currentZ = pos1.z + (pos2.z - pos1.z) * progress
+			currentPos = Vector3(currentX, currentY, currentZ)
 		end
+	elseif #phantomTrajectory.positions == 1 then
+		currentPos = phantomTrajectory.positions[1]
 	end
 
 	-- Snap first point to interpolated position so nothing is behind the yellow marker
