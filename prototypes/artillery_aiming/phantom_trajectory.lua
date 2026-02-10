@@ -52,8 +52,7 @@ function PhantomTrajectory.update()
 		return
 	end
 
-	local dt = globals.FrameTime() or 0
-	phantomTrajectory.elapsed = (phantomTrajectory.elapsed or 0) + dt
+	phantomTrajectory.elapsed = globals.CurTime() - phantomTrajectory.fireTime
 	local timeSinceFire = phantomTrajectory.elapsed
 
 	-- Remove all points already passed and track last passed time (epsilon to avoid trailing)
