@@ -78,6 +78,9 @@ local function onDrawInner()
 		Visuals.drawTrajectory()
 	end
 
+	-- Update phantom trajectory in draw callback for smooth interpolation
+	PhantomTrajectory.update()
+
 	-- Draw phantom trajectory independently (if enabled) - no weapon check
 	PhantomTrajectory.draw()
 
