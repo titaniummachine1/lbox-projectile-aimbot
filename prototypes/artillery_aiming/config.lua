@@ -79,15 +79,14 @@ Config.simulation = {
 }
 
 local function mapAccuracyToStep()
-	local acc = math.max(1, math.min(100, Config.visual.accuracy))
-	local minStep = 0.5
-	local maxStep = 8.0
-	local step = maxStep - (acc / 100) * (maxStep - minStep)
-	return step
+	local acc = math.max(10, math.min(100, Config.visual.accuracy))
+	-- 100% accuracy = tick interval, 10% accuracy = 10x tick interval
+	local multiplier = 100 / acc
+	return globals.tickinterval * multiplier
 end
 
 function Config.recomputeComputed()
-	local traceInterval = mapAccuracyToStep() / 66
+	local traceInterval = mapAccuracyToStep()
 	Config.computed.trace_interval = traceInterval
 	Config.computed.flag_interval = traceInterval * 1320
 end
