@@ -82,7 +82,8 @@ local function mapAccuracyToStep()
 	local acc = math.max(10, math.min(100, Config.visual.accuracy))
 	-- 100% accuracy = tick interval, 10% accuracy = 10x tick interval
 	local multiplier = 100 / acc
-	return globals.tickinterval * multiplier
+	local tickInterval = globals.TickInterval() or 0.015 -- fallback to 66 tick
+	return tickInterval * multiplier
 end
 
 function Config.recomputeComputed()
@@ -98,7 +99,7 @@ Config.computed = {
 Config.recomputeComputed()
 
 Config.IN_ATTACK = 1
-Config.TRACE_MASK = 100679691
+Config.TRACE_MASK = MASK_SHOT_HULL or 100679691
 
 Config.PHYSICS_MODEL_PATHS = {
 	[1] = "models/weapons/w_models/w_stickybomb.mdl",
