@@ -38,7 +38,7 @@ function PhantomTrajectory.onProjectileFired(simulationData, fireTime)
 	print("[PhantomTrajectory] Created phantom trajectory with", #phantomTrajectory.positions, "points")
 end
 
--- Update phantom trajectory (remove points based on actual time stamps)
+-- Update phantom trajectory (remove points based on actual time stamps with interpolation)
 function PhantomTrajectory.update()
 	if not phantomTrajectory or not phantomTrajectory.positions or #phantomTrajectory.positions == 0 then
 		return
@@ -47,13 +47,35 @@ function PhantomTrajectory.update()
 	local currentTime = globals.CurTime() -- Use engine time, not real time
 	local timeSinceFire = currentTime - phantomTrajectory.fireTime
 
-	-- Remove points that the projectile has already passed based on their time stamps
-	while #phantomTrajectory.positions > 0 and phantomTrajectory.times[1] <= timeSinceFire do
+	-- Find how many complete points have passed
+	local pointsPassed = 0
+	while pointsPassed < #phantomTrajectory.times and phantomTrajectory.times[pointsPassed + 1] <= timeSinceFire do
+		pointsPassed = pointsPassed + 1
+	end
+
+	-- Remove complete points that have passed
+	for i = 1, pointsPassed do
 		table.remove(phantomTrajectory.positions, 1)
 		table.remove(phantomTrajectory.times, 1)
 		if phantomTrajectory.velocities and #phantomTrajectory.velocities > 0 then
 			table.remove(phantomTrajectory.velocities, 1)
 		end
+	end
+
+	-- Store interpolation data for smooth drawing
+	if #phantomTrajectory.positions > 0 and pointsPassed < #phantomTrajectory.times + pointsPassed then
+		local prevTime = pointsPassed > 0 and phantomTrajectory.times[0] or 0
+		local nextTime = phantomTrajectory.times[1] or 0
+		local timeBetweenPoints = nextTime - prevTime
+
+		if timeBetweenPoints > 0 then
+			phantomTrajectory.interpolationProgress = (timeSinceFire - prevTime) / timeBetweenPoints
+			phantomTrajectory.interpolationProgress = math.max(0, math.min(1, phantomTrajectory.interpolationProgress))
+		else
+			phantomTrajectory.interpolationProgress = 0
+		end
+	else
+		phantomTrajectory.interpolationProgress = 0
 	end
 
 	-- Clear trajectory if no points left
@@ -76,6 +98,7 @@ function PhantomTrajectory.draw()
 	local color = Config.visual.line
 	draw.Color(color.r, color.g, color.b, color.a)
 
+	-- Draw the trajectory lines
 	for i = 1, #phantomTrajectory.positions - 1 do
 		local pos1 = phantomTrajectory.positions[i]
 		local pos2 = phantomTrajectory.positions[i + 1]
@@ -86,6 +109,42 @@ function PhantomTrajectory.draw()
 
 			if screen1 and screen1[1] and screen1[2] and screen2 and screen2[1] and screen2[2] then
 				draw.Line(screen1[1], screen1[2], screen2[1], screen2[2])
+			end
+		end
+	end
+
+	-- Draw interpolated projectile position (where projectile should be right now)
+	if phantomTrajectory.interpolationProgress and #phantomTrajectory.positions >= 1 then
+		local progress = phantomTrajectory.interpolationProgress
+
+		-- If we have at least 2 points, interpolate between first two
+		if #phantomTrajectory.positions >= 2 then
+			local pos1 = phantomTrajectory.positions[1]
+			local pos2 = phantomTrajectory.positions[2]
+
+			if pos1 and pos2 then
+				-- Linear interpolation between points
+				local currentX = pos1.x + (pos2.x - pos1.x) * progress
+				local currentY = pos1.y + (pos2.y - pos1.y) * progress
+				local currentZ = pos1.z + (pos2.z - pos1.z) * progress
+				local currentPos = Vector3(currentX, currentY, currentZ)
+
+				local screen = client.WorldToScreen(currentPos)
+				if screen and screen[1] and screen[2] then
+					-- Draw a larger indicator for current projectile position
+					draw.Color(255, 255, 0, 255) -- Yellow color
+					draw.FilledRect(screen[1] - 4, screen[2] - 4, screen[1] + 4, screen[2] + 4)
+				end
+			end
+		else
+			-- Only one point left, draw it
+			local pos = phantomTrajectory.positions[1]
+			if pos then
+				local screen = client.WorldToScreen(pos)
+				if screen and screen[1] and screen[2] then
+					draw.Color(255, 255, 0, 255) -- Yellow color
+					draw.FilledRect(screen[1] - 4, screen[2] - 4, screen[1] + 4, screen[2] + 4)
+				end
 			end
 		end
 	end
