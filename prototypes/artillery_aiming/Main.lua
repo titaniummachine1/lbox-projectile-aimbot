@@ -43,12 +43,12 @@ local function onCreateMoveInner(cmd)
 	-- Check for fire button release (when projectile actually fires)
 	if Entity.isProjectileWeapon() and State.trajectory and State.trajectory.isValid then
 		if lastWasFiring and not isFiring then
-			local currentTime = globals.RealTime()
+			local currentTime = globals.CurTime() -- Use engine time, not real time
 			-- Add cooldown to prevent spam (0.1 seconds)
 			if currentTime - lastFireTime > 0.1 then
 				-- We just released the fire button - projectile fired
 				print("[Main] Fire detected! lastWasFiring:", lastWasFiring, "isFiring:", isFiring)
-				PhantomTrajectory.onProjectileFired(State.trajectory, globals.RealTime())
+				PhantomTrajectory.onProjectileFired(State.trajectory, globals.CurTime())
 				lastFireTime = currentTime
 			end
 		end
@@ -73,16 +73,12 @@ local function onDrawInner()
 		return
 	end
 
-	if not Entity.isProjectileWeapon() then
-		return
-	end
-
-	-- Draw main trajectory if enabled
-	if Config.visual.line.enabled then
+	-- Draw main trajectory if enabled and holding projectile weapon
+	if Config.visual.line.enabled and Entity.isProjectileWeapon() then
 		Visuals.drawTrajectory()
 	end
 
-	-- Draw phantom trajectory independently (if enabled)
+	-- Draw phantom trajectory independently (if enabled) - no weapon check
 	PhantomTrajectory.draw()
 
 	if Camera.isActive() then

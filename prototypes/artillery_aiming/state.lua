@@ -23,6 +23,7 @@ State.camera = {
 State.trajectory = {
 	positions = {},
 	velocities = {},
+	times = {}, -- Add times array
 	impactPos = nil,
 	impactPlane = nil,
 	flagOffset = Vector3(0, 0, 0),

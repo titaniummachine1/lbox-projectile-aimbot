@@ -13,10 +13,11 @@ function PhantomTrajectory.onProjectileFired(simulationData, fireTime)
 
 	print("[PhantomTrajectory] Creating phantom with", #simulationData.positions, "points")
 
-	-- Create deep copy of simulation data
+	-- Create deep copy of simulation data with time stamps
 	phantomTrajectory = {
 		positions = {},
 		velocities = {},
+		times = {}, -- Copy actual time data from simulation
 		isValid = simulationData.isValid,
 		impactPos = simulationData.impactPos,
 		impactPlane = simulationData.impactPlane,
@@ -24,9 +25,10 @@ function PhantomTrajectory.onProjectileFired(simulationData, fireTime)
 		fireTime = fireTime,
 	}
 
-	-- Copy positions and velocities
+	-- Copy positions, velocities, and times from simulation
 	for i, pos in ipairs(simulationData.positions) do
 		phantomTrajectory.positions[i] = Vector3(pos.x, pos.y, pos.z)
+		phantomTrajectory.times[i] = simulationData.times[i] or (i * (Config.computed.trace_interval or 0.015))
 		if simulationData.velocities[i] then
 			phantomTrajectory.velocities[i] =
 				Vector3(simulationData.velocities[i].x, simulationData.velocities[i].y, simulationData.velocities[i].z)
@@ -36,23 +38,19 @@ function PhantomTrajectory.onProjectileFired(simulationData, fireTime)
 	print("[PhantomTrajectory] Created phantom trajectory with", #phantomTrajectory.positions, "points")
 end
 
--- Update phantom trajectory (remove points based on simulation time data)
+-- Update phantom trajectory (remove points based on actual time stamps)
 function PhantomTrajectory.update()
 	if not phantomTrajectory or not phantomTrajectory.positions or #phantomTrajectory.positions == 0 then
 		return
 	end
 
-	local currentTime = globals.RealTime()
+	local currentTime = globals.CurTime() -- Use engine time, not real time
 	local timeSinceFire = currentTime - phantomTrajectory.fireTime
 
-	-- Use the exact same trace interval as the simulation
-	-- Each point in the trajectory represents exactly this much time from the start
-	local traceInterval = Config.computed.trace_interval
-	local pointsPassed = math.floor(timeSinceFire / traceInterval)
-
-	-- Remove that many points from the beginning
-	for i = 1, math.min(pointsPassed, #phantomTrajectory.positions) do
+	-- Remove points that the projectile has already passed based on their time stamps
+	while #phantomTrajectory.positions > 0 and phantomTrajectory.times[1] <= timeSinceFire do
 		table.remove(phantomTrajectory.positions, 1)
+		table.remove(phantomTrajectory.times, 1)
 		if phantomTrajectory.velocities and #phantomTrajectory.velocities > 0 then
 			table.remove(phantomTrajectory.velocities, 1)
 		end

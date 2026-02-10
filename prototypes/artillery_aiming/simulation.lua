@@ -17,6 +17,7 @@ function Simulation.run(cmd)
 	-- Always run simulation to get current trajectory
 	traj.positions = {}
 	traj.velocities = {}
+	traj.times = {} -- Initialize times array
 	traj.impactPos = nil
 	traj.impactPlane = nil
 	traj.isValid = false
@@ -104,6 +105,7 @@ function Simulation.run(cmd)
 
 	table.insert(traj.positions, vStartPosition)
 	table.insert(traj.velocities, vVelocity)
+	table.insert(traj.times, 0) -- Time from start
 
 	local g_fTraceInterval = Config.computed.trace_interval
 	local g_fFlagInterval = Config.computed.flag_interval
@@ -125,9 +127,11 @@ function Simulation.run(cmd)
 			local segPos = vForward * (i * g_fFlagInterval) + vStartPosition
 			table.insert(traj.positions, segPos)
 			table.insert(traj.velocities, vVelocity)
+			table.insert(traj.times, i * g_fFlagInterval) -- Time from start
 		end
 		table.insert(traj.positions, results.endpos)
 		table.insert(traj.velocities, vVelocity)
+		table.insert(traj.times, segCount * g_fFlagInterval) -- Time from start
 	elseif ctx.itemCase > 3 then
 		local vPos = Vector3(0, 0, 0)
 		for i = 0.01515, 5, g_fTraceInterval do
@@ -149,6 +153,7 @@ function Simulation.run(cmd)
 			end
 			table.insert(traj.positions, results.endpos)
 			table.insert(traj.velocities, vCurVel)
+			table.insert(traj.times, i) -- Time from start
 			if Utils.TraceHit(results) then
 				break
 			end
