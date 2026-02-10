@@ -48,8 +48,8 @@ function PhantomTrajectory.update()
 	local currentTime = globals.CurTime() -- Use engine time, not real time
 	local timeSinceFire = currentTime - phantomTrajectory.fireTime
 
-	-- Remove all points already passed and track last passed time
-	while #phantomTrajectory.times > 0 and phantomTrajectory.times[1] <= timeSinceFire do
+	-- Remove all points already passed and track last passed time (epsilon to avoid trailing)
+	while #phantomTrajectory.times > 0 and phantomTrajectory.times[1] <= timeSinceFire + 0.0001 do
 		phantomTrajectory.lastTime = phantomTrajectory.times[1]
 		table.remove(phantomTrajectory.positions, 1)
 		table.remove(phantomTrajectory.times, 1)
@@ -91,58 +91,47 @@ function PhantomTrajectory.draw()
 		return
 	end
 
-	-- Draw exactly like normal trajectory line
-	local color = Config.visual.line
-	draw.Color(color.r, color.g, color.b, color.a)
-
-	-- Draw the trajectory lines
-	for i = 1, #phantomTrajectory.positions - 1 do
-		local pos1 = phantomTrajectory.positions[i]
-		local pos2 = phantomTrajectory.positions[i + 1]
-
-		if pos1 and pos2 then
-			local screen1 = client.WorldToScreen(pos1)
-			local screen2 = client.WorldToScreen(pos2)
-
-			if screen1 and screen1[1] and screen1[2] and screen2 and screen2[1] and screen2[2] then
-				draw.Line(screen1[1], screen1[2], screen2[1], screen2[2])
-			end
-		end
-	end
-
-	-- Draw interpolated projectile position (where projectile should be right now)
+	-- Compute current interpolated projectile position
+	local currentPos = nil
 	if phantomTrajectory.interpolationProgress and #phantomTrajectory.positions >= 1 then
 		local progress = phantomTrajectory.interpolationProgress
-
-		-- If we have at least 2 points, interpolate between first two
 		if #phantomTrajectory.positions >= 2 then
 			local pos1 = phantomTrajectory.positions[1]
 			local pos2 = phantomTrajectory.positions[2]
-
 			if pos1 and pos2 then
-				-- Linear interpolation between points
 				local currentX = pos1.x + (pos2.x - pos1.x) * progress
 				local currentY = pos1.y + (pos2.y - pos1.y) * progress
 				local currentZ = pos1.z + (pos2.z - pos1.z) * progress
-				local currentPos = Vector3(currentX, currentY, currentZ)
-
-				local screen = client.WorldToScreen(currentPos)
-				if screen and screen[1] and screen[2] then
-					-- Draw a larger indicator for current projectile position
-					draw.Color(255, 255, 0, 255) -- Yellow color
-					draw.FilledRect(screen[1] - 4, screen[2] - 4, screen[1] + 4, screen[2] + 4)
-				end
+				currentPos = Vector3(currentX, currentY, currentZ)
 			end
 		else
-			-- Only one point left, draw it
-			local pos = phantomTrajectory.positions[1]
-			if pos then
-				local screen = client.WorldToScreen(pos)
-				if screen and screen[1] and screen[2] then
-					draw.Color(255, 255, 0, 255) -- Yellow color
-					draw.FilledRect(screen[1] - 4, screen[2] - 4, screen[1] + 4, screen[2] + 4)
-				end
+			currentPos = phantomTrajectory.positions[1]
+		end
+	end
+
+	-- Draw exactly like normal trajectory line, starting from current interpolated position
+	local color = Config.visual.line
+	draw.Color(color.r, color.g, color.b, color.a)
+
+	local prevPos = currentPos or phantomTrajectory.positions[1]
+	for i = 1, #phantomTrajectory.positions do
+		local nextPos = phantomTrajectory.positions[i]
+		if prevPos and nextPos then
+			local s1 = client.WorldToScreen(prevPos)
+			local s2 = client.WorldToScreen(nextPos)
+			if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
+				draw.Line(s1[1], s1[2], s2[1], s2[2])
 			end
+		end
+		prevPos = nextPos
+	end
+
+	-- Draw interpolated projectile position indicator
+	if currentPos then
+		local screen = client.WorldToScreen(currentPos)
+		if screen and screen[1] and screen[2] then
+			draw.Color(255, 255, 0, 255) -- Yellow color
+			draw.FilledRect(screen[1] - 4, screen[2] - 4, screen[1] + 4, screen[2] + 4)
 		end
 	end
 end

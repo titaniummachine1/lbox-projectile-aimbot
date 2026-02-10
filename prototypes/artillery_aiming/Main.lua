@@ -51,9 +51,6 @@ local function onCreateMoveInner(cmd)
 		end
 	end
 
-	-- Update phantom trajectory (remove points based on elapsed time)
-	PhantomTrajectory.update()
-
 	-- Store current fire state for next frame
 	lastWasFiring = isFiring
 end
