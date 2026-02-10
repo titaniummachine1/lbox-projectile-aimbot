@@ -109,25 +109,25 @@ function PhantomTrajectory.draw()
 		end
 	end
 
-	-- Draw exactly like normal trajectory line, starting from current interpolated position
+	-- Draw line starting at the interpolated position (currentPos) going forward
 	local color = Config.visual.line
 	draw.Color(color.r, color.g, color.b, color.a)
 
-	-- First segment: current position -> first stored point
-	local firstPos = phantomTrajectory.positions[1]
-	local startPos = currentPos or firstPos
-	if startPos and firstPos then
-		local s1 = client.WorldToScreen(startPos)
-		local s2 = client.WorldToScreen(firstPos)
-		if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
-			draw.Line(s1[1], s1[2], s2[1], s2[2])
-		end
+	-- Build draw list starting at currentPos (no segment behind yellow)
+	local drawPoints = {}
+	local idx = 1
+	if currentPos then
+		drawPoints[idx] = currentPos
+		idx = idx + 1
+	end
+	for i = 1, #phantomTrajectory.positions do
+		drawPoints[idx] = phantomTrajectory.positions[i]
+		idx = idx + 1
 	end
 
-	-- Remaining segments between stored points
-	for i = 1, #phantomTrajectory.positions - 1 do
-		local p1 = phantomTrajectory.positions[i]
-		local p2 = phantomTrajectory.positions[i + 1]
+	for i = 1, #drawPoints - 1 do
+		local p1 = drawPoints[i]
+		local p2 = drawPoints[i + 1]
 		if p1 and p2 then
 			local s1 = client.WorldToScreen(p1)
 			local s2 = client.WorldToScreen(p2)
