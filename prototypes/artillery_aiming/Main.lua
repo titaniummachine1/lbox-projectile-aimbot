@@ -37,9 +37,6 @@ local function onCreateMoveInner(cmd)
 
 	Bombard.handleChargeRelease(cmd)
 
-	-- Run simulation after all bombard logic including charge release
-	Simulation.run(cmd)
-
 	-- Check for fire button release (when projectile actually fires)
 	if Entity.isProjectileWeapon() and State.trajectory and State.trajectory.isValid then
 		if lastWasFiring and not isFiring then
@@ -72,6 +69,9 @@ local function onDrawInner()
 	if engine.Con_IsVisible() or engine.IsGameUIVisible() then
 		return
 	end
+
+	-- Run simulation per frame (matches legacy draw-based behavior)
+	Simulation.run(nil)
 
 	-- Draw main trajectory if enabled and holding projectile weapon
 	if Config.visual.line.enabled and Entity.isProjectileWeapon() then
