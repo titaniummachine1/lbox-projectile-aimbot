@@ -123,7 +123,6 @@ function PhantomTrajectory.draw()
 	-- Snap first point to interpolated position so nothing is behind the yellow marker
 	if currentPos then
 		phantomTrajectory.positions[1] = currentPos
-		phantomTrajectory.times[1] = timeSinceFire
 	end
 
 	-- Draw line from first point forward
