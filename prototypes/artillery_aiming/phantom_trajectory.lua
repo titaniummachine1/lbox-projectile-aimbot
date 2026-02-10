@@ -26,7 +26,6 @@ function PhantomTrajectory.onProjectileFired(simulationData, fireTime)
 		impactPlane = simulationData.impactPlane,
 		flagOffset = simulationData.flagOffset,
 		fireTime = fireTime,
-		elapsed = 0,
 	}
 
 	-- Copy positions, velocities, and times from simulation
