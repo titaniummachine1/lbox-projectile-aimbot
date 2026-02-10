@@ -79,6 +79,10 @@ local function drawVisualsTab()
 	Config.visual.polygon.enabled = TimMenu.Checkbox("Impact Polygon", Config.visual.polygon.enabled)
 	TimMenu.NextLine()
 
+	Config.visual.phantom_trajectory.enabled =
+	TimMenu.Checkbox("Phantom Trajectory", Config.visual.phantom_trajectory.enabled)
+	TimMenu.NextLine()
+
 	Config.visual.outline.line_and_flags = TimMenu.Checkbox("Line Outline", Config.visual.outline.line_and_flags)
 	TimMenu.NextLine()
 

@@ -25,6 +25,9 @@ Config.visual = {
 		a = 255,
 		size = 5,
 	},
+	phantom_trajectory = {
+		enabled = true,
+	},
 	outline = {
 		line_and_flags = true,
 		polygon = true,
