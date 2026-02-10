@@ -109,25 +109,18 @@ function PhantomTrajectory.draw()
 		end
 	end
 
-	-- Draw line starting at the interpolated position (currentPos) going forward
+	-- Snap first point to interpolated position so nothing is behind the yellow marker
+	if currentPos then
+		phantomTrajectory.positions[1] = currentPos
+		phantomTrajectory.times[1] = timeSinceFire
+	end
+
+	-- Draw line from first point forward
 	local color = Config.visual.line
 	draw.Color(color.r, color.g, color.b, color.a)
-
-	-- Build draw list starting at currentPos (no segment behind yellow)
-	local drawPoints = {}
-	local idx = 1
-	if currentPos then
-		drawPoints[idx] = currentPos
-		idx = idx + 1
-	end
-	for i = 1, #phantomTrajectory.positions do
-		drawPoints[idx] = phantomTrajectory.positions[i]
-		idx = idx + 1
-	end
-
-	for i = 1, #drawPoints - 1 do
-		local p1 = drawPoints[i]
-		local p2 = drawPoints[i + 1]
+	for i = 1, #phantomTrajectory.positions - 1 do
+		local p1 = phantomTrajectory.positions[i]
+		local p2 = phantomTrajectory.positions[i + 1]
 		if p1 and p2 then
 			local s1 = client.WorldToScreen(p1)
 			local s2 = client.WorldToScreen(p2)
