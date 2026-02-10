@@ -67,10 +67,10 @@ function Utils.anglesFromVector(vec)
 	return vec:Angles()
 end
 
--- Test lerpVector on load
-local start = Vector3(0, 0, 0)
-local finish = Vector3(100, 200, 300)
-local result = Utils.lerpVector(start, finish, 0.5)
-print("lerpVector test:", result.x, result.y, result.z)
+local ZeroVector = Vector3(0, 0, 0)
+
+function Utils.TraceHit(Result)
+	return Result.plane ~= ZeroVector
+end
 
 return Utils

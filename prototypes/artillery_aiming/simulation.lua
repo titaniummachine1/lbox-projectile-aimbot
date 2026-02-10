@@ -3,6 +3,7 @@ local State = require("state")
 local Entity = require("entity")
 local PhysicsEnvModule = require("physics_env")
 local Camera = require("camera")
+local Utils = require("utils")
 
 local traceHull = engine.TraceHull
 local traceLine = engine.TraceLine
@@ -84,7 +85,7 @@ function Simulation.run(cmd)
 		vCollisionMax,
 		TRACE_MASK
 	)
-	if results.fraction ~= 1 then
+	if Utils.TraceHit(results) then
 		return
 	end
 	vStartPosition = results.endpos
@@ -147,7 +148,7 @@ function Simulation.run(cmd)
 			end
 			table.insert(traj.positions, results.endpos)
 			table.insert(traj.velocities, vCurVel)
-			if results.fraction ~= 1 then
+			if Utils.TraceHit(results) then
 				break
 			end
 		end
@@ -180,7 +181,7 @@ function Simulation.run(cmd)
 			table.insert(traj.velocities, deltaPos * 66)
 			prevPos = curPos
 
-			if results.fraction ~= 1 then
+			if Utils.TraceHit(results) then
 				break
 			end
 			pEnv:simulate(g_fTraceInterval)

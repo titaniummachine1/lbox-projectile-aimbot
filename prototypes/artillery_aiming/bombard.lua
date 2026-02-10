@@ -14,6 +14,25 @@ local warnedGravityFallback = {}
 
 local Bombard = {}
 
+-- Calculate maximum ballistic range for projectile
+-- Uses physics: d_max = (v^2 * sin(2θ)) / g for optimal angle (45°)
+-- For projectiles with upward velocity component, we need to account for the combined velocity
+local function calculateMaxRange(forwardSpeed, upwardVel, gravity)
+	-- Total velocity magnitude
+	local totalSpeed = math.sqrt(forwardSpeed * forwardSpeed + upwardVel * upwardVel)
+
+	-- Maximum range occurs at 45° in vacuum, but with upward component we need adjustment
+	-- For projectiles with upward velocity, the effective launch angle is higher
+	-- We use the full velocity magnitude for max range calculation
+	local maxRange = (totalSpeed * totalSpeed) / gravity
+
+	-- Apply a realistic factor (0.8) to account for:
+	-- - Air resistance (even though Source engine has minimal drag)
+	-- - Terrain obstacles
+	-- - Practical firing angles (can't always use optimal 45° due to terrain)
+	return maxRange * 0.8
+end
+
 local function predictImpactZ(speed, pitchDeg, upwardVel, gravity, horizontalDist)
 	local ang = EulerAngles(pitchDeg, 0, 0)
 	local forward = ang:Forward()
@@ -58,7 +77,7 @@ local function findPitchInRange(speed, upwardVel, gravity, horizontalDist, targe
 end
 
 local function findLowArcPitch(speed, upwardVel, gravity, dx, dz)
-	return findPitchInRange(speed, upwardVel, gravity, dx, dz, -45, 89)
+	return findPitchInRange(speed, upwardVel, gravity, dx, dz, -89, 89)
 end
 
 local function findHighArcPitch(speed, upwardVel, gravity, dx, dz)
@@ -195,9 +214,40 @@ function Bombard.handleInput(cmd)
 end
 
 function Bombard.lockCurrentAim()
+	if not input.IsButtonPressed(Config.bombard.activate) then
+		return
+	end
+
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
 		return
+	end
+
+	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
+	if not pWeapon or not pWeapon:IsValid() then
+		return
+	end
+
+	-- Get weapon context to calculate dynamic max range
+	local ctx = Entity.getWeaponContext(pLocal, pWeapon)
+	if not ctx then
+		return
+	end
+
+	-- Calculate max range based on current weapon
+	local maxRange = Config.bombard.max_distance -- fallback
+	if ctx.hasCharge then
+		-- For charge weapons, use max charge speed
+		local chargeMaxSpeed = ctx.maxForwardSpeed or DEFAULT_MAX_SPEED
+		local upwardVel = ctx.upwardVel or DEFAULT_UPWARD_VEL
+		local gravity = ctx.gravity or DEFAULT_GRAVITY
+		maxRange = calculateMaxRange(chargeMaxSpeed, upwardVel, gravity)
+	else
+		-- For fixed speed weapons
+		local forwardSpeed = ctx.forwardSpeed or DEFAULT_BASE_SPEED
+		local upwardVel = ctx.upwardVel or DEFAULT_UPWARD_VEL
+		local gravity = ctx.gravity or DEFAULT_GRAVITY
+		maxRange = calculateMaxRange(forwardSpeed, upwardVel, gravity)
 	end
 
 	local viewAngles = engine.GetViewAngles()
@@ -215,7 +265,7 @@ function Bombard.lockCurrentAim()
 		hitPoint = traj.impactPos
 	else
 		local forward = viewAngles:Forward()
-		local traceEnd = eyePos + forward * 5000
+		local traceEnd = eyePos + forward * maxRange -- Use calculated max range
 		local res = engine.TraceLine(eyePos, traceEnd, Config.TRACE_MASK)
 		hitPoint = res.endpos
 	end
@@ -225,7 +275,7 @@ function Bombard.lockCurrentAim()
 	local horizontalDist = math.sqrt(dx * dx + dy * dy)
 
 	State.bombard.lockedYaw = viewAngles.y
-	State.bombard.lockedDistance = clamp(horizontalDist, Config.bombard.min_distance, Config.bombard.max_distance)
+	State.bombard.lockedDistance = clamp(horizontalDist, Config.bombard.min_distance, maxRange) -- Use calculated max range
 	State.bombard.lockedOrigin = eyePos
 	State.bombard.targetZHeight = hitPoint.z - eyePos.z
 	State.bombard.lastValidZHeight = State.bombard.targetZHeight
@@ -257,13 +307,6 @@ function Bombard.execute(cmd)
 	end
 
 	local st = State.bombard
-
-	local mouseY = cmd.mousedy or 0
-	if gui.GetValue("Menu") ~= 1 then
-		local distanceDelta = -mouseY * Config.bombard.sensitivity
-		st.lockedDistance =
-			clamp(st.lockedDistance + distanceDelta, Config.bombard.min_distance, Config.bombard.max_distance)
-	end
 
 	local viewAngles = engine.GetViewAngles()
 	if not viewAngles then
@@ -327,6 +370,26 @@ function Bombard.execute(cmd)
 
 	local dx = st.lockedDistance
 	local dz = st.targetZHeight
+
+	local mouseY = cmd.mousedy or 0
+	if gui.GetValue("Menu") ~= 1 then
+		-- Calculate current max range for clamping
+		local currentMaxRange = Config.bombard.max_distance -- fallback
+		if ctx.hasCharge then
+			local chargeMaxSpeed = maxSpeed or baseSpeed
+			local upwardVel = fUpwardVelocity or DEFAULT_UPWARD_VEL
+			local currentGravity = gravity or DEFAULT_GRAVITY
+			currentMaxRange = calculateMaxRange(chargeMaxSpeed, upwardVel, currentGravity)
+		else
+			local forwardSpeed = baseSpeed
+			local upwardVel = fUpwardVelocity or DEFAULT_UPWARD_VEL
+			local currentGravity = gravity or DEFAULT_GRAVITY
+			currentMaxRange = calculateMaxRange(forwardSpeed, upwardVel, currentGravity)
+		end
+
+		local distanceDelta = -mouseY * Config.bombard.sensitivity
+		st.lockedDistance = clamp(st.lockedDistance + distanceDelta, Config.bombard.min_distance, currentMaxRange)
+	end
 
 	local bestPitch = nil
 	local bestCharge = nil
