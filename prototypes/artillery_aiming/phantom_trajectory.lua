@@ -113,17 +113,28 @@ function PhantomTrajectory.draw()
 	local color = Config.visual.line
 	draw.Color(color.r, color.g, color.b, color.a)
 
-	local prevPos = currentPos or phantomTrajectory.positions[1]
-	for i = 1, #phantomTrajectory.positions do
-		local nextPos = phantomTrajectory.positions[i]
-		if prevPos and nextPos then
-			local s1 = client.WorldToScreen(prevPos)
-			local s2 = client.WorldToScreen(nextPos)
+	-- First segment: current position -> first stored point
+	local firstPos = phantomTrajectory.positions[1]
+	local startPos = currentPos or firstPos
+	if startPos and firstPos then
+		local s1 = client.WorldToScreen(startPos)
+		local s2 = client.WorldToScreen(firstPos)
+		if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
+			draw.Line(s1[1], s1[2], s2[1], s2[2])
+		end
+	end
+
+	-- Remaining segments between stored points
+	for i = 1, #phantomTrajectory.positions - 1 do
+		local p1 = phantomTrajectory.positions[i]
+		local p2 = phantomTrajectory.positions[i + 1]
+		if p1 and p2 then
+			local s1 = client.WorldToScreen(p1)
+			local s2 = client.WorldToScreen(p2)
 			if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
 				draw.Line(s1[1], s1[2], s2[1], s2[2])
 			end
 		end
-		prevPos = nextPos
 	end
 
 	-- Draw interpolated projectile position indicator
