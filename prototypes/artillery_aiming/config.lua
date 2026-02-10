@@ -27,8 +27,8 @@ Config.visual = {
 	},
 	live_projectiles = {
 		enabled = true,
-		line = { r = 255, g = 100, b = 100, a = 200 },
-		marker = { r = 255, g = 50, b = 50, a = 255 },
+		line = { r = 255, g = 255, b = 255, a = 150 },
+		marker = { r = 255, g = 255, b = 255, a = 255 },
 		marker_size = 3,
 		max_distance = 4000,
 		rockets = true,
@@ -39,7 +39,7 @@ Config.visual = {
 		energy = true,
 		fireballs = true,
 		revalidate_angle = 45,
-		revalidate_distance = 2,
+		revalidate_distance = 5,
 	},
 	outline = {
 		line_and_flags = true,

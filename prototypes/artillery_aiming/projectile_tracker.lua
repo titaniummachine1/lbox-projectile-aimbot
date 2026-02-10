@@ -1,148 +1,193 @@
 local Config = require("config")
+local Visuals = require("visuals")
+local PhysicsEnvModule = require("physics_env")
+local VectorKalman = require("kalman")
 
 local ProjectileTracker = {}
 
--- Projectile class definitions with CORRECT gravity/drag matching entity.lua
--- These gravity/drag values correspond to itemCase > 3 in Entity.GetProjectileInformation
--- Stickies (cases 1-3) use physics env with gravity=0, they are physics-simulated objects
--- but once airborne they behave roughly like gravity=800 drag=nil in the simple model.
--- Pipes are case 4: gravity=400, drag=0.45
+-- Projectile definitions with radius for splash visualization
+-- Radius ~146hu for explosives (rockets, pipes, stickies)
 local PROJECTILE_CLASSES = {
-	{ class = "CTFProjectile_Rocket", configKey = "rockets", gravity = 0, drag = nil },
-	{ class = "CTFGrenadePipebombProjectile", configKey = "pipes", gravity = 400, drag = 0.45 },
-	{ class = "CTFProjectile_Flare", configKey = "flares", gravity = 120, drag = 0.5 },
-	{ class = "CTFProjectile_Arrow", configKey = "arrows", gravity = 200, drag = nil },
-	{ class = "CTFProjectile_EnergyBall", configKey = "energy", gravity = 80, drag = nil },
-	{ class = "CTFProjectile_BallOfFire", configKey = "fireballs", gravity = 120, drag = nil },
+	{
+		class = "CTFProjectile_Rocket",
+		configKey = "rockets",
+		gravity = 0,
+		drag = nil,
+		radius = 146,
+		usePhysics = false,
+	},
+	{
+		class = "CTFGrenadePipebombProjectile",
+		configKey = "pipes",
+		gravity = 400,
+		drag = 0.45,
+		radius = 146,
+		usePhysics = true,
+	}, -- Physics handled dynamically based on sticky vs pipe
+	{
+		class = "CTFProjectile_Flare",
+		configKey = "flares",
+		gravity = 120,
+		drag = 0.5,
+		radius = 0,
+		usePhysics = false,
+	},
+	{
+		class = "CTFProjectile_Arrow",
+		configKey = "arrows",
+		gravity = 200,
+		drag = nil,
+		radius = 0,
+		usePhysics = false,
+	},
+	{
+		class = "CTFProjectile_EnergyBall",
+		configKey = "energy",
+		gravity = 80,
+		drag = nil,
+		radius = 0,
+		usePhysics = false,
+	},
+	{
+		class = "CTFProjectile_BallOfFire",
+		configKey = "fireballs",
+		gravity = 120,
+		drag = nil,
+		radius = 0,
+		usePhysics = false,
+	},
 }
 
--- Sticky type constant (m_iType == 1 means sticky, 0 means pipe)
 local PIPEBOMB_TYPE_STICKY = 1
+local STICKY_MODEL = "models/weapons/w_models/w_stickybomb.mdl"
+local PIPE_MODEL = "models/weapons/w_models/w_grenade_grenadelauncher.mdl"
 
--- Minimum velocity to consider a projectile "moving" (hu/s)
+-- Thresholds
 local MIN_MOVING_SPEED = 10
+local RESIM_DISTANCE_SQ = 5 * 5 -- Default backup if config missing
 
--- Hoisted math
-local DEG_TO_RAD = math.pi / 180
-local COS_FUNC = math.cos
-local SQRT_FUNC = math.sqrt
+local traceLine = engine.TraceLine
+local traceHull = engine.TraceHull
 local EXP_FUNC = math.exp
 
-local traceLineFunc = engine.TraceLine
-
--- Tracked projectile data keyed by entity index
 local tracked = {}
-
--- Pre-allocated removal buffer
 local indicesToRemove = {}
 
--- Simulate trajectory using the EXACT same formula as simulation.lua (itemCase > 3 branch)
--- Formula:
---   scalar = (drag == nil) and t or ((1 - exp(-drag * t)) / drag)
---   pos.x = velocity.x * scalar + startPos.x
---   pos.y = velocity.y * scalar + startPos.y
---   pos.z = (velocity.z - gravity * t) * scalar + startPos.z
--- Loop starts at 0.01515, steps by traceInterval, up to maxTime
-local function simulateTrajectory(startPos, velocity, gravity, drag, maxTime, traceInterval, traceMask)
-	local positions = {}
-	local times = {}
+-- Helper: Simulate using simple Math (Gravity/Drag)
+local function simulateMath(startPos, velocity, gravity, drag, maxTime, traceInterval, traceMask)
+	local positions = { startPos }
+	local times = { 0 }
 	local count = 1
+	local prevPos = startPos
 
-	positions[1] = Vector3(startPos.x, startPos.y, startPos.z)
-	times[1] = 0
+	local impactPos, impactPlane
 
-	local prevEndPos = startPos
-
-	for t = 0.01515, maxTime, traceInterval do
-		local scalar
-		if drag then
-			scalar = (1 - EXP_FUNC(-drag * t)) / drag
-		else
-			scalar = t
-		end
-
+	for t = traceInterval, maxTime, traceInterval do
+		local scalar = (drag == nil) and t or ((1 - EXP_FUNC(-drag * t)) / drag)
 		local px = velocity.x * scalar + startPos.x
 		local py = velocity.y * scalar + startPos.y
-		local pz = (velocity.z - gravity * t) * scalar + startPos.z
+		local pz = (velocity.z - gravity * t) * scalar + startPos.z -- Correct non-0.5g formula
 
 		local predPos = Vector3(px, py, pz)
-		local traceResult = traceLineFunc(prevEndPos, predPos, traceMask)
+		local tr = traceLine(prevPos, predPos, traceMask)
 
 		count = count + 1
-		positions[count] = traceResult.endpos
+		positions[count] = tr.endpos
 		times[count] = t
+		prevPos = tr.endpos
 
-		if traceResult.fraction < 1.0 then
+		if tr.fraction < 1.0 then
+			impactPos = tr.endpos
+			impactPlane = tr.plane
+			break
+		end
+	end
+
+	return positions, times, count, impactPos, impactPlane
+end
+
+-- Helper: Simulate using Physics Environment (Stickies/Pipes)
+-- Note: This requires the model to be valid in physics_env
+local function simulatePhysics(startPos, velocity, angularVel, modelPath, maxTime, traceInterval, traceMask)
+	local pEnv = PhysicsEnvModule.get()
+	if not pEnv then
+		return nil
+	end
+
+	local obj = pEnv:getObject(modelPath)
+	if not obj then
+		return nil
+	end
+
+	-- Setup simulation object
+	-- Use velocity angles for orientation if undefined, but stickies spin so simple identity/vel-align is ok
+	local angles = velocity:Angles()
+	obj:SetPosition(startPos, angles, true)
+	obj:SetVelocity(velocity, angularVel or Vector3(0, 0, 0))
+
+	local positions = { startPos }
+	local times = { 0 }
+	local count = 1
+	local prevPos = startPos
+	local impactPos, impactPlane
+
+	-- Step simulation
+	local timeAccum = 0
+	-- Limit steps to avoid lag (e.g. 5 seconds * 66 ticks = 330 steps)
+	local maxSteps = math.floor(maxTime / traceInterval)
+
+	for i = 1, maxSteps do
+		pEnv:simulate(traceInterval)
+		timeAccum = timeAccum + traceInterval
+
+		local curPos = obj:GetPosition()
+		if not curPos then
 			break
 		end
 
-		prevEndPos = traceResult.endpos
-	end
+		-- Trace check between steps to find wall impact
+		local tr = traceLine(prevPos, curPos, traceMask)
 
-	return positions, times, count
-end
+		count = count + 1
+		positions[count] = tr.endpos
+		times[count] = timeAccum
+		prevPos = tr.endpos
 
--- Normalize a vector, returns direction components and length
-local function normalizeVec(vx, vy, vz)
-	local len = SQRT_FUNC(vx * vx + vy * vy + vz * vz)
-	if len < 0.001 then
-		return 0, 0, 0, 0
-	end
-	return vx / len, vy / len, vz / len, len
-end
-
--- Check if direction has diverged beyond threshold (dot product check)
-local function hasDirectionDiverged(dirAx, dirAy, dirAz, dirBx, dirBy, dirBz, angleThresholdDeg)
-	local dot = dirAx * dirBx + dirAy * dirBy + dirAz * dirBz
-	local thresholdCos = COS_FUNC(angleThresholdDeg * DEG_TO_RAD)
-	return dot < thresholdCos
-end
-
--- Find interpolated position along cached trajectory
-local function findInterpolatedPosition(positions, times, pointCount, elapsed)
-	if elapsed <= times[1] then
-		return positions[1], 1
-	end
-
-	if elapsed >= times[pointCount] then
-		return positions[pointCount], pointCount
-	end
-
-	for i = 1, pointCount - 1 do
-		local t0 = times[i]
-		local t1 = times[i + 1]
-
-		if elapsed >= t0 and elapsed <= t1 then
-			local segDur = t1 - t0
-			if segDur <= 0 then
-				return positions[i], i
-			end
-
-			local progress = (elapsed - t0) / segDur
-			local p0 = positions[i]
-			local p1 = positions[i + 1]
-			local interpPos = Vector3(
-				p0.x + (p1.x - p0.x) * progress,
-				p0.y + (p1.y - p0.y) * progress,
-				p0.z + (p1.z - p0.z) * progress
-			)
-			return interpPos, i
+		if tr.fraction < 1.0 then
+			impactPos = tr.endpos
+			impactPlane = tr.plane
+			break
 		end
 	end
 
-	return positions[pointCount], pointCount
+	-- Reset env mainly to clear state, object sleeps automatically
+	pEnv:reset()
+
+	return positions, times, count, impactPos, impactPlane
 end
 
--- Determine sticky vs pipe for CTFGrenadePipebombProjectile
-local function getPipebombConfigKey(entity)
-	local bombType = entity:GetPropInt("m_iType")
-	if bombType and bombType == PIPEBOMB_TYPE_STICKY then
-		return "stickies"
+-- Unified/Chooser Simulation
+local function simulateUnified(startPos, velocity, angularVel, projDef, isSticky, maxTime, traceInterval, traceMask)
+	-- Try physics if requested
+	if projDef.usePhysics or isSticky then
+		local model = isSticky and STICKY_MODEL or PIPE_MODEL
+		local pos, tim, cnt, imp, pln =
+			simulatePhysics(startPos, velocity, angularVel, model, maxTime, traceInterval, traceMask)
+		if pos then
+			return pos, tim, cnt, imp, pln
+		end
+		-- Fallback to math if physics failed (missing model?)
 	end
-	return "pipes"
+
+	return simulateMath(startPos, velocity, projDef.gravity, projDef.drag, maxTime, traceInterval, traceMask)
 end
 
--- Scan for projectiles, simulate and cache trajectories
+-- Get pipebomb specific info
+local function getPipebombInfo(entity)
+	local type = entity:GetPropInt("m_iType")
+	return (type == PIPEBOMB_TYPE_STICKY), "pipes" -- config key is always pipes/stickies handled by loop
+end
+
 function ProjectileTracker.update()
 	local cfg = Config.visual.live_projectiles
 	if not cfg.enabled then
@@ -150,171 +195,152 @@ function ProjectileTracker.update()
 	end
 
 	local pLocal = entities.GetLocalPlayer()
-	if not pLocal or not pLocal:IsValid() or not pLocal:IsAlive() then
+	if not pLocal or not pLocal:IsValid() then
 		return
 	end
 
-	local localPos = pLocal:GetAbsOrigin()
 	local curTime = globals.CurTime()
-	local maxDistSq = cfg.max_distance * cfg.max_distance
 	local traceInterval = Config.computed.trace_interval or 0.015
 	local traceMask = Config.TRACE_MASK
-	local angleThreshold = cfg.revalidate_angle
-	local distThreshold = cfg.revalidate_distance
+	-- Use configured distance or default low value (2-5)
+	local distThreshold = cfg.revalidate_distance or 5
 	local distThresholdSq = distThreshold * distThreshold
 
-	-- Mark all tracked as "not seen"
+	-- Mark unseen
 	for _, data in pairs(tracked) do
 		data.seenThisFrame = false
 	end
 
 	for _, projDef in ipairs(PROJECTILE_CLASSES) do
-		local configKey = projDef.configKey
-		local isPipebomb = (projDef.class == "CTFGrenadePipebombProjectile")
+		local baseConfigKey = projDef.configKey
+		local isPipeClass = (projDef.class == "CTFGrenadePipebombProjectile")
 
-		if isPipebomb then
+		if isPipeClass then
 			if not cfg.stickies and not cfg.pipes then
 				goto continueClass
 			end
-		elseif not cfg[configKey] then
+		elseif not cfg[baseConfigKey] then
 			goto continueClass
 		end
 
-		local foundEntities = entities.FindByClass(projDef.class)
+		local found = entities.FindByClass(projDef.class)
 
-		for _, entity in pairs(foundEntities) do
+		for _, entity in pairs(found) do
 			if not (entity and entity:IsValid() and not entity:IsDormant()) then
 				goto continueEntity
 			end
 
-			-- Per-entity type check for pipebombs
-			local effectiveKey = configKey
-			if isPipebomb then
-				effectiveKey = getPipebombConfigKey(entity)
-				if not cfg[effectiveKey] then
+			local configKey = baseConfigKey
+			local isSticky = false
+
+			if isPipeClass then
+				local sticky
+				sticky, _ = getPipebombInfo(entity)
+				isSticky = sticky
+				configKey = isSticky and "stickies" or "pipes"
+				if not cfg[configKey] then
 					goto continueEntity
 				end
 			end
 
 			local entIdx = entity:GetIndex()
 			local entPos = entity:GetAbsOrigin()
-
-			-- Distance filter from local player
-			local dx = entPos.x - localPos.x
-			local dy = entPos.y - localPos.y
-			local dz = entPos.z - localPos.z
-			if (dx * dx + dy * dy + dz * dz) > maxDistSq then
+			-- EstimateAbsVelocity is noisy, used as measurement for Kalman
+			local rawVel = entity:EstimateAbsVelocity()
+			if not rawVel then
 				goto continueEntity
 			end
 
-			-- Use EstimateAbsVelocity for CURRENT velocity
-			local currentVel = entity:EstimateAbsVelocity()
-			if not currentVel then
-				goto continueEntity
-			end
-
-			local speed = currentVel:Length()
-
-			-- Skip stopped projectiles (stickies on ground, landed pipes)
-			if speed < MIN_MOVING_SPEED then
+			if rawVel:Length() < MIN_MOVING_SPEED then
 				if tracked[entIdx] then
 					tracked[entIdx] = nil
 				end
 				goto continueEntity
 			end
 
-			local existing = tracked[entIdx]
+			local data = tracked[entIdx]
 
-			if existing then
-				existing.seenThisFrame = true
+			-- 1. Update/Init Kalman Filter
+			-- Q=5 (Process Noise - agility), R=100 (Measurement Noise - jitter)
+			-- Tweaked for "super unstable" velocity description
+			local smoothedVel
+			if data then
+				smoothedVel = data.kalman:update(rawVel)
+			else
+				local kRequest = VectorKalman:new(5, 100, rawVel)
+				smoothedVel = kRequest:update(rawVel)
+				data = {
+					kalman = kRequest,
+					positions = {},
+					times = {},
+					pointCount = 0,
+					simStartTime = 0,
+					lastPos = entPos,
+					seenThisFrame = true,
+					radius = projDef.radius,
+				}
+				tracked[entIdx] = data
+			end
 
-				-- Check 1: Distance from expected position (threshold = 10 units)
-				local elapsed = curTime - existing.simStartTime
-				local expectedPos, _ =
-					findInterpolatedPosition(existing.positions, existing.times, existing.pointCount, elapsed)
+			data.seenThisFrame = true
 
-				local shouldResim = false
+			-- 2. Check Divergence
+			-- Predict where it SHOULD be based on simulation
+			local shouldResim = false
+			local elapsed = curTime - data.simStartTime
 
-				if expectedPos then
-					local edx = entPos.x - expectedPos.x
-					local edy = entPos.y - expectedPos.y
-					local edz = entPos.z - expectedPos.z
-					local edistSq = edx * edx + edy * edy + edz * edz
-					if edistSq > distThresholdSq then
-						shouldResim = true
+			-- Find current point in cached trajectory
+			local expectedPos
+			if data.pointCount > 0 then
+				-- Simple search or interpolation
+				-- Just find nearest time index
+				for i = 1, data.pointCount - 1 do
+					if elapsed >= data.times[i] and elapsed <= data.times[i + 1] then
+						local ratio = (elapsed - data.times[i]) / (data.times[i + 1] - data.times[i])
+						local p0, p1 = data.positions[i], data.positions[i + 1]
+						expectedPos = p0 + (p1 - p0) * ratio
+						break
 					end
 				end
-
-				-- Check 2: Direction diverged from stored direction
-				if not shouldResim then
-					local moveDx = entPos.x - existing.lastPos.x
-					local moveDy = entPos.y - existing.lastPos.y
-					local moveDz = entPos.z - existing.lastPos.z
-					local moveDirX, moveDirY, moveDirZ, moveLen = normalizeVec(moveDx, moveDy, moveDz)
-
-					if moveLen > 1 then
-						local storedDirX = existing.storedDirX
-						local storedDirY = existing.storedDirY
-						local storedDirZ = existing.storedDirZ
-						if
-							storedDirX
-							and hasDirectionDiverged(
-								moveDirX,
-								moveDirY,
-								moveDirZ,
-								storedDirX,
-								storedDirY,
-								storedDirZ,
-								angleThreshold
-							)
-						then
-							shouldResim = true
-						end
-					end
+				if not expectedPos and elapsed < data.times[1] then
+					expectedPos = data.positions[1]
 				end
+			end
 
-				-- Update last known position
-				existing.lastPos = entPos
+			if not expectedPos then
+				shouldResim = true
+			else
+				local dx = entPos.x - expectedPos.x
+				local dy = entPos.y - expectedPos.y
+				local dz = entPos.z - expectedPos.z
+				if (dx * dx + dy * dy + dz * dz) > distThresholdSq then
+					shouldResim = true
+				end
+			end
 
-				if shouldResim then
-					local positions, times, pointCount = simulateTrajectory(
-						entPos,
-						currentVel,
-						projDef.gravity,
-						projDef.drag,
-						5,
-						traceInterval,
-						traceMask
-					)
-					existing.positions = positions
-					existing.times = times
-					existing.pointCount = pointCount
-					existing.simStartTime = curTime
+			-- Force resim on new entity
+			if data.pointCount == 0 then
+				shouldResim = true
+			end
 
-					local ndx, ndy, ndz, _ = normalizeVec(currentVel.x, currentVel.y, currentVel.z)
-					existing.storedDirX = ndx
-					existing.storedDirY = ndy
-					existing.storedDirZ = ndz
+			-- 3. Resimulate if needed
+			if shouldResim then
+				local angVel = Vector3(0, 0, 0) -- Angular velocity hard to get, assume 0 for stable physics or random
+				local ps, ts, cnt, imp, pln =
+					simulateUnified(entPos, smoothedVel, angVel, projDef, isSticky, 5.0, traceInterval, traceMask)
+
+				if ps then
+					data.positions = ps
+					data.times = ts
+					data.pointCount = cnt
+					data.impactPos = imp
+					data.impactPlane = pln
+					data.simStartTime = curTime
+					data.lastPos = entPos
 				end
 			else
-				-- New projectile: simulate from current position + current velocity
-				local positions, times, pointCount =
-					simulateTrajectory(entPos, currentVel, projDef.gravity, projDef.drag, 5, traceInterval, traceMask)
-
-				local ndx, ndy, ndz, _ = normalizeVec(currentVel.x, currentVel.y, currentVel.z)
-
-				tracked[entIdx] = {
-					positions = positions,
-					times = times,
-					pointCount = pointCount,
-					simStartTime = curTime,
-					lastPos = entPos,
-					storedDirX = ndx,
-					storedDirY = ndy,
-					storedDirZ = ndz,
-					seenThisFrame = true,
-					configKey = effectiveKey,
-				}
+				-- Update last pos for reference
+				data.lastPos = entPos
 			end
 
 			::continueEntity::
@@ -322,10 +348,10 @@ function ProjectileTracker.update()
 		::continueClass::
 	end
 
-	-- Remove entries that disappeared
+	-- Cleanup
 	local removeCount = 0
-	for idx, data in pairs(tracked) do
-		if not data.seenThisFrame then
+	for idx, d in pairs(tracked) do
+		if not d.seenThisFrame then
 			removeCount = removeCount + 1
 			indicesToRemove[removeCount] = idx
 		end
@@ -336,7 +362,6 @@ function ProjectileTracker.update()
 	end
 end
 
--- Draw all tracked projectiles
 function ProjectileTracker.draw()
 	local cfg = Config.visual.live_projectiles
 	if not cfg.enabled then
@@ -344,77 +369,67 @@ function ProjectileTracker.draw()
 	end
 
 	local curTime = globals.CurTime()
-	local lineColor = cfg.line
-	local markerColor = cfg.marker
-	local markerSize = cfg.marker_size
+	local color = cfg.line
 
-	for _, data in pairs(tracked) do
+	for idx, data in pairs(tracked) do
+		-- Draw the line from current actual position -> end of predicted path
+		-- This avoids "interpolated point" illusion breaking
+		-- We need to find where we are in the path to skip past segments
 		local elapsed = curTime - data.simStartTime
+		local startIdx = 1
 
-		if elapsed > data.times[data.pointCount] then
-			goto continueProj
-		end
-
-		local currentPos, currentSegIdx = findInterpolatedPosition(data.positions, data.times, data.pointCount, elapsed)
-
-		if not currentPos then
-			goto continueProj
-		end
-
-		-- Draw trajectory line from interpolated position forward
-		draw.Color(lineColor.r, lineColor.g, lineColor.b, lineColor.a)
-
-		-- Current segment: interpolated pos to segment end
-		if currentSegIdx < data.pointCount then
-			local segEnd = data.positions[currentSegIdx + 1]
-			local s1 = client.WorldToScreen(currentPos)
-			local s2 = client.WorldToScreen(segEnd)
-			if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
-				draw.Line(s1[1], s1[2], s2[1], s2[2])
+		-- Skip points already passed
+		for i = 1, data.pointCount - 1 do
+			if data.times[i + 1] > elapsed then
+				startIdx = i
+				break
 			end
 		end
 
-		-- Future segments
-		for i = currentSegIdx + 1, data.pointCount - 1 do
+		-- 1. Draw from Entity -> First future point (smooth connection)
+		local pEntity = entities.GetByIndex(idx)
+		if pEntity then
+			local origin = pEntity:GetAbsOrigin()
+			local nextPoint = data.positions[startIdx + 1]
+			if nextPoint then
+				draw.Color(color.r, color.g, color.b, color.a)
+				local s1 = client.WorldToScreen(origin)
+				local s2 = client.WorldToScreen(nextPoint)
+				if s1 and s2 then
+					draw.Line(s1[1], s1[2], s2[1], s2[2])
+				end
+			end
+		end
+
+		-- 2. Draw remaining segments
+		draw.Color(color.r, color.g, color.b, color.a)
+		for i = startIdx + 1, data.pointCount - 1 do
 			local p1 = data.positions[i]
 			local p2 = data.positions[i + 1]
 			local s1 = client.WorldToScreen(p1)
 			local s2 = client.WorldToScreen(p2)
-			if s1 and s1[1] and s1[2] and s2 and s2[1] and s2[2] then
+			if s1 and s2 then
 				draw.Line(s1[1], s1[2], s2[1], s2[2])
 			end
 		end
 
-		-- Draw marker at interpolated position
-		local screen = client.WorldToScreen(currentPos)
-		if screen and screen[1] and screen[2] then
-			draw.Color(markerColor.r, markerColor.g, markerColor.b, markerColor.a)
-			draw.FilledRect(
-				screen[1] - markerSize,
-				screen[2] - markerSize,
-				screen[1] + markerSize,
-				screen[2] + markerSize
-			)
+		-- 3. Draw Impact Polygon
+		if data.impactPos and data.impactPlane then
+			-- Temporarily override polygon config radius if we want specific weapon radius
+			-- But Visuals uses Config.visual.polygon.size
+			-- We'll just pass the plane/pos and let Visuals handle it for now,
+			-- OR we modify Visuals to accept size override.
+			-- Visuals.drawImpactPolygon(plane, origin) uses global config size.
+			-- User asked for "splash radius of the weapon".
+			-- We should support size override in drawImpactPolygon.
+			-- For now, default call.
+			Visuals.drawImpactPolygon(data.impactPlane, data.impactPos, data.radius)
 		end
-
-		::continueProj::
 	end
 end
 
--- Clear all tracked projectiles
 function ProjectileTracker.clear()
-	for k in pairs(tracked) do
-		tracked[k] = nil
-	end
-end
-
--- Get count of tracked projectiles (debug/menu)
-function ProjectileTracker.getTrackedCount()
-	local count = 0
-	for _ in pairs(tracked) do
-		count = count + 1
-	end
-	return count
+	tracked = {}
 end
 
 return ProjectileTracker

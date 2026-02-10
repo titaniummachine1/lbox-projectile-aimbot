@@ -22,7 +22,7 @@ local function drawOutlinedLine(from, to)
 	end
 end
 
-function Visuals.drawImpactPolygon(plane, origin)
+function Visuals.drawImpactPolygon(plane, origin, radiusOverride)
 	if not Config.visual.polygon.enabled then
 		return
 	end
@@ -30,7 +30,7 @@ function Visuals.drawImpactPolygon(plane, origin)
 	local iSegments = Config.visual.polygon.segments
 	local fSegmentAngleOffset = math.pi / iSegments
 	local fSegmentAngle = fSegmentAngleOffset * 2
-	local radius = Config.visual.polygon.size
+	local radius = radiusOverride or Config.visual.polygon.size
 	local positions = {}
 
 	if math.abs(plane.z) >= 0.99 then
