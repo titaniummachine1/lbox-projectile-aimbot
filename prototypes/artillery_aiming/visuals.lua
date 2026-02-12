@@ -180,7 +180,7 @@ function Visuals.drawTrackerTrajectory(proj)
 		end
 	end
 
-	-- Draw impact polygon/radius
+	-- Draw crawling explosion radius
 	if proj.impactPos and proj.impactPlane and proj.radius then
 		local polygonColor = {
 			r = Config.visual.polygon.r,
@@ -188,9 +188,158 @@ function Visuals.drawTrackerTrajectory(proj)
 			b = Config.visual.polygon.b,
 			a = Config.visual.polygon.a,
 		}
-		-- Use maximum of projectile radius and config value to ensure it's not smaller than before
-		local explosionRadius = math.max(proj.radius, Config.visual.live_projectiles.explosion_radius)
-		Visuals.drawImpactPolygon(proj.impactPlane, proj.impactPos, explosionRadius, polygonColor)
+		Visuals.drawCrawlingExplosionRadius(
+			proj.impactPos,
+			proj.impactPlane,
+			Config.visual.live_projectiles.explosion_radius,
+			polygonColor
+		)
+	end
+end
+
+function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colorOverride)
+	if not Config.visual.polygon.enabled then
+		return
+	end
+
+	local iSegments = Config.visual.polygon.segments
+	local positions = {}
+
+	-- For each radial segment
+	for i = 1, iSegments do
+		local angle = (i - 1) * (2 * math.pi / iSegments)
+
+		-- Start from center, trace outward along surface
+		local currentPos = center
+		local remainingDistance = radius
+
+		-- Create right and up vectors perpendicular to surface normal
+		local right, up
+		if math.abs(surfaceNormal.z) > 0.9 then
+			-- Flat surface
+			right = Vector3(math.cos(angle), math.sin(angle), 0)
+			up = Vector3(0, 0, 1)
+		else
+			-- Sloped surface - create perpendicular vectors
+			right = Vector3(-surfaceNormal.y, surfaceNormal.x, 0)
+			right = right / right:Length()
+			up = surfaceNormal
+		end
+
+		-- Direction for this segment (initially radial)
+		local segmentDir = Vector3(math.cos(angle), math.sin(angle), 0)
+
+		-- Crawl outward step by step
+		while remainingDistance > 0 do
+			local stepSize = math.min(remainingDistance, 25) -- Smaller step size for crawling
+
+			-- Trace forward from current position
+			local traceStart = currentPos
+			local traceEnd = traceStart + segmentDir * stepSize
+
+			local trace = engine.TraceLine(traceStart, traceEnd, 100679691)
+
+			if trace.fraction < 1 then
+				-- Hit something - try moving up 8 units and continue
+				local upOffset = up * 8
+				local elevatedStart = currentPos + upOffset
+				local elevatedEnd = elevatedStart + segmentDir * stepSize
+
+				local elevatedTrace = engine.TraceLine(elevatedStart, elevatedEnd, 100679691)
+
+				if elevatedTrace.fraction >= 0.9 then
+					-- Can move up and continue - use elevated position
+					currentPos = elevatedStart + segmentDir * (stepSize * elevatedTrace.fraction)
+					remainingDistance = remainingDistance - stepSize
+				else
+					-- Can't move up to continue - adjust direction to surface
+					local hitNormal = elevatedTrace.plane or trace.plane
+					if hitNormal then
+						-- Project movement direction onto surface plane
+						local dot = segmentDir:Dot(hitNormal)
+						if dot > -0.9 then -- Don't reverse direction completely
+							segmentDir = segmentDir - hitNormal * dot
+							segmentDir = segmentDir / segmentDir:Length()
+
+							-- Try again with adjusted direction from elevated position
+							elevatedEnd = elevatedStart + segmentDir * stepSize
+							elevatedTrace = engine.TraceLine(elevatedStart, elevatedEnd, 100679691)
+							currentPos = elevatedStart + segmentDir * (stepSize * elevatedTrace.fraction)
+							remainingDistance = remainingDistance - (stepSize * elevatedTrace.fraction)
+						else
+							-- Can't adjust direction meaningfully, stop this segment
+							break
+						end
+					else
+						-- No surface normal, stop this segment
+						break
+					end
+				end
+			else
+				-- Clear path, move forward
+				currentPos = traceEnd
+				remainingDistance = remainingDistance - stepSize
+			end
+
+			-- Prevent infinite loops and ensure progress
+			if (currentPos - traceStart):Length() < 1 then
+				break
+			end
+		end
+
+		positions[i] = worldToScreen(currentPos)
+		if not positions[i] then
+			positions[i] = worldToScreen(center) -- Fallback
+		end
+	end
+
+	-- Draw the polygon outline
+	if Config.visual.outline.polygon then
+		if colorOverride then
+			setColor(colorOverride.r, colorOverride.g, colorOverride.b, colorOverride.a or Config.visual.outline.a)
+		else
+			setColor(Config.visual.outline.r, Config.visual.outline.g, Config.visual.outline.b, Config.visual.outline.a)
+		end
+
+		local last = positions[#positions]
+		for i = 1, #positions do
+			local new = positions[i]
+			if math.abs(new[1] - last[1]) > math.abs(new[2] - last[2]) then
+				drawLine(last[1], last[2] + 1, new[1], new[2] + 1)
+				drawLine(last[1], last[2] - 1, new[1], new[2] - 1)
+			else
+				drawLine(last[1] + 1, last[2], new[1] + 1, new[2])
+				drawLine(last[1] - 1, last[2], new[1] - 1, new[2])
+			end
+			last = new
+		end
+	end
+
+	-- Draw filled polygon
+	if colorOverride then
+		setColor(colorOverride.r, colorOverride.g, colorOverride.b, colorOverride.a or Config.visual.polygon.a)
+	else
+		setColor(Config.visual.polygon.r, Config.visual.polygon.g, Config.visual.polygon.b, Config.visual.polygon.a)
+	end
+
+	local cords, reverse_cords = {}, {}
+	local sizeof = #positions
+	local sum = 0
+	for i, pos in pairs(positions) do
+		local convertedTbl = { pos[1], pos[2], 0, 0 }
+		cords[i], reverse_cords[sizeof - i + 1] = convertedTbl, convertedTbl
+		sum = sum + Utils.cross2D(pos, positions[(i % sizeof) + 1], positions[1])
+	end
+	draw.TexturedPolygon(g_iPolygonTexture, (sum < 0) and reverse_cords or cords, true)
+
+	-- Draw polygon edges
+	do
+		local last = positions[#positions]
+		for i = 1, #positions do
+			local new = positions[i]
+			drawLine(last[1], last[2], new[1], new[2])
+			last = new
+		end
 	end
 end
 
