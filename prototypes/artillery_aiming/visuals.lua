@@ -236,11 +236,16 @@ function Visuals.drawTrackerTrajectory(proj)
 		if (not surfaceNormal or surfaceNormal:Length() < 0.01) and proj.lastSurfaceNormal then
 			surfaceNormal = proj.lastSurfaceNormal
 		end
-		if proj.lastSurfaceNormal and speed and speed < 10 then
-			surfaceNormal = proj.lastSurfaceNormal
+		local impactCenter = proj.impactPos or proj.origin or proj.lastPos
+		if speed and speed < 10 then
+			surfaceNormal = proj.lastSurfaceNormal or surfaceNormal
+			if proj.entity and proj.entity:IsValid() then
+				impactCenter = proj.entity:GetAbsOrigin()
+			else
+				impactCenter = proj.lastPos or impactCenter
+			end
 		end
 		surfaceNormal = surfaceNormal or Vector3(0, 0, 1)
-		local impactCenter = proj.impactPos or proj.origin or proj.lastPos
 		if impactCenter then
 			Visuals.drawCrawlingExplosionRadius(
 				impactCenter,
