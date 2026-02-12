@@ -188,12 +188,9 @@ function Visuals.drawTrackerTrajectory(proj)
 			b = Config.visual.polygon.b,
 			a = Config.visual.polygon.a,
 		}
-		Visuals.drawImpactPolygon(
-			proj.impactPlane,
-			proj.impactPos,
-			Config.visual.live_projectiles.explosion_radius,
-			polygonColor
-		)
+		-- Use maximum of projectile radius and config value to ensure it's not smaller than before
+		local explosionRadius = math.max(proj.radius, Config.visual.live_projectiles.explosion_radius)
+		Visuals.drawImpactPolygon(proj.impactPlane, proj.impactPos, explosionRadius, polygonColor)
 	end
 end
 

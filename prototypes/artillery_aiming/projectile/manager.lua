@@ -247,29 +247,108 @@ function Manager.Update()
 				local proj = tracked[idx]
 
 				if not proj then
-					-- Initialize new projectile tracking with dynamic projectile info
+					-- Initialize new projectile tracking with enhanced data
 					local fallbackData = Manager.getProjectileInfo(ent)
+					local currentPos = ent:GetAbsOrigin()
+					local currentVel = ent:EstimateAbsVelocity()
+
 					proj = {
 						entity = ent,
-						lastPos = ent:GetAbsOrigin(),
-						lastVel = ent:EstimateAbsVelocity(),
+						lastPos = currentPos,
+						lastVel = currentVel,
 						radius = fallbackData.blastRadius,
 						color = Config.visual.polygon.live_color or { 255, 255, 255, 255 },
-						filter = Kalman.VectorKalman.new(3, 0.001, Vector3(0, 0, 0)),
+						filter = Kalman.VectorKalman.new(3, 0.001, Vector3(currentVel.x, currentVel.y, currentVel.z)),
 						pointCount = 0,
 						fallbackData = fallbackData,
+						-- Enhanced tracking data
+						positionHistory = {}, -- Store last 10 positions
+						velocityHistory = {}, -- Store calculated velocities
+						spawnTime = globals.CurTime(),
+						lifespan = 10, -- Default 10 seconds, will be updated from weapon data
+						lastUpdateTime = globals.CurTime(),
 					}
+
+					-- Initialize position history with current position
+					for i = 1, 10 do
+						proj.positionHistory[i] = currentPos
+					end
+
+					-- Try to get weapon data for lifespan
+					local owner = ent:GetOwner()
+					if owner and owner:IsValid() then
+						local weapon = owner:GetPropEntity("m_hActiveWeapon")
+						if weapon and weapon:IsValid() then
+							local weaponData = weapon:GetWeaponData()
+							if weaponData and weaponData.projectileSpeed and weaponData.projectileSpeed > 0 then
+								-- Estimate lifespan based on projectile speed and typical max range
+								local maxRange = 4000 -- Typical TF2 projectile max range
+								proj.lifespan = maxRange / weaponData.projectileSpeed
+								-- Clamp to reasonable bounds
+								proj.lifespan = math.max(2, math.min(30, proj.lifespan))
+							end
+						end
+					end
+
 					tracked[idx] = proj
 				end
 
 				proj.seenThisFrame = true
-				proj.origin = ent:GetAbsOrigin()
+				local currentTime = globals.CurTime()
+				local deltaTime = currentTime - proj.lastUpdateTime
+				proj.lastUpdateTime = currentTime
+				
+				local currentPos = ent:GetAbsOrigin()
+				local currentVel = ent:EstimateAbsVelocity()
+				
+				-- Update position history (shift array)
+				for i = 10, 2, -1 do
+					proj.positionHistory[i] = proj.positionHistory[i-1]
+				end
+				proj.positionHistory[1] = currentPos
+				
+				-- Calculate velocity from position history (10 ticks ago vs current)
+				local historicalPos = proj.positionHistory[10] or proj.positionHistory[1]
+				local positionDelta = currentPos - historicalPos
+				local timeDelta = deltaTime * 10 -- Approximate time over 10 ticks
+				
+				local calculatedVel = Vector3(0, 0, 0)
+				if timeDelta > 0 then
+					calculatedVel = positionDelta / timeDelta
+				end
+				
+				-- Combine velocity sources: current EstimateAbsVelocity, historical calculation, and Kalman filtered
+				local combinedVel = (currentVel + calculatedVel) * 0.5
+				
+				-- Apply Kalman filtering for smooth velocity
+				proj.filter:predict(combinedVel)
+				local filteredVel = proj.filter:update(combinedVel)
+				
+				-- Store velocity history
+				table.insert(proj.velocityHistory, 1, filteredVel)
+				if #proj.velocityHistory > 10 then
+					table.remove(proj.velocityHistory)
+				end
+				
+				-- Update projectile data
+				proj.lastPos = currentPos
+				proj.lastVel = filteredVel
+				proj.origin = currentPos
 
-				-- Prediction
+				-- Check if projectile has exceeded its lifespan
+				local age = currentTime - proj.spawnTime
+				if age > proj.lifespan then
+					tracked[idx] = nil
+					goto continue
+				end
+
+				-- Prediction with improved velocity data
 				local path, count, impactPos, impactPlane = Simulation.predict(ent, 150)
 				proj.predictedPath = path
 				proj.impactPos = impactPos
 				proj.impactPlane = impactPlane
+				
+				::continue::
 			end
 		end
 	end
