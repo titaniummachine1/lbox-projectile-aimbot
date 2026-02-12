@@ -12,6 +12,45 @@ local Visuals = {}
 -- Create the polygon texture for filled polygons
 local g_iPolygonTexture = draw.CreateTextureRGBA("\xff\xff\xff" .. string.char(Config.visual.polygon.a), 1, 1)
 
+local TRACE_MASK = 100679691
+local RADIAL_STEP = 25
+local ELEVATION_STEP = 8
+
+local function normalizeVector(vec)
+	if not vec then
+		return nil, 0
+	end
+	local length = vec:Length()
+	if length < 0.001 then
+		return nil, length
+	end
+	return vec / length, length
+end
+
+local function projectOntoPlane(vec, normal)
+	if not vec or not normal then
+		return nil
+	end
+	local normNormal = normalizeVector(normal)
+	if not normNormal then
+		return nil
+	end
+	local projected = vec - normNormal * vec:Dot(normNormal)
+	return normalizeVector(projected)
+end
+
+local function clampToRadius(center, pos, radius)
+	local offset = pos - center
+	local dir, len = normalizeVector(offset)
+	if not dir then
+		return center
+	end
+	if len == radius then
+		return pos
+	end
+	return center + dir * radius
+end
+
 local function drawOutlinedLine(from, to)
 	setColor(Config.visual.outline.r, Config.visual.outline.g, Config.visual.outline.b, Config.visual.outline.a)
 	if math.abs(from[1] - to[1]) > math.abs(from[2] - to[2]) then
@@ -182,19 +221,34 @@ function Visuals.drawTrackerTrajectory(proj)
 	end
 
 	-- Draw crawling explosion radius
-	if proj.impactPos and proj.impactPlane and proj.radius then
+	if proj.radius and (proj.impactPos or proj.origin) then
 		local polygonColor = {
 			r = Config.visual.polygon.r,
 			g = Config.visual.polygon.g,
 			b = Config.visual.polygon.b,
 			a = Config.visual.polygon.a,
 		}
-		Visuals.drawCrawlingExplosionRadius(
-			proj.impactPos,
-			proj.impactPlane,
-			Config.visual.live_projectiles.explosion_radius,
-			polygonColor
-		)
+		local surfaceNormal = proj.impactPlane
+		local speed = nil
+		if proj.lastVel then
+			speed = proj.lastVel:Length()
+		end
+		if (not surfaceNormal or surfaceNormal:Length() < 0.01) and proj.lastSurfaceNormal then
+			surfaceNormal = proj.lastSurfaceNormal
+		end
+		if proj.lastSurfaceNormal and speed and speed < 10 then
+			surfaceNormal = proj.lastSurfaceNormal
+		end
+		surfaceNormal = surfaceNormal or Vector3(0, 0, 1)
+		local impactCenter = proj.impactPos or proj.origin or proj.lastPos
+		if impactCenter then
+			Visuals.drawCrawlingExplosionRadius(
+				impactCenter,
+				surfaceNormal,
+				Config.visual.live_projectiles.explosion_radius,
+				polygonColor
+			)
+		end
 	end
 end
 
@@ -205,164 +259,88 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 
 	local iSegments = Config.visual.polygon.segments
 	local positions = {}
+	local upVector = surfaceNormal and normalizeVector(surfaceNormal) or Vector3(0, 0, 1)
+	if not upVector then
+		upVector = Vector3(0, 0, 1)
+	end
 
-	-- For each radial segment
 	for i = 1, iSegments do
 		local angle = (i - 1) * (2 * math.pi / iSegments)
+		local radialDir = Vector3(math.cos(angle), math.sin(angle), 0)
+		radialDir = normalizeVector(radialDir) or Vector3(1, 0, 0)
 
-		-- Start from center, trace outward along surface
 		local currentPos = center
-		local remainingDistance = radius
+		local steps = 0
+		local maxSteps = 64
 
-		-- Create right and up vectors perpendicular to surface normal
-		local right, up
-		if math.abs(surfaceNormal.z) > 0.9 then
-			-- Flat surface
-			right = Vector3(math.cos(angle), math.sin(angle), 0)
-			up = Vector3(0, 0, 1)
-		else
-			-- Sloped surface - create perpendicular vectors
-			right = Vector3(-surfaceNormal.y, surfaceNormal.x, 0)
-			right = right / right:Length()
-			up = surfaceNormal
-		end
-
-		-- Direction for this segment (initially radial)
-		local segmentDir = Vector3(math.cos(angle), math.sin(angle), 0)
-
-		-- Crawl outward to full blast radius distance
-		while remainingDistance > 0 do
-			local stepSize = math.min(remainingDistance, 25)
-
-			-- Always try forward trace first
-			local traceStart = currentPos
-			local traceEnd = traceStart + segmentDir * stepSize
-
-			local forwardTrace = engine.TraceLine(traceStart, traceEnd, 100679691)
-
-			if forwardTrace.fraction >= 0.9 then
-				-- Clear path - move full step forward
-				-- Complex crawling logic to maintain exact blast radius distance
-		local maxAttempts = 20 -- Prevent infinite loops
-		local attempt = 0
-		
-		while remainingDistance > 0 and attempt < maxAttempts do
-			attempt = attempt + 1
-			
-			-- Calculate target position at exact blast radius distance from center
-			local targetPos = center + segmentDir * radius
-			local distanceToTarget = (targetPos - currentPos):Length()
-			
-			if distanceToTarget < 1 then
-				-- We're at the target distance, stop
+		while steps < maxSteps do
+			steps = steps + 1
+			local offset = currentPos - center
+			local dist = offset:Length()
+			if dist >= radius - 0.5 then
 				break
 			end
-			
-			-- Step towards target (max 25 units per step)
-			local stepSize = math.min(distanceToTarget, 25)
-			local stepEnd = currentPos + segmentDir * stepSize
-			
-			-- First trace: forward at current height
-			local groundTrace = engine.TraceLine(currentPos, stepEnd, 100679691)
-			
-			if groundTrace.fraction >= 0.95 then
-				-- Clear path, move forward
-				currentPos = stepEnd
-				remainingDistance = remainingDistance - stepSize
-			else
-				-- Hit something at ground level
-				local groundSurfaceNormal = groundTrace.plane
-				
-				-- Second trace: 8 units higher in same direction
-				local elevatedStart = currentPos + up * 8
-				local elevatedEnd = elevatedStart + segmentDir * stepSize
-				local elevatedTrace = engine.TraceLine(elevatedStart, elevatedEnd, 100679691)
-				
-				if elevatedTrace.fraction >= 0.95 then
-					-- Clear path at elevated height
-					local elevatedDistance = stepSize * elevatedTrace.fraction
-					local newPos = elevatedStart + segmentDir * elevatedDistance
-					
-					-- Check if this gets us significantly further (>4 units) than ground trace
-					local groundDistance = stepSize * groundTrace.fraction
-					if elevatedDistance > groundDistance + 4 then
-						-- Extended crawling: use elevated position and continue climbing
-						currentPos = newPos
-						remainingDistance = remainingDistance - elevatedDistance
-						
-						-- Try to climb higher from this position
-						local climbAttempts = 0
-						while climbAttempts < 10 do
-							climbAttempts = climbAttempts + 1
-							
-							local climbStart = currentPos + up * 8
-							local climbEnd = climbStart + segmentDir * 25
-							local climbTrace = engine.TraceLine(climbStart, climbEnd, 100679691)
-							
-							if climbTrace.fraction >= 0.95 then
-								-- Can climb higher
-								currentPos = climbStart + segmentDir * 25
-								remainingDistance = remainingDistance - 25
-							else
-								-- Can't climb further, adjust to surface and stop climbing
-								if climbTrace.plane then
-									local surfaceNormal = climbTrace.plane
-									local dot = segmentDir:Dot(surfaceNormal)
-									if dot > -0.9 then -- Don't reverse direction completely
-										segmentDir = segmentDir - surfaceNormal * dot
-										segmentDir = segmentDir / segmentDir:Length()
-									end
-								end
-								break
+
+			local remaining = radius - dist
+			local stepSize = math.min(remaining, RADIAL_STEP)
+			local desiredEnd = currentPos + radialDir * stepSize
+			local groundTrace = engine.TraceLine(currentPos, desiredEnd, TRACE_MASK)
+			if groundTrace.fraction >= 0.98 then
+				currentPos = desiredEnd
+				goto continue_segment
+			end
+
+			local elevatedStart = currentPos + upVector * ELEVATION_STEP
+			local elevatedEnd = elevatedStart + radialDir * stepSize
+			local elevatedTrace = engine.TraceLine(elevatedStart, elevatedEnd, TRACE_MASK)
+
+			if elevatedTrace.fraction >= 0.98 then
+				local elevatedAdvance = stepSize * elevatedTrace.fraction
+				local groundAdvance = stepSize * (groundTrace.fraction or 0)
+				currentPos = elevatedStart + radialDir * elevatedAdvance
+
+				if elevatedAdvance > groundAdvance + 4 then
+					local climbAttempts = 0
+					while climbAttempts < 10 do
+						climbAttempts = climbAttempts + 1
+						local climbStart = currentPos + upVector * ELEVATION_STEP
+						local climbEnd = climbStart + radialDir * stepSize
+						local climbTrace = engine.TraceLine(climbStart, climbEnd, TRACE_MASK)
+						if climbTrace.fraction >= 0.98 then
+							currentPos = climbStart + radialDir * (stepSize * climbTrace.fraction)
+						else
+							local climbNormal = climbTrace.plane
+							local outwardNorm = normalizeVector(currentPos - center) or radialDir
+							local projected = projectOntoPlane(outwardNorm, climbNormal)
+							if projected then
+								radialDir = projected
 							end
+							break
 						end
-					else
-						-- Not significantly further, just use elevated position
-						currentPos = newPos
-						remainingDistance = remainingDistance - elevatedDistance
-					end
-				else
-					-- Blocked at elevated height too, use ground surface normal
-					if groundSurfaceNormal then
-						-- Adjust direction to be parallel to ground surface while maintaining outward direction
-						local outwardDir = (currentPos - center) / (currentPos - center):Length()
-						local dot = outwardDir:Dot(groundSurfaceNormal)
-						local surfaceParallel = outwardDir - groundSurfaceNormal * dot
-						
-						if surfaceParallel:Length() > 0.001 then
-							surfaceParallel = surfaceParallel / surfaceParallel:Length()
-							segmentDir = surfaceParallel
-							
-							-- Try moving in adjusted direction
-							local adjustedEnd = currentPos + surfaceParallel * stepSize
-							local adjustedTrace = engine.TraceLine(currentPos, adjustedEnd, 100679691)
-							
-							if adjustedTrace.fraction >= 0.1 then
-								local moveDistance = stepSize * adjustedTrace.fraction
-								currentPos = currentPos + surfaceParallel * moveDistance
-								remainingDistance = remainingDistance - moveDistance
-							else
-								-- Completely stuck - stop this segment
-								break
-							end
-						end
-					else
-						-- No surface normal available - stop this segment
-						break
 					end
 				end
+				goto continue_segment
 			end
 
-			-- Safety check to prevent infinite loops
-			if (currentPos - center):Length() >= radius then
-				break
+			local slideNormal = groundTrace.plane or elevatedTrace.plane or surfaceNormal
+			local outward = normalizeVector(currentPos - center) or radialDir
+			local slideDir = projectOntoPlane(outward, slideNormal)
+			if slideDir then
+				radialDir = slideDir
+				local slideEnd = currentPos + radialDir * stepSize
+				local slideTrace = engine.TraceLine(currentPos, slideEnd, TRACE_MASK)
+				if slideTrace.fraction >= 0.1 then
+					currentPos = currentPos + radialDir * (stepSize * slideTrace.fraction)
+					goto continue_segment
+				end
 			end
+			break -- no progress
+
+			::continue_segment::
 		end
 
-		positions[i] = worldToScreen(currentPos)
-		if not positions[i] then
-			positions[i] = worldToScreen(center) -- Fallback
-		end
+		currentPos = clampToRadius(center, currentPos, radius)
+		positions[i] = worldToScreen(currentPos) or worldToScreen(center)
 	end
 
 	-- Draw filled explosion radius using textured polygon
