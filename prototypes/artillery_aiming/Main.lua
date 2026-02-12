@@ -69,22 +69,15 @@ local function onDrawInner()
 end
 
 local function onDraw()
-	local ok, err = pcall(onDrawInner)
-	if not ok then
-		reportError("Draw", err)
-	end
+	onDrawInner()
 end
 
 local function onPostRenderView(view)
-	local ok, err = pcall(Camera.onPostRenderView, view)
-	if not ok then
-		reportError("PostRenderView", err)
-	end
+	Camera.onPostRenderView(view)
 end
 
 local function onUnload()
 	PhysicsEnvModule.destroy()
-	Visuals.deleteTexture()
 	Camera.cleanup()
 end
 

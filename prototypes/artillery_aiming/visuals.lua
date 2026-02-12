@@ -9,7 +9,8 @@ local getScreenSize = draw.GetScreenSize
 
 local Visuals = {}
 
-local g_iPolygonTexture = draw.CreateTextureRGBA("\xff\xff\xff\xff", 1, 1)
+-- Create the polygon texture for filled polygons
+local g_iPolygonTexture = draw.CreateTextureRGBA("\xff\xff\xff" .. string.char(Config.visual.polygon.a), 1, 1)
 
 local function drawOutlinedLine(from, to)
 	setColor(Config.visual.outline.r, Config.visual.outline.g, Config.visual.outline.b, Config.visual.outline.a)
@@ -229,60 +230,131 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 		-- Direction for this segment (initially radial)
 		local segmentDir = Vector3(math.cos(angle), math.sin(angle), 0)
 
-		-- Crawl outward step by step
+		-- Crawl outward to full blast radius distance
 		while remainingDistance > 0 do
-			local stepSize = math.min(remainingDistance, 25) -- Smaller step size for crawling
+			local stepSize = math.min(remainingDistance, 25)
 
-			-- Trace forward from current position
+			-- Always try forward trace first
 			local traceStart = currentPos
 			local traceEnd = traceStart + segmentDir * stepSize
 
-			local trace = engine.TraceLine(traceStart, traceEnd, 100679691)
+			local forwardTrace = engine.TraceLine(traceStart, traceEnd, 100679691)
 
-			if trace.fraction < 1 then
-				-- Hit something - try moving up 8 units and continue
-				local upOffset = up * 8
-				local elevatedStart = currentPos + upOffset
+			if forwardTrace.fraction >= 0.9 then
+				-- Clear path - move full step forward
+				-- Complex crawling logic to maintain exact blast radius distance
+		local maxAttempts = 20 -- Prevent infinite loops
+		local attempt = 0
+		
+		while remainingDistance > 0 and attempt < maxAttempts do
+			attempt = attempt + 1
+			
+			-- Calculate target position at exact blast radius distance from center
+			local targetPos = center + segmentDir * radius
+			local distanceToTarget = (targetPos - currentPos):Length()
+			
+			if distanceToTarget < 1 then
+				-- We're at the target distance, stop
+				break
+			end
+			
+			-- Step towards target (max 25 units per step)
+			local stepSize = math.min(distanceToTarget, 25)
+			local stepEnd = currentPos + segmentDir * stepSize
+			
+			-- First trace: forward at current height
+			local groundTrace = engine.TraceLine(currentPos, stepEnd, 100679691)
+			
+			if groundTrace.fraction >= 0.95 then
+				-- Clear path, move forward
+				currentPos = stepEnd
+				remainingDistance = remainingDistance - stepSize
+			else
+				-- Hit something at ground level
+				local groundSurfaceNormal = groundTrace.plane
+				
+				-- Second trace: 8 units higher in same direction
+				local elevatedStart = currentPos + up * 8
 				local elevatedEnd = elevatedStart + segmentDir * stepSize
-
 				local elevatedTrace = engine.TraceLine(elevatedStart, elevatedEnd, 100679691)
-
-				if elevatedTrace.fraction >= 0.9 then
-					-- Can move up and continue - use elevated position
-					currentPos = elevatedStart + segmentDir * (stepSize * elevatedTrace.fraction)
-					remainingDistance = remainingDistance - stepSize
-				else
-					-- Can't move up to continue - adjust direction to surface
-					local hitNormal = elevatedTrace.plane or trace.plane
-					if hitNormal then
-						-- Project movement direction onto surface plane
-						local dot = segmentDir:Dot(hitNormal)
-						if dot > -0.9 then -- Don't reverse direction completely
-							segmentDir = segmentDir - hitNormal * dot
-							segmentDir = segmentDir / segmentDir:Length()
-
-							-- Try again with adjusted direction from elevated position
-							elevatedEnd = elevatedStart + segmentDir * stepSize
-							elevatedTrace = engine.TraceLine(elevatedStart, elevatedEnd, 100679691)
-							currentPos = elevatedStart + segmentDir * (stepSize * elevatedTrace.fraction)
-							remainingDistance = remainingDistance - (stepSize * elevatedTrace.fraction)
-						else
-							-- Can't adjust direction meaningfully, stop this segment
-							break
+				
+				if elevatedTrace.fraction >= 0.95 then
+					-- Clear path at elevated height
+					local elevatedDistance = stepSize * elevatedTrace.fraction
+					local newPos = elevatedStart + segmentDir * elevatedDistance
+					
+					-- Check if this gets us significantly further (>4 units) than ground trace
+					local groundDistance = stepSize * groundTrace.fraction
+					if elevatedDistance > groundDistance + 4 then
+						-- Extended crawling: use elevated position and continue climbing
+						currentPos = newPos
+						remainingDistance = remainingDistance - elevatedDistance
+						
+						-- Try to climb higher from this position
+						local climbAttempts = 0
+						while climbAttempts < 10 do
+							climbAttempts = climbAttempts + 1
+							
+							local climbStart = currentPos + up * 8
+							local climbEnd = climbStart + segmentDir * 25
+							local climbTrace = engine.TraceLine(climbStart, climbEnd, 100679691)
+							
+							if climbTrace.fraction >= 0.95 then
+								-- Can climb higher
+								currentPos = climbStart + segmentDir * 25
+								remainingDistance = remainingDistance - 25
+							else
+								-- Can't climb further, adjust to surface and stop climbing
+								if climbTrace.plane then
+									local surfaceNormal = climbTrace.plane
+									local dot = segmentDir:Dot(surfaceNormal)
+									if dot > -0.9 then -- Don't reverse direction completely
+										segmentDir = segmentDir - surfaceNormal * dot
+										segmentDir = segmentDir / segmentDir:Length()
+									end
+								end
+								break
+							end
 						end
 					else
-						-- No surface normal, stop this segment
+						-- Not significantly further, just use elevated position
+						currentPos = newPos
+						remainingDistance = remainingDistance - elevatedDistance
+					end
+				else
+					-- Blocked at elevated height too, use ground surface normal
+					if groundSurfaceNormal then
+						-- Adjust direction to be parallel to ground surface while maintaining outward direction
+						local outwardDir = (currentPos - center) / (currentPos - center):Length()
+						local dot = outwardDir:Dot(groundSurfaceNormal)
+						local surfaceParallel = outwardDir - groundSurfaceNormal * dot
+						
+						if surfaceParallel:Length() > 0.001 then
+							surfaceParallel = surfaceParallel / surfaceParallel:Length()
+							segmentDir = surfaceParallel
+							
+							-- Try moving in adjusted direction
+							local adjustedEnd = currentPos + surfaceParallel * stepSize
+							local adjustedTrace = engine.TraceLine(currentPos, adjustedEnd, 100679691)
+							
+							if adjustedTrace.fraction >= 0.1 then
+								local moveDistance = stepSize * adjustedTrace.fraction
+								currentPos = currentPos + surfaceParallel * moveDistance
+								remainingDistance = remainingDistance - moveDistance
+							else
+								-- Completely stuck - stop this segment
+								break
+							end
+						end
+					else
+						-- No surface normal available - stop this segment
 						break
 					end
 				end
-			else
-				-- Clear path, move forward
-				currentPos = traceEnd
-				remainingDistance = remainingDistance - stepSize
 			end
 
-			-- Prevent infinite loops and ensure progress
-			if (currentPos - traceStart):Length() < 1 then
+			-- Safety check to prevent infinite loops
+			if (currentPos - center):Length() >= radius then
 				break
 			end
 		end
@@ -293,7 +365,20 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 		end
 	end
 
-	-- Draw the polygon outline
+	-- Draw filled explosion radius using textured polygon
+	local cords, reverse_cords = {}, {}
+	local sizeof = #positions
+	local sum = 0
+	for i, pos in pairs(positions) do
+		local convertedTbl = { pos[1], pos[2], 0, 0 }
+		cords[i], reverse_cords[sizeof - i + 1] = convertedTbl, convertedTbl
+		sum = sum + Utils.cross2D(pos, positions[(i % sizeof) + 1], positions[1])
+	end
+	if g_iPolygonTexture then
+		draw.TexturedPolygon(g_iPolygonTexture, (sum < 0) and reverse_cords or cords, true)
+	end
+
+	-- Draw outline for explosion radius
 	if Config.visual.outline.polygon then
 		if colorOverride then
 			setColor(colorOverride.r, colorOverride.g, colorOverride.b, colorOverride.a or Config.visual.outline.a)
@@ -304,49 +389,33 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 		local last = positions[#positions]
 		for i = 1, #positions do
 			local new = positions[i]
-			if math.abs(new[1] - last[1]) > math.abs(new[2] - last[2]) then
-				drawLine(last[1], last[2] + 1, new[1], new[2] + 1)
-				drawLine(last[1], last[2] - 1, new[1], new[2] - 1)
-			else
-				drawLine(last[1] + 1, last[2], new[1] + 1, new[2])
-				drawLine(last[1] - 1, last[2], new[1] - 1, new[2])
+			if last and new then
+				if math.abs(new[1] - last[1]) > math.abs(new[2] - last[2]) then
+					drawLine(math.floor(last[1]), math.floor(last[2] + 1), math.floor(new[1]), math.floor(new[2] + 1))
+					drawLine(math.floor(last[1]), math.floor(last[2] - 1), math.floor(new[1]), math.floor(new[2] - 1))
+				else
+					drawLine(math.floor(last[1] + 1), math.floor(last[2]), math.floor(new[1] + 1), math.floor(new[2]))
+					drawLine(math.floor(last[1] - 1), math.floor(last[2]), math.floor(new[1] - 1), math.floor(new[2]))
+				end
 			end
 			last = new
 		end
 	end
 
-	-- Draw filled polygon
+	-- Draw main explosion radius lines
 	if colorOverride then
 		setColor(colorOverride.r, colorOverride.g, colorOverride.b, colorOverride.a or Config.visual.polygon.a)
 	else
 		setColor(Config.visual.polygon.r, Config.visual.polygon.g, Config.visual.polygon.b, Config.visual.polygon.a)
 	end
 
-	local cords, reverse_cords = {}, {}
-	local sizeof = #positions
-	local sum = 0
-	for i, pos in pairs(positions) do
-		local convertedTbl = { pos[1], pos[2], 0, 0 }
-		cords[i], reverse_cords[sizeof - i + 1] = convertedTbl, convertedTbl
-		sum = sum + Utils.cross2D(pos, positions[(i % sizeof) + 1], positions[1])
-	end
-	draw.TexturedPolygon(g_iPolygonTexture, (sum < 0) and reverse_cords or cords, true)
-
-	-- Draw polygon edges
-	do
-		local last = positions[#positions]
-		for i = 1, #positions do
-			local new = positions[i]
-			drawLine(last[1], last[2], new[1], new[2])
-			last = new
+	local last = positions[#positions]
+	for i = 1, #positions do
+		local new = positions[i]
+		if last and new then
+			drawLine(math.floor(last[1]), math.floor(last[2]), math.floor(new[1]), math.floor(new[2]))
 		end
-	end
-end
-
-function Visuals.deleteTexture()
-	if g_iPolygonTexture then
-		draw.DeleteTexture(g_iPolygonTexture)
-		g_iPolygonTexture = nil
+		last = new
 	end
 end
 

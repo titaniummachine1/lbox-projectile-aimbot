@@ -267,6 +267,7 @@ function Manager.Update()
 						spawnTime = globals.CurTime(),
 						lifespan = 10, -- Default 10 seconds, will be updated from weapon data
 						lastUpdateTime = globals.CurTime(),
+						lastSurfaceNormal = Vector3(0, 0, 1), -- Default to up, will be updated from simulation
 					}
 
 					-- Initialize position history with current position
@@ -297,39 +298,39 @@ function Manager.Update()
 				local currentTime = globals.CurTime()
 				local deltaTime = currentTime - proj.lastUpdateTime
 				proj.lastUpdateTime = currentTime
-				
+
 				local currentPos = ent:GetAbsOrigin()
 				local currentVel = ent:EstimateAbsVelocity()
-				
+
 				-- Update position history (shift array)
 				for i = 10, 2, -1 do
-					proj.positionHistory[i] = proj.positionHistory[i-1]
+					proj.positionHistory[i] = proj.positionHistory[i - 1]
 				end
 				proj.positionHistory[1] = currentPos
-				
+
 				-- Calculate velocity from position history (10 ticks ago vs current)
 				local historicalPos = proj.positionHistory[10] or proj.positionHistory[1]
 				local positionDelta = currentPos - historicalPos
 				local timeDelta = deltaTime * 10 -- Approximate time over 10 ticks
-				
+
 				local calculatedVel = Vector3(0, 0, 0)
 				if timeDelta > 0 then
 					calculatedVel = positionDelta / timeDelta
 				end
-				
+
 				-- Combine velocity sources: current EstimateAbsVelocity, historical calculation, and Kalman filtered
 				local combinedVel = (currentVel + calculatedVel) * 0.5
-				
+
 				-- Apply Kalman filtering for smooth velocity
 				proj.filter:predict(combinedVel)
 				local filteredVel = proj.filter:update(combinedVel)
-				
+
 				-- Store velocity history
 				table.insert(proj.velocityHistory, 1, filteredVel)
 				if #proj.velocityHistory > 10 then
 					table.remove(proj.velocityHistory)
 				end
-				
+
 				-- Update projectile data
 				proj.lastPos = currentPos
 				proj.lastVel = filteredVel
@@ -347,7 +348,12 @@ function Manager.Update()
 				proj.predictedPath = path
 				proj.impactPos = impactPos
 				proj.impactPlane = impactPlane
-				
+
+				-- Store the last surface normal from simulation for low velocity situations
+				if impactPlane then
+					proj.lastSurfaceNormal = impactPlane
+				end
+
 				::continue::
 			end
 		end
