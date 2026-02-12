@@ -159,49 +159,35 @@ local CLASS_TO_WEAPON = {
 	["CTFProjectile_JarGas"] = "tf_weapon_jar_gas",
 	["CTFPumpkinBomb"] = "tf_pumpkin_bomb",
 	["CTFProjectile_EnergyBall"] = "tf_weapon_particle_cannon",
-	["CTFProjectile_Cleaver"] = "tf_weapon_cleaver",
+	["CTFProjectile_Cleaver"] = "tf_weapon_cleaver"
 }
 
-function Manager.getProjectileInfo(ent)
+function Manager.getFallbackData(ent)
 	local className = ent:GetClass()
 	local weaponId = CLASS_TO_WEAPON[className]
-
-	-- Try to get weapon info from projectile owner first
+	
+	if weaponId and WEAPON_FALLBACKS[weaponId] then
+		return WEAPON_FALLBACKS[weaponId]
+	end
+	
+	-- Try to get weapon info from the entity if possible
 	local owner = ent:GetOwner()
 	if owner and owner:IsValid() then
 		local weapon = owner:GetPropEntity("m_hActiveWeapon")
 		if weapon and weapon:IsValid() then
-			-- Use dynamic projectile info fetching like the TF2 aimbot code
-			local projInfo = weapon:GetProjectileInfo()
-			if projInfo then
-				local speed = projInfo[1] or 1100
-				local gravityFactor = projInfo[2] or 0.5
-				local sv_gravity = client.GetConVar("sv_gravity") or 800
-				local effectiveGravity = sv_gravity * gravityFactor
-
-				return {
-					blastRadius = WEAPON_FALLBACKS[weapon:GetClass()]
-							and WEAPON_FALLBACKS[weapon:GetClass()].blastRadius
-						or 146,
-					speed = speed,
-					gravity = effectiveGravity,
-					upwardVel = 0,
-				}
+			local weaponClass = weapon:GetClass()
+			if WEAPON_FALLBACKS[weaponClass] then
+				return WEAPON_FALLBACKS[weaponClass]
 			end
 		end
 	end
-
-	-- Fallback to static data if dynamic fetching fails
-	if weaponId and WEAPON_FALLBACKS[weaponId] then
-		return WEAPON_FALLBACKS[weaponId]
-	end
-
+	
 	-- Default fallback for unknown projectiles
 	return {
 		blastRadius = 146, -- Standard TF2 explosion radius
 		speed = 1100, -- Standard projectile speed
-		gravity = 400, -- Standard gravity
-		upwardVel = 0,
+		gravity = 0.5,
+		upwardVel = 0
 	}
 end
 
@@ -237,6 +223,10 @@ function Manager.Update()
 		"CTFGrenadePipebombProjectile",
 		"CTFProjectile_Jar",
 		"CTFProjectile_Flare",
+		"CTFProjectile_JarGas",
+		"CTFPumpkinBomb",
+		"CTFProjectile_EnergyBall",
+		"CTFProjectile_Cleaver"
 	}
 
 	for _, className in ipairs(classes) do
@@ -247,8 +237,8 @@ function Manager.Update()
 				local proj = tracked[idx]
 
 				if not proj then
-					-- Initialize new projectile tracking with dynamic projectile info
-					local fallbackData = Manager.getProjectileInfo(ent)
+					-- Initialize new projectile tracking with fallback data
+					local fallbackData = Manager.getFallbackData(ent)
 					proj = {
 						entity = ent,
 						lastPos = ent:GetAbsOrigin(),
@@ -292,12 +282,7 @@ function Manager.Draw()
 	end
 
 	for _, proj in pairs(tracked) do
-		if proj.predictedPath then
-			-- Call our new visual hook
-			if Visuals.drawTrackerTrajectory then
-				Visuals.drawTrackerTrajectory(proj)
-			end
-		end
+		Visuals.drawTrackerTrajectory(proj)
 	end
 end
 

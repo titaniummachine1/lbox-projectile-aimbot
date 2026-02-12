@@ -180,6 +180,9 @@ local function drawLiveProjectilesTab()
 		cfg.max_distance = TimMenu.Slider("Max Distance", cfg.max_distance, 500, 8000, 100)
 		TimMenu.NextLine()
 
+		cfg.explosion_radius = TimMenu.Slider("Explosion Radius", cfg.explosion_radius, 10, 200, 5)
+		TimMenu.NextLine()
+
 		cfg.revalidate_distance = TimMenu.Slider("Recalc Distance", cfg.revalidate_distance, 10, 200, 5)
 		TimMenu.NextLine()
 

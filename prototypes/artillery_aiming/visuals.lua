@@ -182,7 +182,18 @@ function Visuals.drawTrackerTrajectory(proj)
 
 	-- Draw impact polygon/radius
 	if proj.impactPos and proj.impactPlane and proj.radius then
-		Visuals.drawImpactPolygon(proj.impactPlane, proj.impactPos, proj.radius, Config.visual.live_projectiles.marker)
+		local polygonColor = {
+			r = Config.visual.polygon.r,
+			g = Config.visual.polygon.g,
+			b = Config.visual.polygon.b,
+			a = Config.visual.polygon.a,
+		}
+		Visuals.drawImpactPolygon(
+			proj.impactPlane,
+			proj.impactPos,
+			Config.visual.live_projectiles.explosion_radius,
+			polygonColor
+		)
 	end
 end
 

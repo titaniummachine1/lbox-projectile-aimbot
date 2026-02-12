@@ -1,5 +1,5 @@
 -- Bootstrap
-local Manager = require("projectile/manager")
+local Manager = require("projectile_manager")
 
 local ProjectileTracker = {}
 

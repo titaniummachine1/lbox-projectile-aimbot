@@ -29,6 +29,7 @@ Config.visual = {
 		enabled = true,
 		line = { r = 255, g = 255, b = 255, a = 150 },
 		marker = { r = 255, g = 255, b = 255, a = 255 },
+		explosion_radius = 50,
 		marker_size = 3,
 		max_distance = 4000,
 		rockets = true,
