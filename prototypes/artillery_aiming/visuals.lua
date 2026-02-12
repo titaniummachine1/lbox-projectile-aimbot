@@ -63,82 +63,10 @@ local function drawOutlinedLine(from, to)
 end
 
 function Visuals.drawImpactPolygon(plane, origin, radiusOverride, colorOverride)
-	if not Config.visual.polygon.enabled then
-		return
-	end
-
-	local iSegments = Config.visual.polygon.segments
-	local fSegmentAngleOffset = math.pi / iSegments
-	local fSegmentAngle = fSegmentAngleOffset * 2
-	local radius = radiusOverride or Config.visual.polygon.size
-	local positions = {}
-
-	if math.abs(plane.z) >= 0.99 then
-		for i = 1, iSegments do
-			local ang = i * fSegmentAngle + fSegmentAngleOffset
-			positions[i] = worldToScreen(origin + Vector3(radius * math.cos(ang), radius * math.sin(ang), 0))
-			if not positions[i] then
-				return
-			end
-		end
-	else
-		local right = Vector3(-plane.y, plane.x, 0)
-		local up = Vector3(plane.z * right.y, -plane.z * right.x, (plane.y * right.x) - (plane.x * right.y))
-		radius = radius / math.cos(math.asin(plane.z))
-		for i = 1, iSegments do
-			local ang = i * fSegmentAngle + fSegmentAngleOffset
-			positions[i] = worldToScreen(origin + (right * (radius * math.cos(ang))) + (up * (radius * math.sin(ang))))
-			if not positions[i] then
-				return
-			end
-		end
-	end
-
-	if Config.visual.outline.polygon then
-		if colorOverride then
-			setColor(colorOverride.r, colorOverride.g, colorOverride.b, colorOverride.a or Config.visual.outline.a)
-		else
-			setColor(Config.visual.outline.r, Config.visual.outline.g, Config.visual.outline.b, Config.visual.outline.a)
-		end
-		local last = positions[#positions]
-		for i = 1, #positions do
-			local new = positions[i]
-			if math.abs(new[1] - last[1]) > math.abs(new[2] - last[2]) then
-				drawLine(last[1], last[2] + 1, new[1], new[2] + 1)
-				drawLine(last[1], last[2] - 1, new[1], new[2] - 1)
-			else
-				drawLine(last[1] + 1, last[2], new[1] + 1, new[2])
-				drawLine(last[1] - 1, last[2], new[1] - 1, new[2])
-			end
-			last = new
-		end
-	end
-
-	if colorOverride then
-		setColor(colorOverride.r, colorOverride.g, colorOverride.b, colorOverride.a or Config.visual.polygon.a)
-	else
-		setColor(Config.visual.polygon.r, Config.visual.polygon.g, Config.visual.polygon.b, Config.visual.polygon.a)
-	end
-	do
-		local cords, reverse_cords = {}, {}
-		local sizeof = #positions
-		local sum = 0
-		for i, pos in pairs(positions) do
-			local convertedTbl = { pos[1], pos[2], 0, 0 }
-			cords[i], reverse_cords[sizeof - i + 1] = convertedTbl, convertedTbl
-			sum = sum + Utils.cross2D(pos, positions[(i % sizeof) + 1], positions[1])
-		end
-		draw.TexturedPolygon(g_iPolygonTexture, (sum < 0) and reverse_cords or cords, true)
-	end
-
-	do
-		local last = positions[#positions]
-		for i = 1, #positions do
-			local new = positions[i]
-			drawLine(last[1], last[2], new[1], new[2])
-			last = new
-		end
-	end
+	-- Use crawling explosion radius instead of flat polygon
+	-- plane is the impact normal, origin is impact position
+	local explosionRadius = radiusOverride or 146 -- Use actual TF2 explosion radius
+	Visuals.drawCrawlingExplosionRadius(origin, plane, explosionRadius, colorOverride)
 end
 
 function Visuals.drawTrajectory()
@@ -330,6 +258,15 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 				if projected then
 					currentDir = projected
 					table.insert(subSegments, {pos = currentPos, dir = currentDir})
+					
+					-- Step down after surface adjustment
+					local downDir = -hitNormal
+					local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 150, TRACE_MASK)
+					if downTrace.fraction < 1.0 then
+						currentPos = currentPos + downDir * (150 * downTrace.fraction)
+						currentPos = clampToRadius(center, currentPos, radius)
+						table.insert(subSegments, {pos = currentPos, dir = currentDir})
+					end
 				end
 				lastNormal = hitNormal -- Update to new surface
 			end
@@ -342,6 +279,15 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 			if elevatedTrace.fraction >= 0.98 then
 				currentPos = elevatedStart + currentDir * (stepSize * elevatedTrace.fraction)
 				table.insert(subSegments, {pos = currentPos, dir = currentDir})
+				
+				-- Step down after elevation
+				local downDir = -hitNormal
+				local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 150, TRACE_MASK)
+				if downTrace.fraction < 1.0 then
+					currentPos = currentPos + downDir * (150 * downTrace.fraction)
+					currentPos = clampToRadius(center, currentPos, radius)
+					table.insert(subSegments, {pos = currentPos, dir = currentDir})
+				end
 				goto continue_segment
 			end
 
@@ -354,6 +300,15 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 				if slideTrace.fraction >= 0.1 then
 					currentPos = currentPos + currentDir * (stepSize * slideTrace.fraction)
 					table.insert(subSegments, {pos = currentPos, dir = currentDir})
+					
+					-- Step down after sliding
+					local downDir = -hitNormal
+					local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 150, TRACE_MASK)
+					if downTrace.fraction < 1.0 then
+						currentPos = currentPos + downDir * (150 * downTrace.fraction)
+						currentPos = clampToRadius(center, currentPos, radius)
+						table.insert(subSegments, {pos = currentPos, dir = currentDir})
+					end
 					goto continue_segment
 				end
 			end
@@ -368,6 +323,15 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 				if altTrace.fraction >= 0.5 then
 					currentPos = currentPos + currentDir * (stepSize * 0.5 * altTrace.fraction)
 					table.insert(subSegments, {pos = currentPos, dir = currentDir})
+					
+					-- Step down after alternative direction
+					local downDir = -hitNormal
+					local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 150, TRACE_MASK)
+					if downTrace.fraction < 1.0 then
+						currentPos = currentPos + downDir * (150 * downTrace.fraction)
+						currentPos = clampToRadius(center, currentPos, radius)
+						table.insert(subSegments, {pos = currentPos, dir = currentDir})
+					end
 					goto continue_segment
 				end
 			end
@@ -380,6 +344,15 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 			if smallTrace.fraction >= 0.25 then
 				currentPos = currentPos + progressDir * (smallStep * smallTrace.fraction)
 				table.insert(subSegments, {pos = currentPos, dir = progressDir})
+				
+				-- Step down after small progress
+				local downDir = -(lastNormal or surfaceNormal)
+				local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 150, TRACE_MASK)
+				if downTrace.fraction < 1.0 then
+					currentPos = currentPos + downDir * (150 * downTrace.fraction)
+					currentPos = clampToRadius(center, currentPos, radius)
+					table.insert(subSegments, {pos = currentPos, dir = progressDir})
+				end
 				goto continue_segment
 			end
 
@@ -393,14 +366,14 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 		local finalPos = clampToRadius(center, currentPos, radius)
 		table.insert(subSegments, {pos = finalPos, dir = currentDir})
 
-		-- Step down logic using last hit surface normal
+		-- Step down logic using last hit surface normal (always happens)
 		local downDir = -(lastNormal or surfaceNormal)
-		local downTrace = engine.TraceLine(finalPos, finalPos + downDir * 50, TRACE_MASK)
+		local downTrace = engine.TraceLine(finalPos, finalPos + downDir * 150, TRACE_MASK)
 		if downTrace.fraction < 1.0 then
-			finalPos = finalPos + downDir * (50 * downTrace.fraction)
+			finalPos = finalPos + downDir * (150 * downTrace.fraction)
 			finalPos = clampToRadius(center, finalPos, radius)
-			subSegments[#subSegments].pos = finalPos
 		end
+		subSegments[#subSegments].pos = finalPos
 
 		positions[i] = subSegments
 	end
