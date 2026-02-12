@@ -157,6 +157,35 @@ function Visuals.drawAimGuide()
 	drawLine(math.floor(start2d[1]), math.floor(start2d[2]), math.floor(end2d[1]), math.floor(end2d[2]))
 end
 
+function Visuals.drawTrackerTrajectory(proj)
+	if not proj or not proj.predictedPath then
+		return
+	end
+
+	-- Draw projectile trajectory path
+	if #proj.predictedPath > 1 then
+		setColor(
+			Config.visual.live_projectiles.line.r,
+			Config.visual.live_projectiles.line.g,
+			Config.visual.live_projectiles.line.b,
+			Config.visual.live_projectiles.line.a
+		)
+
+		for i = 1, #proj.predictedPath - 1 do
+			local p1 = worldToScreen(proj.predictedPath[i])
+			local p2 = worldToScreen(proj.predictedPath[i + 1])
+			if p1 and p2 then
+				drawLine(math.floor(p1[1]), math.floor(p1[2]), math.floor(p2[1]), math.floor(p2[2]))
+			end
+		end
+	end
+
+	-- Draw impact polygon/radius
+	if proj.impactPos and proj.impactPlane and proj.radius then
+		Visuals.drawImpactPolygon(proj.impactPlane, proj.impactPos, proj.radius, Config.visual.live_projectiles.marker)
+	end
+end
+
 function Visuals.deleteTexture()
 	if g_iPolygonTexture then
 		draw.DeleteTexture(g_iPolygonTexture)

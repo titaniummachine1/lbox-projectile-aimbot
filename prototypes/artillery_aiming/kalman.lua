@@ -57,4 +57,9 @@ function VectorKalman:update(vec)
 	return Vector3(x, y, z)
 end
 
-return VectorKalman
+local Kalman = {
+	KalmanFilter = KalmanFilter,
+	VectorKalman = VectorKalman,
+}
+
+return Kalman
