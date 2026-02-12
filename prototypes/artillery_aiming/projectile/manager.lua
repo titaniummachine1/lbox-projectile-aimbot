@@ -207,12 +207,18 @@ end
 
 local tracked = {}
 
+-- Cache for projectiles that go out of render distance
+local projectileCache = {}
+local CACHE_TIMEOUT = 10.0 -- seconds to keep cached projectiles
+
 function Manager.Startup()
 	tracked = {}
+	projectileCache = {}
 end
 
 function Manager.Shutdown()
 	tracked = {}
+	projectileCache = {}
 end
 
 function Manager.Update()
@@ -247,6 +253,7 @@ function Manager.Update()
 				local proj = tracked[idx]
 
 				if not proj then
+					-- Always regenerate new projectile tracking, no cache fallback
 					-- Initialize new projectile tracking with enhanced data
 					local fallbackData = Manager.getProjectileInfo(ent)
 					local currentPos = ent:GetAbsOrigin()
@@ -293,6 +300,8 @@ function Manager.Update()
 
 					tracked[idx] = proj
 				end
+
+				::continue_entity::
 
 				proj.seenThisFrame = true
 				local currentTime = globals.CurTime()
@@ -359,15 +368,35 @@ function Manager.Update()
 		end
 	end
 
-	-- Cleanup
-	local toRemove = {}
+	-- Cache projectiles that went out of view instead of immediately removing them
+	local toCache = {}
 	for idx, proj in pairs(tracked) do
 		if not proj.seenThisFrame then
-			table.insert(toRemove, idx)
+			local cacheKey = proj.entity:GetClass() .. "_" .. idx
+			toCache[cacheKey] = {
+				projectile = proj,
+				lastSeen = globals.CurTime(),
+				idx = idx,
+			}
 		end
 	end
-	for _, idx in ipairs(toRemove) do
-		tracked[idx] = nil
+
+	-- Add to cache
+	for cacheKey, data in pairs(toCache) do
+		projectileCache[cacheKey] = data
+		tracked[data.idx] = nil
+	end
+
+	-- Clean up old cache entries
+	local currentTime = globals.CurTime()
+	local toRemove = {}
+	for cacheKey, data in pairs(projectileCache) do
+		if (currentTime - data.lastSeen) > CACHE_TIMEOUT then
+			toRemove[cacheKey] = true
+		end
+	end
+	for cacheKey in pairs(toRemove) do
+		projectileCache[cacheKey] = nil
 	end
 end
 

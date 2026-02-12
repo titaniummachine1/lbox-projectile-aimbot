@@ -152,7 +152,18 @@ function Visuals.drawTrajectory()
 	end
 
 	if traj.impactPlane and traj.impactPos then
-		Visuals.drawImpactPolygon(traj.impactPlane, traj.impactPos)
+		local polygonColor = {
+			r = Config.visual.polygon.r,
+			g = Config.visual.polygon.g,
+			b = Config.visual.polygon.b,
+			a = Config.visual.polygon.a,
+		}
+		Visuals.drawCrawlingExplosionRadius(
+			traj.impactPos,
+			traj.impactPlane,
+			Config.visual.polygon.size,
+			polygonColor
+		)
 	end
 
 	local num = #traj.positions
@@ -253,29 +264,19 @@ function Visuals.drawTrackerTrajectory(proj)
 				impactCenter,
 				surfaceNormal,
 				Config.visual.live_projectiles.explosion_radius,
-				polygonColor,
-				isStatic
+				polygonColor
 			)
 		end
 	end
 end
 
-function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colorOverride, skipCrawl)
+function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colorOverride)
 	if not Config.visual.polygon.enabled then
 		return
 	end
 
-	if skipCrawl then
-		Visuals.drawImpactPolygon(surfaceNormal, center, radius, colorOverride)
-		return
-	end
-
 	local iSegments = Config.visual.polygon.segments
-	local positions = {}
-	local upVector = surfaceNormal and normalizeVector(surfaceNormal) or Vector3(0, 0, 1)
-	if not upVector then
-		upVector = Vector3(0, 0, 1)
-	end
+	local positions = {} -- now each positions[i] will be an array of sub-segments
 
 	for i = 1, iSegments do
 		local angle = (i - 1) * (2 * math.pi / iSegments)
@@ -283,9 +284,12 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 		radialDir = normalizeVector(radialDir) or Vector3(1, 0, 0)
 
 		local currentPos = center
+		local currentDir = radialDir
+		local subSegments = {{pos = center, dir = radialDir}}
+		local lastNormal = nil -- Will be set to first hit surface normal
+
 		local steps = 0
 		local maxSteps = 64
-		local slideNormal = surfaceNormal -- fallback to initial surface normal
 
 		while steps < maxSteps do
 			steps = steps + 1
@@ -297,84 +301,127 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 
 			local remaining = radius - dist
 			local stepSize = math.min(remaining, RADIAL_STEP)
-			local desiredEnd = currentPos + radialDir * stepSize
+			local desiredEnd = currentPos + currentDir * stepSize
 			local groundTrace = engine.TraceLine(currentPos, desiredEnd, TRACE_MASK)
-			slideNormal = groundTrace.plane or surfaceNormal -- update with current surface normal
-			if not slideNormal then
-				break
-			end
 
 			if groundTrace.fraction >= 0.98 then
 				currentPos = desiredEnd
 				goto continue_segment
 			end
 
-			local elevatedStart = currentPos + slideNormal * ELEVATION_STEP
-			local elevatedEnd = elevatedStart + radialDir * stepSize
+			-- Hit something - always use the hit surface normal as lastNormal
+			local hitNormal = groundTrace.plane or surfaceNormal
+			if not lastNormal then
+				lastNormal = hitNormal -- First hit becomes the reference surface
+			end
+
+			local shouldChangeDirection = false
+			if lastNormal then
+				local dot = hitNormal:Dot(lastNormal)
+				if dot < 0.95 then -- surface changed
+					shouldChangeDirection = true
+				end
+			end
+
+			if shouldChangeDirection then
+				-- Create new sub-segment with adjusted direction
+				local outward = normalizeVector(currentPos - center) or currentDir
+				local projected = projectOntoPlane(outward, hitNormal)
+				if projected then
+					currentDir = projected
+					table.insert(subSegments, {pos = currentPos, dir = currentDir})
+				end
+				lastNormal = hitNormal -- Update to new surface
+			end
+
+			-- Try elevation using last hit surface normal
+			local elevatedStart = currentPos + hitNormal * ELEVATION_STEP
+			local elevatedEnd = elevatedStart + currentDir * stepSize
 			local elevatedTrace = engine.TraceLine(elevatedStart, elevatedEnd, TRACE_MASK)
 
 			if elevatedTrace.fraction >= 0.98 then
-				local elevatedAdvance = stepSize * elevatedTrace.fraction
-				local groundAdvance = stepSize * (groundTrace.fraction or 0)
-				currentPos = elevatedStart + radialDir * elevatedAdvance
-
-				if elevatedAdvance > groundAdvance + 4 then
-					local climbAttempts = 0
-					while climbAttempts < 10 do
-						climbAttempts = climbAttempts + 1
-						local climbStart = currentPos + slideNormal * ELEVATION_STEP
-						local climbEnd = climbStart + radialDir * stepSize
-						local climbTrace = engine.TraceLine(climbStart, climbEnd, TRACE_MASK)
-						if climbTrace.fraction >= 0.98 then
-							currentPos = climbStart + radialDir * (stepSize * climbTrace.fraction)
-						else
-							local climbNormal = climbTrace.plane
-							local outwardNorm = normalizeVector(currentPos - center) or radialDir
-							local projected = projectOntoPlane(outwardNorm, climbNormal)
-							if projected then
-								radialDir = projected
-							end
-							break
-						end
-					end
-				end
+				currentPos = elevatedStart + currentDir * (stepSize * elevatedTrace.fraction)
+				table.insert(subSegments, {pos = currentPos, dir = currentDir})
 				goto continue_segment
 			end
 
-			local outward = normalizeVector(currentPos - center) or radialDir
-			local slideDir = projectOntoPlane(outward, slideNormal)
+			-- If elevation failed, try sliding parallel to last hit surface
+			local slideDir = projectOntoPlane(currentDir, hitNormal)
 			if slideDir then
-				radialDir = slideDir
-				local slideEnd = currentPos + radialDir * stepSize
+				currentDir = slideDir
+				local slideEnd = currentPos + currentDir * stepSize
 				local slideTrace = engine.TraceLine(currentPos, slideEnd, TRACE_MASK)
 				if slideTrace.fraction >= 0.1 then
-					currentPos = currentPos + radialDir * (stepSize * slideTrace.fraction)
+					currentPos = currentPos + currentDir * (stepSize * slideTrace.fraction)
+					table.insert(subSegments, {pos = currentPos, dir = currentDir})
 					goto continue_segment
 				end
 			end
-			break -- no progress
+
+			-- If all failed, try to go around obstacle using last hit surface
+			local outward = normalizeVector(currentPos - center) or currentDir
+			local alternativeDir = projectOntoPlane(outward, hitNormal)
+			if alternativeDir then
+				currentDir = alternativeDir
+				local altEnd = currentPos + currentDir * (stepSize * 0.5) -- smaller step
+				local altTrace = engine.TraceLine(currentPos, altEnd, TRACE_MASK)
+				if altTrace.fraction >= 0.5 then
+					currentPos = currentPos + currentDir * (stepSize * 0.5 * altTrace.fraction)
+					table.insert(subSegments, {pos = currentPos, dir = currentDir})
+					goto continue_segment
+				end
+			end
+
+			-- Last resort: move a small step in any direction that makes progress
+			local progressDir = normalizeVector(currentPos - center) or currentDir
+			local smallStep = stepSize * 0.25
+			local smallEnd = currentPos + progressDir * smallStep
+			local smallTrace = engine.TraceLine(currentPos, smallEnd, TRACE_MASK)
+			if smallTrace.fraction >= 0.25 then
+				currentPos = currentPos + progressDir * (smallStep * smallTrace.fraction)
+				table.insert(subSegments, {pos = currentPos, dir = progressDir})
+				goto continue_segment
+			end
+
+			-- If absolutely stuck, break but continue to next segment
+			break
 
 			::continue_segment::
 		end
 
-		currentPos = clampToRadius(center, currentPos, radius)
+		-- Add final position
+		local finalPos = clampToRadius(center, currentPos, radius)
+		table.insert(subSegments, {pos = finalPos, dir = currentDir})
 
-		-- Step down logic: try to place neatly on the surface it propagated through
-		local downDir = -slideNormal -- step down relative to current surface
-		local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 50, TRACE_MASK)
+		-- Step down logic using last hit surface normal
+		local downDir = -(lastNormal or surfaceNormal)
+		local downTrace = engine.TraceLine(finalPos, finalPos + downDir * 50, TRACE_MASK)
 		if downTrace.fraction < 1.0 then
-			-- Hit something below, place on that surface
-			currentPos = currentPos + downDir * (50 * downTrace.fraction)
-			currentPos = clampToRadius(center, currentPos, radius) -- re-clamp after stepping down
+			finalPos = finalPos + downDir * (50 * downTrace.fraction)
+			finalPos = clampToRadius(center, finalPos, radius)
+			subSegments[#subSegments].pos = finalPos
 		end
-		-- If no hit, keep current position (don't step down)
 
-		positions[i] = worldToScreen(currentPos)
+		positions[i] = subSegments
 	end
 
 	local centerScreen = worldToScreen(center)
 	if not centerScreen then
 		return
+	end
+
+	-- Convert world positions to screen positions
+	local screenPaths = {}
+	for i = 1, iSegments do
+		screenPaths[i] = {}
+		if positions[i] then
+			for j, subSeg in ipairs(positions[i]) do
+				local screenPos = worldToScreen(subSeg.pos)
+				if screenPos then
+					screenPaths[i][j] = screenPos
+				end
+			end
+		end
 	end
 
 	if colorOverride then
@@ -384,23 +431,50 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 	end
 
 	if g_iPolygonTexture then
+		-- Draw triangles connecting sub-segments between adjacent radial segments
 		for i = 1, iSegments do
-			local nextIndex = (i % iSegments) + 1
-			local p1 = positions[i]
-			local p2 = positions[nextIndex]
-			if p1 and p2 then
-				local tri = {
-					{ p1[1], p1[2], 0, 0 },
-					{ p2[1], p2[2], 0, 0 },
-					{ centerScreen[1], centerScreen[2], 0, 0 },
-				}
-				draw.TexturedPolygon(g_iPolygonTexture, tri, true)
-				local triBack = {
-					{ centerScreen[1], centerScreen[2], 0, 0 },
-					{ p2[1], p2[2], 0, 0 },
-					{ p1[1], p1[2], 0, 0 },
-				}
-				draw.TexturedPolygon(g_iPolygonTexture, triBack, true)
+			local currentPath = screenPaths[i]
+			local nextPath = screenPaths[(i % iSegments) + 1]
+
+			if currentPath and nextPath then
+				local maxSubs = math.max(#currentPath, #nextPath)
+
+				for j = 1, maxSubs - 1 do
+					local p1 = currentPath[j] or currentPath[#currentPath]
+					local p2 = currentPath[j + 1] or currentPath[#currentPath]
+					local p3 = nextPath[j] or nextPath[#nextPath]
+					local p4 = nextPath[j + 1] or nextPath[#nextPath]
+
+					if p1 and p2 and p3 then
+						local tri1 = {
+							{ p1[1], p1[2], 0, 0 },
+							{ p2[1], p2[2], 0, 0 },
+							{ p3[1], p3[2], 0, 0 },
+						}
+						draw.TexturedPolygon(g_iPolygonTexture, tri1, true)
+						local tri1Back = {
+							{ p3[1], p3[2], 0, 0 },
+							{ p2[1], p2[2], 0, 0 },
+							{ p1[1], p1[2], 0, 0 },
+						}
+						draw.TexturedPolygon(g_iPolygonTexture, tri1Back, true)
+					end
+
+					if p2 and p3 and p4 then
+						local tri2 = {
+							{ p2[1], p2[2], 0, 0 },
+							{ p4[1], p4[2], 0, 0 },
+							{ p3[1], p3[2], 0, 0 },
+						}
+						draw.TexturedPolygon(g_iPolygonTexture, tri2, true)
+						local tri2Back = {
+							{ p3[1], p3[2], 0, 0 },
+							{ p4[1], p4[2], 0, 0 },
+							{ p2[1], p2[2], 0, 0 },
+						}
+						draw.TexturedPolygon(g_iPolygonTexture, tri2Back, true)
+					end
+				end
 			end
 		end
 	end
@@ -413,17 +487,20 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 			setColor(Config.visual.outline.r, Config.visual.outline.g, Config.visual.outline.b, Config.visual.outline.a)
 		end
 
+		-- Draw outline along the path points
 		for i = 1, iSegments do
-			local nextIndex = (i % iSegments) + 1
-			local p1 = positions[i]
-			local p2 = positions[nextIndex]
-			if p1 and p2 then
-				if math.abs(p2[1] - p1[1]) > math.abs(p2[2] - p1[2]) then
-					drawLine(math.floor(p1[1]), math.floor(p1[2] + 1), math.floor(p2[1]), math.floor(p2[2] + 1))
-					drawLine(math.floor(p1[1]), math.floor(p1[2] - 1), math.floor(p2[1]), math.floor(p2[2] - 1))
-				else
-					drawLine(math.floor(p1[1] + 1), math.floor(p1[2]), math.floor(p2[1] + 1), math.floor(p2[2]))
-					drawLine(math.floor(p1[1] - 1), math.floor(p1[2]), math.floor(p2[1] - 1), math.floor(p2[2]))
+			local path = screenPaths[i]
+			for j = 1, #path - 1 do
+				local p1 = path[j]
+				local p2 = path[j + 1]
+				if p1 and p2 then
+					if math.abs(p2[1] - p1[1]) > math.abs(p2[2] - p1[2]) then
+						drawLine(math.floor(p1[1]), math.floor(p1[2] + 1), math.floor(p2[1]), math.floor(p2[2] + 1))
+						drawLine(math.floor(p1[1]), math.floor(p1[2] - 1), math.floor(p2[1]), math.floor(p2[2] - 1))
+					else
+						drawLine(math.floor(p1[1] + 1), math.floor(p1[2]), math.floor(p2[1] + 1), math.floor(p2[2]))
+						drawLine(math.floor(p1[1] - 1), math.floor(p1[2]), math.floor(p2[1] - 1), math.floor(p2[2]))
+					end
 				end
 			end
 		end
@@ -436,12 +513,15 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 		setColor(Config.visual.polygon.r, Config.visual.polygon.g, Config.visual.polygon.b, Config.visual.polygon.a)
 	end
 
+	-- Draw main lines along the path points
 	for i = 1, iSegments do
-		local nextIndex = (i % iSegments) + 1
-		local p1 = positions[i]
-		local p2 = positions[nextIndex]
-		if p1 and p2 then
-			drawLine(math.floor(p1[1]), math.floor(p1[2]), math.floor(p2[1]), math.floor(p2[2]))
+		local path = screenPaths[i]
+		for j = 1, #path - 1 do
+			local p1 = path[j]
+			local p2 = path[j + 1]
+			if p1 and p2 then
+				drawLine(math.floor(p1[1]), math.floor(p1[2]), math.floor(p2[1]), math.floor(p2[2]))
+			end
 		end
 	end
 end

@@ -6,7 +6,7 @@ Config.visual = {
 		r = 255,
 		g = 200,
 		b = 155,
-		a = 25,
+		a = 80, -- Increased from 25 to 80 for better visibility
 		size = 10,
 		segments = 20,
 	},
