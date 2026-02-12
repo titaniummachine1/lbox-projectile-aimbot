@@ -237,7 +237,9 @@ function Visuals.drawTrackerTrajectory(proj)
 			surfaceNormal = proj.lastSurfaceNormal
 		end
 		local impactCenter = proj.impactPos or proj.origin or proj.lastPos
+		local isStatic = false
 		if speed and speed < 10 then
+			isStatic = true
 			surfaceNormal = proj.lastSurfaceNormal or surfaceNormal
 			if proj.entity and proj.entity:IsValid() then
 				impactCenter = proj.entity:GetAbsOrigin()
@@ -251,14 +253,20 @@ function Visuals.drawTrackerTrajectory(proj)
 				impactCenter,
 				surfaceNormal,
 				Config.visual.live_projectiles.explosion_radius,
-				polygonColor
+				polygonColor,
+				isStatic
 			)
 		end
 	end
 end
 
-function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colorOverride)
+function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colorOverride, skipCrawl)
 	if not Config.visual.polygon.enabled then
+		return
+	end
+
+	if skipCrawl then
+		Visuals.drawImpactPolygon(surfaceNormal, center, radius, colorOverride)
 		return
 	end
 
@@ -277,6 +285,7 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 		local currentPos = center
 		local steps = 0
 		local maxSteps = 64
+		local slideNormal = surfaceNormal -- fallback to initial surface normal
 
 		while steps < maxSteps do
 			steps = steps + 1
@@ -290,12 +299,17 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 			local stepSize = math.min(remaining, RADIAL_STEP)
 			local desiredEnd = currentPos + radialDir * stepSize
 			local groundTrace = engine.TraceLine(currentPos, desiredEnd, TRACE_MASK)
+			slideNormal = groundTrace.plane or surfaceNormal -- update with current surface normal
+			if not slideNormal then
+				break
+			end
+
 			if groundTrace.fraction >= 0.98 then
 				currentPos = desiredEnd
 				goto continue_segment
 			end
 
-			local elevatedStart = currentPos + upVector * ELEVATION_STEP
+			local elevatedStart = currentPos + slideNormal * ELEVATION_STEP
 			local elevatedEnd = elevatedStart + radialDir * stepSize
 			local elevatedTrace = engine.TraceLine(elevatedStart, elevatedEnd, TRACE_MASK)
 
@@ -308,7 +322,7 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 					local climbAttempts = 0
 					while climbAttempts < 10 do
 						climbAttempts = climbAttempts + 1
-						local climbStart = currentPos + upVector * ELEVATION_STEP
+						local climbStart = currentPos + slideNormal * ELEVATION_STEP
 						local climbEnd = climbStart + radialDir * stepSize
 						local climbTrace = engine.TraceLine(climbStart, climbEnd, TRACE_MASK)
 						if climbTrace.fraction >= 0.98 then
@@ -327,7 +341,6 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 				goto continue_segment
 			end
 
-			local slideNormal = groundTrace.plane or elevatedTrace.plane or surfaceNormal
 			local outward = normalizeVector(currentPos - center) or radialDir
 			local slideDir = projectOntoPlane(outward, slideNormal)
 			if slideDir then
@@ -345,20 +358,51 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 		end
 
 		currentPos = clampToRadius(center, currentPos, radius)
-		positions[i] = worldToScreen(currentPos) or worldToScreen(center)
+
+		-- Step down logic: try to place neatly on the surface it propagated through
+		local downDir = -slideNormal -- step down relative to current surface
+		local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 50, TRACE_MASK)
+		if downTrace.fraction < 1.0 then
+			-- Hit something below, place on that surface
+			currentPos = currentPos + downDir * (50 * downTrace.fraction)
+			currentPos = clampToRadius(center, currentPos, radius) -- re-clamp after stepping down
+		end
+		-- If no hit, keep current position (don't step down)
+
+		positions[i] = worldToScreen(currentPos)
 	end
 
-	-- Draw filled explosion radius using textured polygon
-	local cords, reverse_cords = {}, {}
-	local sizeof = #positions
-	local sum = 0
-	for i, pos in pairs(positions) do
-		local convertedTbl = { pos[1], pos[2], 0, 0 }
-		cords[i], reverse_cords[sizeof - i + 1] = convertedTbl, convertedTbl
-		sum = sum + Utils.cross2D(pos, positions[(i % sizeof) + 1], positions[1])
+	local centerScreen = worldToScreen(center)
+	if not centerScreen then
+		return
 	end
+
+	if colorOverride then
+		setColor(colorOverride.r, colorOverride.g, colorOverride.b, colorOverride.a or Config.visual.polygon.a)
+	else
+		setColor(Config.visual.polygon.r, Config.visual.polygon.g, Config.visual.polygon.b, Config.visual.polygon.a)
+	end
+
 	if g_iPolygonTexture then
-		draw.TexturedPolygon(g_iPolygonTexture, (sum < 0) and reverse_cords or cords, true)
+		for i = 1, iSegments do
+			local nextIndex = (i % iSegments) + 1
+			local p1 = positions[i]
+			local p2 = positions[nextIndex]
+			if p1 and p2 then
+				local tri = {
+					{ p1[1], p1[2], 0, 0 },
+					{ p2[1], p2[2], 0, 0 },
+					{ centerScreen[1], centerScreen[2], 0, 0 },
+				}
+				draw.TexturedPolygon(g_iPolygonTexture, tri, true)
+				local triBack = {
+					{ centerScreen[1], centerScreen[2], 0, 0 },
+					{ p2[1], p2[2], 0, 0 },
+					{ p1[1], p1[2], 0, 0 },
+				}
+				draw.TexturedPolygon(g_iPolygonTexture, triBack, true)
+			end
+		end
 	end
 
 	-- Draw outline for explosion radius
@@ -369,19 +413,19 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 			setColor(Config.visual.outline.r, Config.visual.outline.g, Config.visual.outline.b, Config.visual.outline.a)
 		end
 
-		local last = positions[#positions]
-		for i = 1, #positions do
-			local new = positions[i]
-			if last and new then
-				if math.abs(new[1] - last[1]) > math.abs(new[2] - last[2]) then
-					drawLine(math.floor(last[1]), math.floor(last[2] + 1), math.floor(new[1]), math.floor(new[2] + 1))
-					drawLine(math.floor(last[1]), math.floor(last[2] - 1), math.floor(new[1]), math.floor(new[2] - 1))
+		for i = 1, iSegments do
+			local nextIndex = (i % iSegments) + 1
+			local p1 = positions[i]
+			local p2 = positions[nextIndex]
+			if p1 and p2 then
+				if math.abs(p2[1] - p1[1]) > math.abs(p2[2] - p1[2]) then
+					drawLine(math.floor(p1[1]), math.floor(p1[2] + 1), math.floor(p2[1]), math.floor(p2[2] + 1))
+					drawLine(math.floor(p1[1]), math.floor(p1[2] - 1), math.floor(p2[1]), math.floor(p2[2] - 1))
 				else
-					drawLine(math.floor(last[1] + 1), math.floor(last[2]), math.floor(new[1] + 1), math.floor(new[2]))
-					drawLine(math.floor(last[1] - 1), math.floor(last[2]), math.floor(new[1] - 1), math.floor(new[2]))
+					drawLine(math.floor(p1[1] + 1), math.floor(p1[2]), math.floor(p2[1] + 1), math.floor(p2[2]))
+					drawLine(math.floor(p1[1] - 1), math.floor(p1[2]), math.floor(p2[1] - 1), math.floor(p2[2]))
 				end
 			end
-			last = new
 		end
 	end
 
@@ -392,13 +436,13 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 		setColor(Config.visual.polygon.r, Config.visual.polygon.g, Config.visual.polygon.b, Config.visual.polygon.a)
 	end
 
-	local last = positions[#positions]
-	for i = 1, #positions do
-		local new = positions[i]
-		if last and new then
-			drawLine(math.floor(last[1]), math.floor(last[2]), math.floor(new[1]), math.floor(new[2]))
+	for i = 1, iSegments do
+		local nextIndex = (i % iSegments) + 1
+		local p1 = positions[i]
+		local p2 = positions[nextIndex]
+		if p1 and p2 then
+			drawLine(math.floor(p1[1]), math.floor(p1[2]), math.floor(p2[1]), math.floor(p2[2]))
 		end
-		last = new
 	end
 end
 
