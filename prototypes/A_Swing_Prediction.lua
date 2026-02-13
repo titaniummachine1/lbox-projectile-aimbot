@@ -90,6 +90,7 @@ function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
             return nil
         end
 
+        local maxDeltaPerTickRad = math.rad(45)
         local totalYawChange = 0
         local samples = 0
 
@@ -109,8 +110,10 @@ function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
                     diff = diff + 2 * math.pi
                 end
 
-                totalYawChange = totalYawChange + diff
-                samples = samples + 1
+                if math.abs(diff) <= maxDeltaPerTickRad then
+                    totalYawChange = totalYawChange + diff
+                    samples = samples + 1
+                end
             end
         end
 
@@ -326,8 +329,21 @@ end
 
 -- Module-level trace filter to avoid closure allocations
 local currentTraceIndex = 0
+local currentTraceTeam = -1
 local function TraceFilterOtherPlayers(ent)
-    return ent:GetIndex() ~= currentTraceIndex
+    if not ent or not ent:IsValid() then
+        return false
+    end
+
+    if ent:GetIndex() == currentTraceIndex then
+        return false
+    end
+
+    if ent:IsPlayer() and currentTraceTeam ~= -1 and ent:GetTeamNumber() == currentTraceTeam then
+        return false
+    end
+
+    return true
 end
 
 -- Enhanced PlayerTick simulation system
@@ -706,6 +722,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
     )
 
     local tickinterval = simCtx.tickinterval
+    currentTraceTeam = playerCtx.team or -1
 
     playerCtx.initialYaw = playerCtx.initialYaw or playerCtx.yaw or 0
     playerCtx.strafeYaw = playerCtx.strafeYaw or playerCtx.initialYaw
@@ -876,6 +893,7 @@ local function clonePlayerContext(src)
         maxs = src.maxs,
         maxspeed = src.maxspeed,
         index = src.index,
+        team = src.team,
         stepheight = src.stepheight,
         yaw = src.yaw,
         yawDeltaPerTick = src.yawDeltaPerTick,
@@ -940,6 +958,9 @@ local function createPlayerContext(entity, relativeWishDir)
     local index = entity:GetIndex()
     assert(index, "createPlayerContext: entity:GetIndex() returned nil")
 
+    local team = entity:GetTeamNumber()
+    assert(team, "createPlayerContext: entity:GetTeamNumber() returned nil")
+
     local originWithOffset = origin + Vector3(0, 0, 1)
 
     local yaw = entity:GetPropFloat("m_angEyeAngles[1]") or 0
@@ -979,12 +1000,13 @@ local function createPlayerContext(entity, relativeWishDir)
 
     return {
         entity = entity,
-        origin = originWithOffset,  -- Already a Vector3 from line 937, no need to clone
         velocity = Vector3(velocity:Unpack()),  -- Clone once for mutation safety
+        origin = originWithOffset,  -- Already a Vector3 from line 937, no need to clone
         mins = mins,
         maxs = maxs,
         maxspeed = maxspeed,
         index = index,
+        team = team,
         stepheight = 18,
         yaw = yaw,
         yawDeltaPerTick = yawDeltaPerTick,
