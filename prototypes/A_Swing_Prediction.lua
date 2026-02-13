@@ -765,65 +765,109 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
     local tickinterval = simCtx.tickinterval
     currentTraceTeam = playerCtx.team or -1
 
-    playerCtx.initialYaw = playerCtx.initialYaw or playerCtx.yaw or 0
-    playerCtx.strafeYaw = playerCtx.strafeYaw or playerCtx.initialYaw
-    playerCtx.totalStrafeDelta = playerCtx.totalStrafeDelta or 0
+    -- Initialize view yaw tracking (used for strafe rotation)
+    playerCtx.viewYaw = playerCtx.viewYaw or playerCtx.yaw or 0
 
-    local speed2d = Length2D(playerCtx.velocity)
-    if not playerCtx.initialVelocityYaw then
-        if speed2d > 0.0001 then
-            playerCtx.initialVelocityYaw = math.atan(playerCtx.velocity.y, playerCtx.velocity.x) * PlayerTick.RAD2DEG
-        else
-            playerCtx.initialVelocityYaw = playerCtx.strafeYaw
-        end
-    end
-
-    local yawDelta = playerCtx.yawDeltaPerTick or 0
-    if math.abs(yawDelta) > 0.0001 then
-        playerCtx.strafeYaw = playerCtx.strafeYaw + yawDelta
-        playerCtx.totalStrafeDelta = playerCtx.totalStrafeDelta + yawDelta
-    end
-
-    -- Resolve strafeDir from relativeWishDir, rotating by strafeYaw into world space
-    local baseWish = playerCtx.relativeWishDir or Vector3(0, 0, 0)
-    local wishLen = Length2D(baseWish)
-    if wishLen > 0.0001 then
-        local yawRad = playerCtx.strafeYaw * PlayerTick.DEG2RAD
-        local cosYaw = math.cos(yawRad)
-        local sinYaw = math.sin(yawRad)
-        local worldX = cosYaw * baseWish.x - sinYaw * baseWish.y
-        local worldY = sinYaw * baseWish.x + cosYaw * baseWish.y
-        playerCtx.strafeDir = Vector3(worldX / wishLen, worldY / wishLen, 0)
-    else
-        playerCtx.strafeDir = Vector3(0, 0, 0)
-    end
-
-    if wishLen > 0.0001 and speed2d > 0.1 then
-        local velYawDeg = math.atan(playerCtx.velocity.y, playerCtx.velocity.x) * PlayerTick.RAD2DEG
-        local velocityDelta = PlayerTick.normalizeAngleDeg(velYawDeg - playerCtx.initialVelocityYaw)
-        local strafeDelta = playerCtx.totalStrafeDelta
-
-        if math.abs(velocityDelta) + 0.01 < math.abs(strafeDelta) then
-            local targetYawDeg = playerCtx.initialVelocityYaw + strafeDelta
-            local targetYawRad = targetYawDeg * PlayerTick.DEG2RAD
-            playerCtx.velocity.x = math.cos(targetYawRad) * speed2d
-            playerCtx.velocity.y = math.sin(targetYawRad) * speed2d
-        end
-    end
-
-    -- Standard TF2 movement physics
-    local wishdir = Vector3(playerCtx.strafeDir.x, playerCtx.strafeDir.y, 0)
-
-    -- Ground check
+    -- Ground check BEFORE movement (matches FullWalkMove order)
     local is_on_ground =
         PlayerTick.checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
-
-    -- Zero downward velocity when on ground
-    if is_on_ground and playerCtx.velocity.z < 0 then
-        playerCtx.velocity.z = 0
+    local wasOnGround = playerCtx.wasOnGround
+    if wasOnGround == nil then
+        wasOnGround = is_on_ground
     end
 
-    -- Apply friction
+    -- Apply strafe yaw delta (rotate view each tick)
+    local yawDelta = playerCtx.yawDeltaPerTick or 0
+    if math.abs(yawDelta) > 0.0001 then
+        playerCtx.viewYaw = playerCtx.viewYaw + yawDelta
+    end
+
+    -- Resolve wishdir based on movement mode
+    local baseWish = playerCtx.relativeWishDir or Vector3(0, 0, 0)
+    local wishLen = Length2D(baseWish)
+    local wishdir
+    local wishspeed = playerCtx.maxspeed
+
+    if is_on_ground then
+        -- Ground movement: rotate relativeWishDir by viewYaw into world space
+        if wishLen > 0.0001 then
+            local yawRad = playerCtx.viewYaw * PlayerTick.DEG2RAD
+            local cosYaw = math.cos(yawRad)
+            local sinYaw = math.sin(yawRad)
+            local worldX = cosYaw * baseWish.x - sinYaw * baseWish.y
+            local worldY = sinYaw * baseWish.x + cosYaw * baseWish.y
+            local wLen = math.sqrt(worldX * worldX + worldY * worldY)
+            if wLen > 0.0001 then
+                wishdir = Vector3(worldX / wLen, worldY / wLen, 0)
+            else
+                wishdir = Vector3(0, 0, 0)
+                wishspeed = 0
+            end
+        else
+            wishdir = Vector3(0, 0, 0)
+            wishspeed = 0
+        end
+
+        -- Landing transition: if just landed with no wishdir, derive from velocity
+        if not wasOnGround and wishspeed == 0 then
+            local speed2d = Length2D(playerCtx.velocity)
+            if speed2d > playerCtx.maxspeed * 0.015 then
+                wishdir = Vector3(playerCtx.velocity.x / speed2d, playerCtx.velocity.y / speed2d, 0)
+                wishspeed = playerCtx.maxspeed
+            end
+        end
+    else
+        -- Air movement
+        if math.abs(yawDelta) > 0.0001 and wishLen > 0.0001 then
+            -- Air strafing: add 90deg correction (wishdir perpendicular to velocity)
+            local strafeSign = 1
+            if yawDelta > 0 then
+                strafeSign = 1
+            else
+                strafeSign = -1
+            end
+            local correctedYaw = playerCtx.viewYaw + 90 * strafeSign
+            local yawRad = correctedYaw * PlayerTick.DEG2RAD
+            local cosYaw = math.cos(yawRad)
+            local sinYaw = math.sin(yawRad)
+            local worldX = cosYaw * baseWish.x - sinYaw * baseWish.y
+            local worldY = sinYaw * baseWish.x + cosYaw * baseWish.y
+            local wLen = math.sqrt(worldX * worldX + worldY * worldY)
+            if wLen > 0.0001 then
+                wishdir = Vector3(worldX / wLen, worldY / wLen, 0)
+            else
+                wishdir = Vector3(0, 0, 0)
+                wishspeed = 0
+            end
+        elseif wishLen > 0.0001 then
+            -- Air with input but no strafe: rotate normally
+            local yawRad = playerCtx.viewYaw * PlayerTick.DEG2RAD
+            local cosYaw = math.cos(yawRad)
+            local sinYaw = math.sin(yawRad)
+            local worldX = cosYaw * baseWish.x - sinYaw * baseWish.y
+            local worldY = sinYaw * baseWish.x + cosYaw * baseWish.y
+            local wLen = math.sqrt(worldX * worldX + worldY * worldY)
+            if wLen > 0.0001 then
+                wishdir = Vector3(worldX / wLen, worldY / wLen, 0)
+            else
+                wishdir = Vector3(0, 0, 0)
+                wishspeed = 0
+            end
+        else
+            -- Air with no input: coast (zero acceleration)
+            wishdir = Vector3(0, 0, 0)
+            wishspeed = 0
+        end
+    end
+
+    -- Zero downward velocity when on ground (step fix)
+    if is_on_ground then
+        if playerCtx.velocity.z < 0 then
+            playerCtx.velocity.z = 0
+        end
+    end
+
+    -- Apply friction (before acceleration, matches FullWalkMove)
     PlayerTick.friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
 
     -- Clamp velocity
@@ -836,18 +880,20 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 
     -- Accelerate
     if is_on_ground then
-        PlayerTick.accelerate(playerCtx.velocity, wishdir, playerCtx.maxspeed, simCtx.sv_accelerate, tickinterval)
+        PlayerTick.accelerate(playerCtx.velocity, wishdir, wishspeed, simCtx.sv_accelerate, tickinterval)
         playerCtx.velocity.z = 0
     else
-        PlayerTick.airAccelerate(
-            playerCtx.velocity,
-            wishdir,
-            playerCtx.maxspeed,
-            simCtx.sv_airaccelerate,
-            tickinterval,
-            1.0,
-            playerCtx.entity
-        )
+        if wishspeed > 0 then
+            PlayerTick.airAccelerate(
+                playerCtx.velocity,
+                wishdir,
+                wishspeed,
+                simCtx.sv_airaccelerate,
+                tickinterval,
+                1.0,
+                playerCtx.entity
+            )
+        end
     end
 
     -- Move with collision detection
@@ -873,7 +919,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
         )
     end
 
-    -- Re-categorize position
+    -- Re-categorize position (CategorizePosition)
     local new_ground_state =
         PlayerTick.checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
 
@@ -886,6 +932,9 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
     if new_ground_state and playerCtx.velocity.z < 0 then
         playerCtx.velocity.z = 0
     end
+
+    -- Track ground state for next tick's landing transition
+    playerCtx.wasOnGround = new_ground_state
 
     return Vector3(playerCtx.origin:Unpack())
 end
@@ -938,6 +987,8 @@ local function clonePlayerContext(src)
         stepheight = src.stepheight,
         yaw = src.yaw,
         yawDeltaPerTick = src.yawDeltaPerTick,
+        viewYaw = src.viewYaw,
+        wasOnGround = src.wasOnGround,
     }
 
     assert(src.origin, "clonePlayerContext: origin missing")
@@ -946,9 +997,8 @@ local function clonePlayerContext(src)
     assert(src.velocity, "clonePlayerContext: velocity missing")
     clone.velocity = Vector3(src.velocity:Unpack())  -- Must clone, gets mutated
 
-    -- These are assigned, not mutated, no cloning needed
+    -- Assigned, not mutated, no cloning needed
     clone.relativeWishDir = src.relativeWishDir
-    clone.strafeDir = src.strafeDir
 
     return clone
 end
@@ -963,7 +1013,6 @@ local function simulateWishdirCandidates(baseCtx, simCtx)
         local dirVec = WishdirTracker.normalizeDirection(dirSpec.x, dirSpec.y)
         local ctxCopy = clonePlayerContext(baseCtx)
         ctxCopy.relativeWishDir = dirVec
-        ctxCopy.strafeDir = dirVec  -- dirVec is already a Vector3, no need to clone
 
         local predictedPos = PlayerTick.simulateTick(ctxCopy, simCtx)
 
@@ -1001,6 +1050,14 @@ local function createPlayerContext(entity, relativeWishDir)
 
     local team = entity:GetTeamNumber()
     assert(team, "createPlayerContext: entity:GetTeamNumber() returned nil")
+
+    -- Shrink hull by 0.125 for non-local players (origin compression fix from Source engine)
+    local localPlayer = entities.GetLocalPlayer()
+    local isLocalEntity = localPlayer and (index == localPlayer:GetIndex())
+    if not isLocalEntity then
+        mins = Vector3(mins.x + 0.125, mins.y + 0.125, mins.z)
+        maxs = Vector3(maxs.x - 0.125, maxs.y - 0.125, maxs.z - 0.125)
+    end
 
     local originWithOffset = origin + Vector3(0, 0, 1)
 
@@ -1052,7 +1109,6 @@ local function createPlayerContext(entity, relativeWishDir)
         yaw = yaw,
         yawDeltaPerTick = yawDeltaPerTick,
         relativeWishDir = relativeWishDir,  -- Already a Vector3, no need to clone
-        strafeDir = relativeWishDir,  -- Same reference, gets mutated later if needed
     }
 end
 
