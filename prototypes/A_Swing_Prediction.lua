@@ -835,30 +835,9 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
             end
         end
     else
-        -- Air movement
-        if math.abs(yawDelta) > 0.0001 and wishLen > 0.0001 then
-            -- Air strafing: add 90deg correction (wishdir perpendicular to velocity)
-            local strafeSign = 1
-            if yawDelta > 0 then
-                strafeSign = 1
-            else
-                strafeSign = -1
-            end
-            local correctedYaw = playerCtx.viewYaw + 90 * strafeSign
-            local yawRad = correctedYaw * PlayerTick.DEG2RAD
-            local cosYaw = math.cos(yawRad)
-            local sinYaw = math.sin(yawRad)
-            local worldX = cosYaw * baseWish.x - sinYaw * baseWish.y
-            local worldY = sinYaw * baseWish.x + cosYaw * baseWish.y
-            local wLen = math.sqrt(worldX * worldX + worldY * worldY)
-            if wLen > 0.0001 then
-                wishdir = Vector3(worldX / wLen, worldY / wLen, 0)
-            else
-                wishdir = Vector3(0, 0, 0)
-                wishspeed = 0
-            end
-        elseif wishLen > 0.0001 then
-            -- Air with input but no strafe: rotate normally
+        -- Air movement: keep the same rotation model as ground.
+        -- Extra 90-degree correction over-rotates with our yawDelta source and breaks strafing.
+        if wishLen > 0.0001 then
             local yawRad = playerCtx.viewYaw * PlayerTick.DEG2RAD
             local cosYaw = math.cos(yawRad)
             local sinYaw = math.sin(yawRad)
