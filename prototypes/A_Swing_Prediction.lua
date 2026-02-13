@@ -91,14 +91,16 @@ function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
         end
 
         local maxDeltaPerTickRad = math.rad(45)
-        local totalYawChange = 0
-        local samples = 0
+        local minSpeedForSample = 50
+
+        local deltas = {}
+        local deltaCount = 0
 
         for i = 1, #history - 1 do
             local vel1 = history[i]
             local vel2 = history[i + 1]
 
-            if vel1:Length2D() >= 10 and vel2:Length2D() >= 10 then
+            if vel1:Length2D() >= minSpeedForSample and vel2:Length2D() >= minSpeedForSample then
                 local yaw1 = math.atan(vel1.y, vel1.x)
                 local yaw2 = math.atan(vel2.y, vel2.x)
 
@@ -111,17 +113,40 @@ function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
                 end
 
                 if math.abs(diff) <= maxDeltaPerTickRad then
-                    totalYawChange = totalYawChange + diff
-                    samples = samples + 1
+                    deltaCount = deltaCount + 1
+                    deltas[deltaCount] = diff
                 end
             end
         end
 
-        if samples == 0 then
+        if deltaCount < (minSamples or 3) then
             return nil
         end
 
-        return totalYawChange / samples
+        -- Reject if deltas flip sign (left/right dodging, not consistent strafing)
+        local posCount = 0
+        local negCount = 0
+        local totalYawChange = 0
+        for i = 1, deltaCount do
+            local d = deltas[i]
+            totalYawChange = totalYawChange + d
+            if d > 0.01 then
+                posCount = posCount + 1
+            elseif d < -0.01 then
+                negCount = negCount + 1
+            end
+        end
+
+        -- If both positive and negative deltas exist, direction is inconsistent
+        local signedSamples = posCount + negCount
+        if signedSamples > 0 then
+            local dominantRatio = math.max(posCount, negCount) / signedSamples
+            if dominantRatio < 0.7 then
+                return nil
+            end
+        end
+
+        return totalYawChange / deltaCount
 end
 
 function StrafePredictor.getYawDeltaPerTickDegrees(entityIndex, minSamples)
@@ -1711,6 +1736,19 @@ local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd)
             playerCtx.relativeWishDir = WishdirTracker.clampVelocityTo8Directions(vel, playerCtx.yaw or 0)
         else
             playerCtx.relativeWishDir = Vector3(0, 0, 0)
+        end
+    end
+
+    -- Local player on ground: clamp horizontal speed to maxspeed.
+    -- Swing cancels charge instantly, so prediction must assume walking speed.
+    if isLocal then
+        local v = playerCtx.velocity
+        local hSpeed = Length2D(v)
+        local maxspd = playerCtx.maxspeed
+        if hSpeed > maxspd and maxspd > 0 then
+            local scale = maxspd / hSpeed
+            v.x = v.x * scale
+            v.y = v.y * scale
         end
     end
 
