@@ -978,7 +978,17 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 end
 
 -- Simulation context creator
+local cachedSimulationContextTick = -1
+local cachedSimulationContext = nil
+
 local function createSimulationContext()
+    local currentTick = globals.TickCount()
+    assert(currentTick, "createContext: globals.TickCount() returned nil")
+
+    if cachedSimulationContext and cachedSimulationContextTick == currentTick then
+        return cachedSimulationContext
+    end
+
     local _, sv_gravity = client.GetConVar("sv_gravity")
     assert(sv_gravity, "createContext: client.GetConVar('sv_gravity') returned nil")
 
@@ -998,19 +1008,17 @@ local function createSimulationContext()
     assert(tickinterval, "createContext: globals.TickInterval() returned nil")
     assert(tickinterval > 0, "createContext: tickinterval must be positive")
 
-    local curtime = globals.CurTime()
-    assert(curtime, "createContext: globals.CurTime() returned nil")
-    assert(curtime >= 0, "createContext: curtime must be non-negative")
-
-    return {
+    cachedSimulationContext = {
         sv_gravity = sv_gravity,
         sv_friction = sv_friction,
         sv_stopspeed = sv_stopspeed,
         sv_accelerate = sv_accelerate,
         sv_airaccelerate = sv_airaccelerate,
         tickinterval = tickinterval,
-        curtime = curtime,
     }
+
+    cachedSimulationContextTick = currentTick
+    return cachedSimulationContext
 end
 
 local function clonePlayerContext(src)
@@ -1047,19 +1055,35 @@ local function simulateWishdirCandidates(baseCtx, simCtx)
     assert(simCtx, "simulateWishdirCandidates: simCtx missing")
 
     local results = {}
+    local baseOrigin = baseCtx.origin
+    local baseVelocity = baseCtx.velocity
+    local baseWasOnGround = baseCtx.wasOnGround
+    local baseYaw = baseCtx.yaw
+    local baseViewYaw = baseCtx.viewYaw
+    local workCtx = clonePlayerContext(baseCtx)
+
+    assert(baseOrigin, "simulateWishdirCandidates: base origin missing")
+    assert(baseVelocity, "simulateWishdirCandidates: base velocity missing")
+
     for i = 1, #WishdirTracker.DIRECTIONS do
         local dirSpec = WishdirTracker.DIRECTIONS[i]
         local dirVec = WishdirTracker.normalizeDirection(dirSpec.x, dirSpec.y)
-        local ctxCopy = clonePlayerContext(baseCtx)
-        ctxCopy.relativeWishDir = dirVec
+        workCtx.origin = baseOrigin
+        workCtx.velocity.x = baseVelocity.x
+        workCtx.velocity.y = baseVelocity.y
+        workCtx.velocity.z = baseVelocity.z
+        workCtx.wasOnGround = baseWasOnGround
+        workCtx.yaw = baseYaw
+        workCtx.viewYaw = baseViewYaw
+        workCtx.relativeWishDir = dirVec
 
-        local predictedPos = PlayerTick.simulateTick(ctxCopy, simCtx)
+        local predictedPos = PlayerTick.simulateTick(workCtx, simCtx)
 
         results[#results + 1] = {
             name = dirSpec.name,
             dir = dirVec,
             pos = predictedPos,  -- simulateTick already returns Vector3, no need to clone
-            vel = ctxCopy.velocity,  -- already a Vector3, no need to clone
+            vel = Vector3(workCtx.velocity:Unpack()),
         }
     end
 
@@ -1858,7 +1882,7 @@ end
 ---@param fixedAngles EulerAngles? -- view-angle override for charge direction
 ---@param pCmd UserCmd?
 ---@param suppressChargeInSim boolean? -- suppress charge speed/air cap in simulation (local player charging but not exploiting)
----@return { pos : Vector3[], vel: Vector3[], onGround: boolean[] }?
+---@return { pos : Vector3[], vel: Vector3[] }?
 local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd, suppressChargeInSim)
     assert(player, "PredictPlayer: player is nil")
     assert(t and t > 0, "PredictPlayer: invalid tick count")
@@ -1962,14 +1986,9 @@ local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd, su
         chargeForward = Normalize(fwd)
     end
 
-    -- Output structure
-    local startOnGround = PlayerTick.checkIsOnGround(
-        playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
-
     local _out = {
         pos = { [0] = Vector3(playerCtx.origin:Unpack()) },
         vel = { [0] = Vector3(playerCtx.velocity:Unpack()) },
-        onGround = { [0] = startOnGround }
     }
 
     -- Simulate t ticks
@@ -1987,8 +2006,6 @@ local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd, su
 
         _out.pos[i] = Vector3(newPos:Unpack())
         _out.vel[i] = Vector3(playerCtx.velocity:Unpack())
-        _out.onGround[i] = PlayerTick.checkIsOnGround(
-            playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
     end
 
     return _out
@@ -2011,7 +2028,6 @@ local function PredictPlayerSimpleLinear(player, t, d)
     local out = {
         pos = { [0] = Vector3(pos:Unpack()) },
         vel = { [0] = Vector3(vel:Unpack()) },
-        onGround = { [0] = false }
     }
 
     for i = 1, t do
@@ -2031,7 +2047,6 @@ local function PredictPlayerSimpleLinear(player, t, d)
 
         out.pos[i] = Vector3(pos:Unpack())
         out.vel[i] = Vector3(vel:Unpack())
-        out.onGround[i] = false
     end
 
     return out
@@ -2885,7 +2900,7 @@ local function OnCreateMove(pCmd)
 
     Profiler.Begin("LocalPrediction")
     -- Local player prediction
-    if pLocal:EstimateAbsVelocity() == 0 then
+    if pLocal:EstimateAbsVelocity():Length() < 10 then
         -- If the local player is not accelerating, set the predicted position to the current position
         pLocalFuture = pLocalOrigin
     else
