@@ -1610,34 +1610,6 @@ local function GetPredictedPosition(entity, ticksAhead)
     
     return currentPos + velocity * predictionTime
 end
-local CLASS_MAX_SPEEDS = {
-    [1] = 400, -- Scout
-    [2] = 240, -- Sniper
-    [3] = 240, -- Soldier
-    [4] = 280, -- Demoman
-    [5] = 230, -- Medic
-    [6] = 300, -- Heavy
-    [7] = 240, -- Pyro
-    [8] = 320, -- Spy
-    [9] = 320  -- Engineer
-}
-
-local function shouldHitEntityFun(entity, player, ignoreEntities)
-    for _, ignoreEntity in ipairs(ignoreEntities) do --ignore custom
-        if entity:GetClass() == ignoreEntity then
-            return false
-        end
-    end
-
-    local pos = entity:GetAbsOrigin() + Vector3(0, 0, 1)
-    local contents = engine.GetPointContents(pos)
-    if contents ~= 0 then return true end
-    if entity:GetName() == player:GetName() then return false end             -- ignore self
-    -- Ignore all players except world/props; we only need brushes for movement prediction
-    if entity:IsPlayer() then return false end
-    return true
-end
-
 ---@param player WPlayer
 ---@param t      integer       -- number of ticks to simulate
 ---@param d      number?       -- strafe deviation angle per tick (degrees, optional)
