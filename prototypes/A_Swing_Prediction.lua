@@ -977,6 +977,127 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
     return Vector3(playerCtx.origin:Unpack())
 end
 
+function PlayerTick.simulateTickLight(playerCtx, simCtx)
+    local tickinterval = simCtx.tickinterval
+    currentTraceTeam = playerCtx.team or -1
+
+    playerCtx.viewYaw = playerCtx.viewYaw or playerCtx.yaw or 0
+
+    local is_on_ground = playerCtx.wasOnGround
+    if is_on_ground == nil then
+        is_on_ground = PlayerTick.checkIsOnGround(
+            playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
+    end
+
+    local yawDelta = playerCtx.yawDeltaPerTick or 0
+    if math.abs(yawDelta) > 0.0001 then
+        playerCtx.viewYaw = playerCtx.viewYaw + yawDelta
+    end
+
+    local baseWish = playerCtx.relativeWishDir or Vector3(0, 0, 0)
+    local wishLen = Length2D(baseWish)
+    local wishdir
+    local effectiveMaxspeed = playerCtx.maxspeed
+    if playerCtx.isDucked and is_on_ground then
+        effectiveMaxspeed = effectiveMaxspeed / 3
+    end
+    local wishspeed = effectiveMaxspeed
+
+    if wishLen > 0.0001 then
+        local yawRad = playerCtx.viewYaw * PlayerTick.DEG2RAD
+        local cosYaw = math.cos(yawRad)
+        local sinYaw = math.sin(yawRad)
+        local worldX = cosYaw * baseWish.x - sinYaw * baseWish.y
+        local worldY = sinYaw * baseWish.x + cosYaw * baseWish.y
+        local wLen = math.sqrt(worldX * worldX + worldY * worldY)
+        if wLen > 0.0001 then
+            wishdir = Vector3(worldX / wLen, worldY / wLen, 0)
+        else
+            wishdir = Vector3(0, 0, 0)
+            wishspeed = 0
+        end
+    else
+        wishdir = Vector3(0, 0, 0)
+        wishspeed = 0
+    end
+
+    if is_on_ground and playerCtx.velocity.z < 0 then
+        playerCtx.velocity.z = 0
+    end
+
+    PlayerTick.friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
+
+    if not is_on_ground then
+        playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
+    end
+
+    if is_on_ground then
+        PlayerTick.accelerate(playerCtx.velocity, wishdir, wishspeed, simCtx.sv_accelerate, tickinterval)
+        playerCtx.velocity.z = 0
+    elseif wishspeed > 0 then
+        PlayerTick.airAccelerate(
+            playerCtx.velocity, wishdir, wishspeed,
+            simCtx.sv_airaccelerate, tickinterval, 1.0,
+            playerCtx.entity, playerCtx.suppressCharge)
+    end
+
+    PlayerTick.checkVelocity(playerCtx.velocity)
+
+    local vel = playerCtx.velocity
+    local orig = playerCtx.origin
+    local endPos = Vector3(
+        orig.x + vel.x * tickinterval,
+        orig.y + vel.y * tickinterval,
+        orig.z + vel.z * tickinterval)
+
+    currentTraceIndex = playerCtx.index
+    local wallTrace = engine.TraceHull(
+        orig, endPos, playerCtx.mins, playerCtx.maxs,
+        MASK_PLAYERSOLID, TraceFilterOtherPlayers)
+
+    if wallTrace.fraction < 1 then
+        orig.x = wallTrace.endpos.x
+        orig.y = wallTrace.endpos.y
+        orig.z = wallTrace.endpos.z
+        if wallTrace.plane then
+            PlayerTick.clipVelocity(vel, wallTrace.plane, 1.0)
+        end
+    else
+        orig.x = endPos.x
+        orig.y = endPos.y
+        orig.z = endPos.z
+    end
+
+    local new_ground_state
+    local stepDown = is_on_ground and (playerCtx.stepheight or 18) or PlayerTick.GROUND_CHECK_OFFSET
+    local groundStart = Vector3(orig.x, orig.y, orig.z + 2)
+    local groundEnd = Vector3(orig.x, orig.y, orig.z - stepDown)
+
+    currentTraceIndex = playerCtx.index
+    local groundTrace = engine.TraceHull(
+        groundStart, groundEnd, playerCtx.mins, playerCtx.maxs,
+        MASK_PLAYERSOLID, TraceFilterOtherPlayers)
+
+    if groundTrace.fraction < 1 and not groundTrace.startsolid
+        and groundTrace.plane and groundTrace.plane.z >= 0.7 then
+        new_ground_state = true
+        orig.x = groundTrace.endpos.x
+        orig.y = groundTrace.endpos.y
+        orig.z = groundTrace.endpos.z
+        if vel.z < 0 then vel.z = 0 end
+    else
+        new_ground_state = false
+    end
+
+    if not new_ground_state then
+        vel.z = vel.z - (simCtx.sv_gravity * 0.5 * tickinterval)
+    end
+
+    playerCtx.wasOnGround = new_ground_state
+
+    return Vector3(orig:Unpack())
+end
+
 -- Simulation context creator
 local cachedSimulationContextTick = -1
 local cachedSimulationContext = nil
@@ -1077,7 +1198,7 @@ local function simulateWishdirCandidates(baseCtx, simCtx)
         workCtx.viewYaw = baseViewYaw
         workCtx.relativeWishDir = dirVec
 
-        local predictedPos = PlayerTick.simulateTick(workCtx, simCtx)
+        local predictedPos = PlayerTick.simulateTickLight(workCtx, simCtx)
 
         results[#results + 1] = {
             name = dirSpec.name,
@@ -1991,10 +2112,11 @@ local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd, su
         vel = { [0] = Vector3(playerCtx.velocity:Unpack()) },
     }
 
+    local simulateOneTick = isLocal and PlayerTick.simulateTick or PlayerTick.simulateTickLight
+
     -- Simulate t ticks
     for i = 1, t do
-        -- Simulate one tick with full Source engine physics
-        local newPos = PlayerTick.simulateTick(playerCtx, simCtx)
+        local newPos = simulateOneTick(playerCtx, simCtx)
 
         -- Charge acceleration applied AFTER movement (matches engine order)
         if chargeForward then
