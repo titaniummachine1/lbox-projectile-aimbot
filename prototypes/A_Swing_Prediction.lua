@@ -1638,114 +1638,103 @@ local function shouldHitEntityFun(entity, player, ignoreEntities)
     return true
 end
 
---[[
-    Enhanced PredictPlayer with Advanced Simulation System
-    Integrates the projectile aimbot's superior simulation for perfect wishdir resolution
-    while maintaining existing strafe prediction angle per tick functionality
-]]
 ---@param player WPlayer
----@param t      integer                          -- number of ticks to simulate
----@param d      number?                          -- strafe deviation angle (optional)
----@param simulateCharge boolean?                -- simulate shield charge starting now
----@param fixedAngles EulerAngles?               -- if provided, use this view-angle for charge direction
----@param cmd    CUserCmd?                       -- command input for local player wishdir extraction
+---@param t      integer       -- number of ticks to simulate
+---@param d      number?       -- strafe deviation angle per tick (degrees, optional)
+---@param simulateCharge boolean? -- simulate shield charge starting now
+---@param fixedAngles EulerAngles? -- view-angle override for charge direction
 ---@return { pos : Vector3[], vel: Vector3[], onGround: boolean[] }?
-local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, cmd)
+local function PredictPlayer(player, t, d, simulateCharge, fixedAngles)
     assert(player, "PredictPlayer: player is nil")
     assert(t and t > 0, "PredictPlayer: invalid tick count")
-    
-    -- Update tracking systems only for enemies
-    local pLocal = entities.GetLocalPlayer()
-    if player ~= pLocal then
-        StrafePredictor.updateAll({player})
+
+    local localPlayer = entities.GetLocalPlayer()
+    assert(localPlayer, "PredictPlayer: no local player")
+
+    local isLocal = (player == localPlayer)
+
+    -- Update tracking systems for enemies
+    if not isLocal then
+        StrafePredictor.updateAll({ player })
         WishdirTracker.update(player)
     end
-    
-    -- Create simulation contexts
+
+    -- Build simulation and player contexts
     local simCtx = createSimulationContext()
     local playerCtx = createPlayerContext(player)
-    
-    -- Handle wishdir differently for local player vs enemies
-    if player == pLocal then
-        -- Extract wishdir from cmd input for local player
-        playerCtx.relativeWishDir = Vector3(0, 0, 0) -- Default to coast
-        if cmd then
-            local forwardMove = cmd:GetForwardMove()
-            local sideMove = cmd:GetSideMove()
-            
-            -- Transform cmd input to wishdir vector relative to player yaw
-            if math.abs(forwardMove) > 0.1 or math.abs(sideMove) > 0.1 then
-                local yaw = player:GetPropFloat("m_angEyeAngles[1]") or 0
-                local yawRad = yaw * (math.pi / 180)
-                local cosYaw = math.cos(yawRad)
-                local sinYaw = math.sin(yawRad)
-                
-                -- Transform world-space movement to player-relative wishdir
-                local worldForward = Vector3(cosYaw, sinYaw, 0)
-                local worldRight = Vector3(sinYaw, -cosYaw, 0)
-                
-                local wishdir = worldForward * forwardMove + worldRight * sideMove
-                local wishdirLen = math.sqrt(wishdir.x * wishdir.x + wishdir.y * wishdir.y)
-                
-                if wishdirLen > 0.001 then
-                    playerCtx.relativeWishDir = Vector3(wishdir.x / wishdirLen, wishdir.y / wishdirLen, 0)
-                end
-            end
-        end
-    else
-        -- Use tracked wishdir for enemies, default to coast
+
+    -- Resolve wishdir: derive from velocity for both local and enemy
+    local vel = playerCtx.velocity
+    local horizSpeed = Length2D(vel)
+
+    if not isLocal then
+        -- Enemy: prefer WishdirTracker, fall back to velocity-based direction
         local trackedWishdir = WishdirTracker.getRelativeWishdir(player)
         if trackedWishdir then
             playerCtx.relativeWishDir = trackedWishdir
+        elseif horizSpeed > 50 then
+            playerCtx.relativeWishDir = WishdirTracker.clampVelocityTo8Directions(vel, playerCtx.yaw or 0)
         else
-            -- Default to coast for enemies when no wishdir detected
+            playerCtx.relativeWishDir = Vector3(0, 0, 0)
+        end
+    else
+        -- Local player: derive from current velocity direction
+        if horizSpeed > 50 then
+            local yaw = playerCtx.yaw or 0
+            playerCtx.relativeWishDir = WishdirTracker.clampVelocityTo8Directions(vel, yaw)
+        else
             playerCtx.relativeWishDir = Vector3(0, 0, 0)
         end
     end
-    
-    -- Override strafe direction with deviation angle if provided
-    if d and playerCtx.strafeDir then
-        PlayerTick.rotateDirByAngle(playerCtx.strafeDir, d)
+
+    -- Feed strafe deviation as yaw delta per tick so simulateTick rotates wishdir each tick
+    if d and math.abs(d) > 0.01 then
+        playerCtx.yawDeltaPerTick = d
     end
-    
-    -- Store initial state for lag compensation
-    local initialPos = Vector3(playerCtx.origin:Unpack())
-    local pLocal = entities.GetLocalPlayer()
-    
-    -- Apply lag compensation for enemy players
-    if player ~= pLocal then
-        playerCtx.origin = ApplyLagCompensation(initialPos, player)
+
+    -- Lag compensation for enemies
+    if not isLocal then
+        playerCtx.origin = ApplyLagCompensation(playerCtx.origin, player)
     end
-    
+
+    -- Charge direction (computed once, reused each tick)
+    local chargeForward
+    if simulateCharge then
+        local useAngles = fixedAngles or engine.GetViewAngles()
+        local fwd = useAngles:Forward()
+        fwd.z = 0
+        chargeForward = Normalize(fwd)
+    end
+
     -- Output structure
+    local startOnGround = PlayerTick.checkIsOnGround(
+        playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
+
     local _out = {
         pos = { [0] = Vector3(playerCtx.origin:Unpack()) },
         vel = { [0] = Vector3(playerCtx.velocity:Unpack()) },
-        onGround = { [0] = PlayerTick.checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index) }
+        onGround = { [0] = startOnGround }
     }
-    
-    -- Enhanced simulation using PlayerTick system
+
+    -- Simulate t ticks
     for i = 1, t do
-        -- Handle charge simulation if requested
-        if simulateCharge then
-            local useAngles = fixedAngles or engine.GetViewAngles()
-            local forward = useAngles:Forward()
-            forward.z = 0
-            forward = Normalize(forward)
-            
-            -- Add charge acceleration
-            playerCtx.velocity = playerCtx.velocity + forward * (750 * simCtx.tickinterval)
-        end
-        
-        -- Simulate one tick with advanced physics
+        -- Simulate one tick with full Source engine physics
         local newPos = PlayerTick.simulateTick(playerCtx, simCtx)
-        
-        -- Store results
+
+        -- Charge acceleration applied AFTER movement (matches engine order)
+        if chargeForward then
+            local v = playerCtx.velocity
+            local accel = 750 * simCtx.tickinterval
+            v.x = v.x + chargeForward.x * accel
+            v.y = v.y + chargeForward.y * accel
+        end
+
         _out.pos[i] = Vector3(newPos:Unpack())
         _out.vel[i] = Vector3(playerCtx.velocity:Unpack())
-        _out.onGround[i] = PlayerTick.checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
+        _out.onGround[i] = PlayerTick.checkIsOnGround(
+            playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
     end
-    
+
     return _out
 end
 
@@ -3075,43 +3064,22 @@ local function doDraw()
 
         if Menu.currentTab == 2 then -- Demoknight tab
             ImMenu.BeginFrame(1)
-            local oldValue = Menu.Charge.ChargeBot
             Menu.Charge.ChargeBot = ImMenu.Checkbox("Charge Bot", Menu.Charge.ChargeBot)
-            -- If the value changed, synchronize with the Aimbot setting
-            if oldValue ~= Menu.Charge.ChargeBot then
-                Menu.Aimbot.ChargeBot = Menu.Charge.ChargeBot
-            end
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
-            local oldChargeControl = Menu.Charge.ChargeControl
             Menu.Charge.ChargeControl = ImMenu.Checkbox("Charge Control", Menu.Charge.ChargeControl)
-            -- If the value changed, synchronize with the Misc setting
-            if oldChargeControl ~= Menu.Charge.ChargeControl then
-                Menu.Misc.ChargeControl = Menu.Charge.ChargeControl
-            end
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
-            local oldChargeReach = Menu.Charge.ChargeReach
             Menu.Charge.ChargeReach = ImMenu.Checkbox("Charge Reach", Menu.Charge.ChargeReach)
-            -- If the value changed, synchronize with the Misc setting
-            if oldChargeReach ~= Menu.Charge.ChargeReach then
-                Menu.Misc.ChargeReach = Menu.Charge.ChargeReach
-            end
-            -- Late Charge option appears only if Charge Reach enabled
             if Menu.Charge.ChargeReach == true then
                 Menu.Charge.LateCharge = ImMenu.Checkbox("Late Charge", Menu.Charge.LateCharge)
             end
             ImMenu.EndFrame()
 
             ImMenu.BeginFrame(1)
-            local oldChargeJump = Menu.Charge.ChargeJump
             Menu.Charge.ChargeJump = ImMenu.Checkbox("Charge Jump", Menu.Charge.ChargeJump)
-            -- If the value changed, synchronize with the Misc setting
-            if oldChargeJump ~= Menu.Charge.ChargeJump then
-                Menu.Misc.ChargeJump = Menu.Charge.ChargeJump
-            end
             ImMenu.EndFrame()
         end
 
