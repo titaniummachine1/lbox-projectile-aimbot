@@ -498,7 +498,20 @@ function PlayerTick.accelerate(velocity, wishdir, wishspeed, accel, frametime, s
     velocity.z = velocity.z + wishdir.z * accelspeed
 end
 
+function PlayerTick.getAirSpeedCap(target)
+    if target and target:InCond(17) then
+        -- TF_COND_SHIELD_CHARGE: use tf_max_charge_speed (default 750)
+        local _, tf_max_charge_speed = client.GetConVar("tf_max_charge_speed")
+        return tf_max_charge_speed or 750
+    end
+    -- Default air speed cap in Source engine
+    return 30.0
+end
+
 function PlayerTick.airAccelerate(v, wishdir, wishspeed, accel, dt, surf, target)
+    -- Clamp wishspeed to air speed cap (Source engine default: 30)
+    wishspeed = math.min(wishspeed, PlayerTick.getAirSpeedCap(target))
+
     local currentspeed = v:Dot(wishdir)
     local addspeed = wishspeed - currentspeed
     if addspeed <= 0 then
@@ -786,7 +799,12 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
     local baseWish = playerCtx.relativeWishDir or Vector3(0, 0, 0)
     local wishLen = Length2D(baseWish)
     local wishdir
-    local wishspeed = playerCtx.maxspeed
+    -- Ducking on ground reduces maxspeed by 1/3 (Source engine behavior)
+    local effectiveMaxspeed = playerCtx.maxspeed
+    if playerCtx.isDucked and is_on_ground then
+        effectiveMaxspeed = effectiveMaxspeed / 3
+    end
+    local wishspeed = effectiveMaxspeed
 
     if is_on_ground then
         -- Ground movement: rotate relativeWishDir by viewYaw into world space
@@ -989,6 +1007,7 @@ local function clonePlayerContext(src)
         yawDeltaPerTick = src.yawDeltaPerTick,
         viewYaw = src.viewYaw,
         wasOnGround = src.wasOnGround,
+        isDucked = src.isDucked,
     }
 
     assert(src.origin, "clonePlayerContext: origin missing")
@@ -1096,6 +1115,9 @@ local function createPlayerContext(entity, relativeWishDir)
         end
     end
 
+    -- Ducking state via netvar
+    local isDucked = entity:GetPropBool("m_bDucked") or false
+
     return {
         entity = entity,
         velocity = Vector3(velocity:Unpack()),  -- Clone once for mutation safety
@@ -1109,6 +1131,7 @@ local function createPlayerContext(entity, relativeWishDir)
         yaw = yaw,
         yawDeltaPerTick = yawDeltaPerTick,
         relativeWishDir = relativeWishDir,  -- Already a Vector3, no need to clone
+        isDucked = isDucked,
     }
 end
 
