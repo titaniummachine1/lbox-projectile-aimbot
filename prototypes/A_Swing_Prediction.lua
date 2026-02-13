@@ -258,15 +258,31 @@ function WishdirTracker.update(entity)
     local cachedPredictions = s.predictions
     if cachedPredictions and cachedPredictions.targetTick == currentTick then
         local bestScore = math.huge
+        local bestVelDot = -2
         local entries = cachedPredictions.entries
         if entries then
+            -- Precompute velocity direction for tiebreaker
+            local velDirX, velDirY = 0, 0
+            local horizLen = Length2D(currentVel)
+            if horizLen > 1 then
+                velDirX = currentVel.x / horizLen
+                velDirY = currentVel.y / horizLen
+            end
+
             for i = 1, #entries do
                 local candidate = entries[i]
                 local posError = getHorizontalError(candidate.pos, currentPos)
                 local velError = getHorizontalError(candidate.vel, currentVel)
-                local score = posError + velError * 0.25
-                if score < bestScore then
+                local score = posError + velError
+
+                -- Velocity-direction tiebreaker: dot product of candidate dir with velocity
+                local dirDot = candidate.dir.x * velDirX + candidate.dir.y * velDirY
+
+                local dominated = score < bestScore * 0.99
+                local tied = (not dominated) and score < bestScore * 1.01
+                if dominated or (tied and dirDot > bestVelDot) then
                     bestScore = score
+                    bestVelDot = dirDot
                     detectedWishdir = candidate.dir
                 end
             end
@@ -1230,6 +1246,7 @@ local function SafeInitMenu()
     Menu.Visuals = Menu.Visuals or {}
     -- LateCharge default
     Menu.Charge.LateCharge = Menu.Charge.LateCharge ~= nil and Menu.Charge.LateCharge or true
+    Menu.Charge.ChargeDelay = Menu.Charge.ChargeDelay or 4
 end
 
 -- Call the initialization function to ensure no nil values
@@ -1638,7 +1655,7 @@ end
 ---@param simulateCharge boolean? -- simulate shield charge starting now
 ---@param fixedAngles EulerAngles? -- view-angle override for charge direction
 ---@return { pos : Vector3[], vel: Vector3[], onGround: boolean[] }?
-local function PredictPlayer(player, t, d, simulateCharge, fixedAngles)
+local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd)
     assert(player, "PredictPlayer: player is nil")
     assert(t and t > 0, "PredictPlayer: invalid tick count")
 
@@ -1657,25 +1674,41 @@ local function PredictPlayer(player, t, d, simulateCharge, fixedAngles)
     local simCtx = createSimulationContext()
     local playerCtx = createPlayerContext(player)
 
-    -- Resolve wishdir: derive from velocity for both local and enemy
-    local vel = playerCtx.velocity
-    local horizSpeed = Length2D(vel)
+    -- Resolve wishdir
+    if isLocal and pCmd then
+        -- Local player: use actual cmd input (exact, no guessing)
+        local forwardMove = pCmd:GetForwardMove()
+        local sideMove = pCmd:GetSideMove()
 
-    if not isLocal then
-        -- Enemy: prefer WishdirTracker, fall back to velocity-based direction
-        local trackedWishdir = WishdirTracker.getRelativeWishdir(player)
-        if trackedWishdir then
-            playerCtx.relativeWishDir = trackedWishdir
-        elseif horizSpeed > 50 then
-            playerCtx.relativeWishDir = WishdirTracker.clampVelocityTo8Directions(vel, playerCtx.yaw or 0)
+        if math.abs(forwardMove) > 0.1 or math.abs(sideMove) > 0.1 then
+            local inputLen = math.sqrt(forwardMove * forwardMove + sideMove * sideMove)
+            local normFwd = forwardMove / inputLen
+            local normSide = sideMove / inputLen
+            -- x = forward, positive y = left (matches DIRECTIONS table convention)
+            playerCtx.relativeWishDir = Vector3(normFwd, -normSide, 0)
         else
             playerCtx.relativeWishDir = Vector3(0, 0, 0)
         end
+    elseif not isLocal then
+        -- Enemy: prefer WishdirTracker (9-candidate sim), fall back to velocity snap
+        local trackedWishdir = WishdirTracker.getRelativeWishdir(player)
+        if trackedWishdir then
+            playerCtx.relativeWishDir = trackedWishdir
+        else
+            local vel = playerCtx.velocity
+            local horizSpeed = Length2D(vel)
+            if horizSpeed > 50 then
+                playerCtx.relativeWishDir = WishdirTracker.clampVelocityTo8Directions(vel, playerCtx.yaw or 0)
+            else
+                playerCtx.relativeWishDir = Vector3(0, 0, 0)
+            end
+        end
     else
-        -- Local player: derive from current velocity direction
+        -- Local player without cmd: fall back to velocity direction
+        local vel = playerCtx.velocity
+        local horizSpeed = Length2D(vel)
         if horizSpeed > 50 then
-            local yaw = playerCtx.yaw or 0
-            playerCtx.relativeWishDir = WishdirTracker.clampVelocityTo8Directions(vel, yaw)
+            playerCtx.relativeWishDir = WishdirTracker.clampVelocityTo8Directions(vel, playerCtx.yaw or 0)
         else
             playerCtx.relativeWishDir = Vector3(0, 0, 0)
         end
@@ -2503,7 +2536,7 @@ local function OnCreateMove(pCmd)
             fixedAngles = Math.PositionAngles(pLocalOrigin, CurrentTarget:GetAbsOrigin())
         end
 
-        local predData = PredictPlayer(player, simTicks, strafeAngle, simulateCharge, fixedAngles)
+        local predData = PredictPlayer(player, simTicks, strafeAngle, simulateCharge, fixedAngles, pCmd)
         if not predData then return end
 
         pLocalPath = predData.pos
@@ -2769,8 +2802,22 @@ local function OnCreateMove(pCmd)
                 pCmd:SetButtons(pCmd:GetButtons() | IN_JUMP)
             end
 
-            -- Execute charge exactly at the end of the swing animation (1 tick before the hit registers)
-            if attackTickCount >= (weaponSmackDelay - 2) then
+            -- Determine when to trigger charge based on LateCharge setting
+            local chargeDelay = Menu.Charge.ChargeDelay or 4
+            local chargeTriggerTick
+            if Menu.Charge.LateCharge == true then
+                -- Late charge: offset from END of swing (charge near the hit)
+                chargeTriggerTick = weaponSmackDelay - chargeDelay
+            else
+                -- Early charge: offset from START of swing (server registers attack first)
+                chargeTriggerTick = chargeDelay
+            end
+            -- Ensure trigger tick is at least 1 to avoid same-tick charge+attack
+            if chargeTriggerTick < 1 then
+                chargeTriggerTick = 1
+            end
+
+            if attackTickCount >= chargeTriggerTick then
                 -- Schedule aim then charge via state machine
                 chargeState = "aim" -- on this tick we aim; next tick we charge
                 -- Reset attack tracking
@@ -3069,6 +3116,7 @@ local function doDraw()
             Menu.Charge.ChargeReach = ImMenu.Checkbox("Charge Reach", Menu.Charge.ChargeReach)
             if Menu.Charge.ChargeReach == true then
                 Menu.Charge.LateCharge = ImMenu.Checkbox("Late Charge", Menu.Charge.LateCharge)
+                Menu.Charge.ChargeDelay = ImMenu.Slider("Charge Delay", Menu.Charge.ChargeDelay, 1, 10)
             end
             ImMenu.EndFrame()
 
