@@ -12,6 +12,8 @@ end
 -- Initialize libraries
 local lnxLib = require("lnxlib")
 local ImMenu = require("immenu")
+local Profiler = require("Profiler")
+Profiler.SetVisible(true)
 
 local Math, Conversion = lnxLib.Utils.Math, lnxLib.Utils.Conversion
 local WPlayer, WWeapon = lnxLib.TF2.WPlayer, lnxLib.TF2.WWeapon
@@ -2473,7 +2475,28 @@ local originalCritHackKey = 0
 local originalMeleeCritHack = 0
 local menuWasOpen = false
 local critRefillActive = false
+local lastCritBucketValue = -1
+local critBucketStallCount = 0
+local CRIT_REFILL_PROXIMITY_MULTIPLIER = 4
+local CRIT_BUCKET_MAX_STALL_TICKS = 132
 local dashKeyNotBoundNotified = true
+
+local function AnyEnemyWithinRange(localPlayer, range)
+    assert(localPlayer, "AnyEnemyWithinRange: localPlayer missing")
+    local localOrigin = localPlayer:GetAbsOrigin()
+    local localTeam = localPlayer:GetTeamNumber()
+    local allPlayers = entities.FindByClass("CTFPlayer")
+    for _, ent in pairs(allPlayers) do
+        if ent and ent:IsValid() and ent:IsAlive() and not ent:IsDormant()
+            and ent ~= localPlayer and ent:GetTeamNumber() ~= localTeam then
+            local dist = (ent:GetAbsOrigin() - localOrigin):Length()
+            if dist <= range then
+                return true
+            end
+        end
+    end
+    return false
+end
 
 local function IsChargeBotActiveByMode()
     local chargeActivationMode = Menu.Charge.ChargeBotActivationMode or 1
@@ -2497,6 +2520,8 @@ end
 -- Predicts player position after set amount of ticks
 ---@param strafeAngle number
 local function OnCreateMove(pCmd)
+    Profiler.BeginSystem("SwingPred_Tick")
+
     -- Clear ALL entity variables at start of every tick to prevent stale references
     pLocal = nil
     pWeapon = nil
@@ -2520,6 +2545,7 @@ local function OnCreateMove(pCmd)
     vPlayerPath = {}
     drawVhitbox = {}
 
+    Profiler.Begin("Setup")
     -- Periodic cleanup of stale cache entries (once every 5 seconds)
     local currentTime = globals.RealTime()
     if currentTime - (lastCacheCleanup or 0) > 5 then
@@ -2537,7 +2563,9 @@ local function OnCreateMove(pCmd)
 
     -- Get the local player entity
     pLocal = entities.GetLocalPlayer()
+    Profiler.End("Setup")
     if not pLocal or not pLocal:IsAlive() then
+        Profiler.EndSystem("SwingPred_Tick")
         goto continue -- Return if the local player entity doesn't exist or is dead
     end
 
@@ -2563,6 +2591,7 @@ local function OnCreateMove(pCmd)
     end
 
     -- ===== Charge Reach State Machine (Demoman only) =====
+    Profiler.Begin("ChargeStateMachine")
     local chargeBotActiveNow = Menu.Charge.ChargeBot == true and IsChargeBotActiveByMode()
     if chargeReachEnabled and pLocalClass == 4 and hasChargeShield then
         if chargeState == "aim" then
@@ -2585,6 +2614,7 @@ local function OnCreateMove(pCmd)
         chargeAimAngles = nil
     end
     -- =====================================
+    Profiler.End("ChargeStateMachine")
 
     -- Show notification if instant attack is enabled but dash key is not bound
     if Menu.Misc.InstantAttack == true and gui.GetValue("dash move key") == 0 and not dashKeyNotBoundNotified then
@@ -2599,12 +2629,14 @@ local function OnCreateMove(pCmd)
     -- Check if the local player is a spy
     pLocalClass = pLocal:GetPropInt("m_iClass")
     if pLocalClass == nil or pLocalClass == 8 then
+        Profiler.EndSystem("SwingPred_Tick")
         goto continue -- Skip the rest of the code if the local player is a spy or hasn't chosen a class
     end
 
     -- Get the local player's active weapon
     pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
     if not pWeapon then
+        Profiler.EndSystem("SwingPred_Tick")
         goto continue -- Return if the local player doesn't have an active weapon
     end
     local nextPrimaryAttack = pWeapon:GetPropFloat("LocalActiveWeaponData", "m_flNextPrimaryAttack")
@@ -2647,6 +2679,7 @@ local function OnCreateMove(pCmd)
 
     isMelee = pWeapon:IsMeleeWeapon() -- check if using melee weapon
     if not isMelee then
+        Profiler.EndSystem("SwingPred_Tick")
         goto continue
     end -- if not melee then skip code
 
@@ -2764,39 +2797,47 @@ local function OnCreateMove(pCmd)
     local serverAllowsCrits = (client.GetConVar("tf_weapon_criticals") or 0) ~= 0
         and (client.GetConVar("tf_weapon_criticals_melee") or 0) ~= 0
     if not menuIsOpen and pWeapon and serverAllowsCrits then
-        local CritValue = 39 -- Base value for crit token bucket calculation
+        local CritValue = 39
         local CritBucket = pWeapon:GetCritTokenBucket()
         local NumCrits = CritValue * Menu.Misc.CritRefill.NumCrits
-
-        -- Cap NumCrits to ensure CritBucket does not exceed 1000
         NumCrits = math.clamp(NumCrits, 27, 1000)
 
-        if CurrentTarget == nil and Menu.Misc.CritRefill.Active then
-            -- Check if we need to refill the crit bucket
-            if CritBucket < NumCrits then
-                -- Start crit refill mode if not already active
-                if not critRefillActive then
-                    gui.SetValue("Crit Hack Key", 0)   -- Disable crit hack key
-                    gui.SetValue("Melee Crit Hack", 2) -- Set to "Stop" mode to store crits
-                    critRefillActive = true
-                end
+        local proximityRange = TotalSwingRange * CRIT_REFILL_PROXIMITY_MULTIPLIER
+        local enemyNearby = AnyEnemyWithinRange(pLocal, proximityRange)
+        local safeToRefill = not enemyNearby and CurrentTarget == nil
 
-                -- Keep attacking to build crits
-                pCmd:SetButtons(pCmd:GetButtons() | IN_ATTACK)
+        if safeToRefill and Menu.Misc.CritRefill.Active and CritBucket < NumCrits then
+            if not critRefillActive then
+                gui.SetValue("Crit Hack Key", 0)
+                gui.SetValue("Melee Crit Hack", 2)
+                critRefillActive = true
+                lastCritBucketValue = CritBucket
+                critBucketStallCount = 0
+            end
+
+            if CritBucket > lastCritBucketValue then
+                lastCritBucketValue = CritBucket
+                critBucketStallCount = 0
             else
-                -- Crit bucket is full, restore user settings
-                if critRefillActive then
-                    gui.SetValue("Crit Hack Key", originalCritHackKey)
-                    gui.SetValue("Melee Crit Hack", Menu.Misc.CritMode)
-                    critRefillActive = false
-                end
+                critBucketStallCount = critBucketStallCount + 1
+            end
+
+            if critBucketStallCount >= CRIT_BUCKET_MAX_STALL_TICKS then
+                gui.SetValue("Crit Hack Key", originalCritHackKey)
+                gui.SetValue("Melee Crit Hack", Menu.Misc.CritMode)
+                critRefillActive = false
+                lastCritBucketValue = -1
+                critBucketStallCount = 0
+            else
+                pCmd:SetButtons(pCmd:GetButtons() | IN_ATTACK)
             end
         else
-            -- We have a target or refill is disabled, restore settings if needed
             if critRefillActive then
                 gui.SetValue("Crit Hack Key", originalCritHackKey)
                 gui.SetValue("Melee Crit Hack", Menu.Misc.CritMode)
                 critRefillActive = false
+                lastCritBucketValue = -1
+                critBucketStallCount = 0
             end
         end
     else
@@ -2804,6 +2845,8 @@ local function OnCreateMove(pCmd)
             gui.SetValue("Crit Hack Key", originalCritHackKey)
             gui.SetValue("Melee Crit Hack", Menu.Misc.CritMode)
             critRefillActive = false
+            lastCritBucketValue = -1
+            critBucketStallCount = 0
         end
     end
 
@@ -2832,12 +2875,15 @@ local function OnCreateMove(pCmd)
     gravity = client.GetConVar("sv_gravity")
     stepSize = pLocal:GetPropFloat("localdata", "m_flStepSize") or stepSize
 
+    Profiler.Begin("CalcStrafe")
     -- Ensure players list is populated before using in CalcStrafe
     if not players then
         players = entities.FindByClass("CTFPlayer")
     end
     CalcStrafe()
+    Profiler.End("CalcStrafe")
 
+    Profiler.Begin("LocalPrediction")
     -- Local player prediction
     if pLocal:EstimateAbsVelocity() == 0 then
         -- If the local player is not accelerating, set the predicted position to the current position
@@ -2868,19 +2914,22 @@ local function OnCreateMove(pCmd)
             and (globals.TickCount() - lastAttackTick) <= 13 and hasChargeShield
         local suppressCharge = localCharging and not localExploitActive
         local predData = PredictPlayer(player, simTicks, strafeAngle, false, nil, pCmd, suppressCharge)
-        if not predData then return end
+        if not predData then Profiler.End("LocalPrediction") Profiler.EndSystem("SwingPred_Tick") return end
 
         pLocalPath = predData.pos
         pLocalFuture = predData.pos[simTicks] + viewOffset
     end
+    Profiler.End("LocalPrediction")
 
     -- stop if no target
     if CurrentTarget == nil then
+        Profiler.EndSystem("SwingPred_Tick")
         return
     end
 
     -- Validate target is still valid (alive, not dormant, etc.)
     if not CurrentTarget:IsValid() or not CurrentTarget:IsAlive() or CurrentTarget:IsDormant() then
+        Profiler.EndSystem("SwingPred_Tick")
         return
     end
 
@@ -2909,6 +2958,7 @@ local function OnCreateMove(pCmd)
             tostring(canWarp), chargedTicks, swingTime, tostring(instantAttackReady)))
     end
 
+    Profiler.Begin("EnemyPrediction")
     if not instantAttackReady then
         -- Only predict enemy movement when NOT using instant attack
         local player = WPlayer.FromEntity(CurrentTarget)
@@ -2930,7 +2980,7 @@ local function OnCreateMove(pCmd)
             predData = PredictPlayerSimpleLinear(CurrentTarget, simTicks, strafeAngle)
         end
 
-        if not predData then return end
+        if not predData then Profiler.End("EnemyPrediction") Profiler.EndSystem("SwingPred_Tick") return end
 
         vPlayerPath = predData.pos
         vPlayerFuture = predData.pos[simTicks]
@@ -2943,6 +2993,7 @@ local function OnCreateMove(pCmd)
         drawVhitbox[1] = vPlayerFuture + vHitbox[1]
         drawVhitbox[2] = vPlayerFuture + vHitbox[2]
     end
+    Profiler.End("EnemyPrediction")
 
     --[--------------Distance check using TotalSwingRange-------------------]
     -- Get current distance between local player and closest player
@@ -2953,6 +3004,7 @@ local function OnCreateMove(pCmd)
     local inRange = false
     local inRangePoint = Vector3(0, 0, 0)
 
+    Profiler.Begin("RangeCheck")
     -- Use TotalSwingRange for range checking (already calculated with charge reach logic)
     local hitFromPredicted
     inRange, inRangePoint, can_charge, hitFromPredicted = checkInRangeSimple(CurrentTarget:GetIndex(), TotalSwingRange, pWeapon, pCmd)
@@ -2969,7 +3021,10 @@ local function OnCreateMove(pCmd)
         end
     end
 
+    Profiler.End("RangeCheck")
+
     --[--------------AimBot-------------------]
+    Profiler.Begin("Aimbot")
     local aimpos = CurrentTarget:GetAbsOrigin() + Vheight
 
     if Menu.Aimbot.Aimbot == true then
@@ -3023,9 +3078,11 @@ local function OnCreateMove(pCmd)
             end
         end
     end
+    Profiler.End("Aimbot")
 
 
 
+    Profiler.Begin("AttackLogic")
     -- Only try instant attack when it's possible
     if can_attack then
         -- Get the actual weapon smack delay if available
@@ -3188,8 +3245,10 @@ local function OnCreateMove(pCmd)
         -- No need to track exploit flag anymore; logic is purely timing-based
     end
 
+    Profiler.End("AttackLogic")
     -- Update last variables
     vHitbox[2].z = 82
+    Profiler.EndSystem("SwingPred_Tick")
     ::continue::
 end
 
@@ -3421,6 +3480,7 @@ local Verdana = draw.CreateFont("Verdana", 16, 800) -- Create a font for doDraw
 draw.SetFont(Verdana)
 --[[ Code called every frame ]]                     --
 local function doDraw()
+    Profiler.Draw()
     -- Render menu UI even when dead or visuals disabled
     if gui.IsMenuOpen() and ImMenu and ImMenu.Begin("Swing Prediction") then
         ImMenu.BeginFrame(1) -- tabs
