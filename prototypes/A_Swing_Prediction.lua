@@ -2527,16 +2527,9 @@ local function OnCreateMove(pCmd)
             simTicks = Menu.Aimbot.SwingTime
         end
 
-        -- If charge-reach exploit is READY (full meter, demo, exploit enabled) but we're **not yet charging**,
-        -- run a secondary prediction that simulates starting a charge right now.
-        local simulateCharge = (not isCurrentlyCharging) and isExploitReady and (Menu.Charge.LateCharge ~= true) and hasChargeShield
-        local fixedAngles = nil
-        if simulateCharge and CurrentTarget then
-            -- Use current target's position to define intended charge heading for prediction
-            fixedAngles = Math.PositionAngles(pLocalOrigin, CurrentTarget:GetAbsOrigin())
-        end
-
-        local predData = PredictPlayer(player, simTicks, strafeAngle, simulateCharge, fixedAngles, pCmd)
+        -- Never simulate charge boost for local player: swing cancels charge instantly.
+        -- Current velocity already reflects active charge speed; friction handles deceleration.
+        local predData = PredictPlayer(player, simTicks, strafeAngle, false, nil, pCmd)
         if not predData then return end
 
         pLocalPath = predData.pos
