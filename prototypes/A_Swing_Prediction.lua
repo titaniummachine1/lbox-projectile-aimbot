@@ -12,8 +12,26 @@ end
 -- Initialize libraries
 local lnxLib = require("lnxlib")
 local ImMenu = require("immenu")
-local Profiler = require("Profiler")
-Profiler.SetVisible(true)
+
+local DEBUG_PROFILER = false
+
+local function NoOpProfilerCall()
+end
+
+local Profiler
+if DEBUG_PROFILER then
+    Profiler = require("Profiler")
+    Profiler.SetVisible(true)
+else
+    Profiler = {
+        BeginSystem = NoOpProfilerCall,
+        EndSystem = NoOpProfilerCall,
+        Begin = NoOpProfilerCall,
+        End = NoOpProfilerCall,
+        Draw = NoOpProfilerCall,
+        SetVisible = NoOpProfilerCall,
+    }
+end
 
 local Math, Conversion = lnxLib.Utils.Math, lnxLib.Utils.Conversion
 local WPlayer, WWeapon = lnxLib.TF2.WPlayer, lnxLib.TF2.WWeapon
