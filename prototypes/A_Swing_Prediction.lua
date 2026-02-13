@@ -91,7 +91,7 @@ function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
         end
 
         local maxDeltaPerTickRad = math.rad(45)
-        local minSpeedForSample = 50
+        local minSpeedForSample = 25
 
         local deltas = {}
         local deltaCount = 0
@@ -141,7 +141,7 @@ function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
         local signedSamples = posCount + negCount
         if signedSamples > 0 then
             local dominantRatio = math.max(posCount, negCount) / signedSamples
-            if dominantRatio < 0.7 then
+            if dominantRatio < 0.6 then
                 return nil
             end
         end
@@ -182,14 +182,14 @@ WishdirTracker.EXPIRY_TICKS = 66
 WishdirTracker.STILL_SPEED_THRESHOLD = 50
 
 WishdirTracker.DIRECTIONS = {
-    { name = "forward", x = 1, y = 0 },
-    { name = "forwardright", x = 1, y = -1 },
-    { name = "right", x = 0, y = -1 },
-    { name = "backright", x = -1, y = -1 },
-    { name = "back", x = -1, y = 0 },
-    { name = "backleft", x = -1, y = 1 },
-    { name = "left", x = 0, y = 1 },
-    { name = "forwardleft", x = 1, y = 1 },
+    { name = "forward", x = 450, y = 0 },
+    { name = "forwardright", x = 450, y = -450 },
+    { name = "right", x = 0, y = -450 },
+    { name = "backright", x = -450, y = -1 },
+    { name = "back", x = -450, y = 0 },
+    { name = "backleft", x = -450, y = 450 },
+    { name = "left", x = 0, y = 450 },
+    { name = "forwardleft", x = 450, y = 450 },
     { name = "coast", x = 0, y = 0 },
 }
 
@@ -347,6 +347,44 @@ function WishdirTracker.update(entity)
         targetTick = currentTick + 1,
         entries = simulateWishdirCandidates(playerCtx, simCtx),
     }
+end
+
+function WishdirTracker.updateLight(entity)
+    if not entity or not entity:IsAlive() or entity:IsDormant() then
+        return
+    end
+
+    local idx = entity:GetIndex()
+    if not WishdirTracker.state[idx] then
+        WishdirTracker.state[idx] = {}
+    end
+    local s = WishdirTracker.state[idx]
+
+    local currentPos = entity:GetAbsOrigin()
+    local currentVel = entity:EstimateAbsVelocity()
+    local currentYaw = WishdirTracker.getEntityYaw(entity) or 0
+    local currentTick = globals.TickCount()
+    if not (currentPos and currentVel) then
+        return
+    end
+
+    local detectedWishdir = Vector3(0, 0, 0)
+    local horizLen = Length2D(currentVel)
+    if horizLen >= WishdirTracker.STILL_SPEED_THRESHOLD then
+        detectedWishdir = WishdirTracker.clampVelocityTo8Directions(currentVel, currentYaw)
+    elseif s.lastPos then
+        local movementDelta = currentPos - s.lastPos
+        if Length2D(movementDelta) > 1.0 then
+            detectedWishdir = WishdirTracker.clampVelocityTo8Directions(movementDelta, currentYaw)
+        end
+    end
+
+    s.detectedWishdir = detectedWishdir
+    s.lastPos = currentPos
+    s.lastVel = currentVel
+    s.lastYaw = currentYaw
+    s.lastTick = currentTick
+    s.predictions = nil
 end
 
 function WishdirTracker.getRelativeWishdir(entity)
@@ -1861,6 +1899,49 @@ local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd)
     return _out
 end
 
+local function PredictPlayerSimpleLinear(player, t, d)
+    assert(player, "PredictPlayerSimpleLinear: player is nil")
+    assert(t and t > 0, "PredictPlayerSimpleLinear: invalid tick count")
+
+    local origin = player:GetAbsOrigin()
+    local velocity = player:EstimateAbsVelocity()
+    assert(origin, "PredictPlayerSimpleLinear: origin is nil")
+    assert(velocity, "PredictPlayerSimpleLinear: velocity is nil")
+
+    local tickinterval = globals.TickInterval()
+    local pos = Vector3(origin:Unpack())
+    local vel = Vector3(velocity:Unpack())
+    local yawDeltaDeg = d or 0
+
+    local out = {
+        pos = { [0] = Vector3(pos:Unpack()) },
+        vel = { [0] = Vector3(vel:Unpack()) },
+        onGround = { [0] = false }
+    }
+
+    for i = 1, t do
+        if math.abs(yawDeltaDeg) > 0.01 then
+            local yawRad = yawDeltaDeg * PlayerTick.DEG2RAD
+            local cosYaw = math.cos(yawRad)
+            local sinYaw = math.sin(yawRad)
+            local vx = vel.x
+            local vy = vel.y
+            vel.x = cosYaw * vx - sinYaw * vy
+            vel.y = sinYaw * vx + cosYaw * vy
+        end
+
+        pos.x = pos.x + vel.x * tickinterval
+        pos.y = pos.y + vel.y * tickinterval
+        pos.z = pos.z + vel.z * tickinterval
+
+        out.pos[i] = Vector3(pos:Unpack())
+        out.vel[i] = Vector3(vel:Unpack())
+        out.onGround[i] = false
+    end
+
+    return out
+end
+
 -- Constants for minimum and maximum speed
 local MIN_SPEED = 10                     -- Minimum speed to avoid jittery movements
 local MAX_SPEED = 650                    -- Maximum speed the player can move
@@ -2354,9 +2435,16 @@ local function OnCreateMove(pCmd)
     -- Quick reference values used multiple times
     pLocalClass = pLocal:GetPropInt("m_iClass")
     chargeLeft  = pLocal:GetPropFloat("m_flChargeMeter")
+    local chargeReachEnabled = Menu.Charge and Menu.Charge.ChargeReach == true
+
+    if not chargeReachEnabled then
+        resetAttackTracking()
+        chargeState = "idle"
+        chargeAimAngles = nil
+    end
 
     -- ===== Charge Reach State Machine (Demoman only) =====
-    if pLocalClass == 4 and hasChargeShield then
+    if chargeReachEnabled and pLocalClass == 4 and hasChargeShield then
         if chargeState == "aim" then
             if chargeAimAngles then
                 engine.SetViewAngles(EulerAngles(chargeAimAngles.pitch, chargeAimAngles.yaw, 0))
@@ -2675,7 +2763,19 @@ local function OnCreateMove(pCmd)
         -- Default to Menu.Aimbot.SwingTime since we're not using instant attack
         local simTicks = Menu.Aimbot.SwingTime
 
-        local predData = PredictPlayer(player, simTicks, strafeAngle, false, nil)
+        local targetDistance = (CurrentTarget:GetAbsOrigin() - pLocalOrigin):Length()
+        local complexSimDistance = TotalSwingRange * 2
+
+        local predData
+        if targetDistance <= complexSimDistance then
+            predData = PredictPlayer(player, simTicks, strafeAngle, false, nil)
+        else
+            -- Far target: keep history updated, but skip expensive collision simulation.
+            StrafePredictor.updateAll({ CurrentTarget })
+            WishdirTracker.updateLight(CurrentTarget)
+            predData = PredictPlayerSimpleLinear(CurrentTarget, simTicks, strafeAngle)
+        end
+
         if not predData then return end
 
         vPlayerPath = predData.pos
@@ -2878,40 +2978,46 @@ local function OnCreateMove(pCmd)
 
         -- Track attack ticks and execute charge at right moment
         if attackStarted then
-            attackTickCount = attackTickCount + 1
-
-            -- Get weapon smack delay (when the weapon will hit)
-            local weaponSmackDelay = Menu.Aimbot.MaxSwingTime
-            if pWeapon and pWeapon:GetWeaponData() and pWeapon:GetWeaponData().smackDelay then
-                weaponSmackDelay = math.floor(pWeapon:GetWeaponData().smackDelay / globals.TickInterval())
-            end
-
-            -- If charge-jump enabled issue jump together with charge
-            if Menu.Charge.ChargeJump == true and OnGround then
-                pCmd:SetButtons(pCmd:GetButtons() | IN_JUMP)
-            end
-
-            -- Determine when to trigger charge based on LateCharge setting
-            local chargeDelay = Menu.Charge.ChargeDelay or 4
-            local chargeTriggerTick
-            if Menu.Charge.LateCharge == true then
-                -- Late charge: offset from END of swing (charge near the hit)
-                chargeTriggerTick = weaponSmackDelay - chargeDelay
+            if not (chargeReachEnabled and pLocalClass == 4 and hasChargeShield and chargeLeft == 100) then
+                resetAttackTracking()
+                chargeState = "idle"
+                chargeAimAngles = nil
             else
-                -- Early charge: offset from START of swing (server registers attack first)
-                chargeTriggerTick = chargeDelay
-            end
-            -- Ensure trigger tick is at least 1 to avoid same-tick charge+attack
-            if chargeTriggerTick < 1 then
-                chargeTriggerTick = 1
-            end
+                attackTickCount = attackTickCount + 1
 
-            if attackTickCount >= chargeTriggerTick then
-                -- Schedule aim then charge via state machine
-                chargeState = "aim" -- on this tick we aim; next tick we charge
-                -- Reset attack tracking
-                attackStarted = false
-                attackTickCount = 0
+                -- Get weapon smack delay (when the weapon will hit)
+                local weaponSmackDelay = Menu.Aimbot.MaxSwingTime
+                if pWeapon and pWeapon:GetWeaponData() and pWeapon:GetWeaponData().smackDelay then
+                    weaponSmackDelay = math.floor(pWeapon:GetWeaponData().smackDelay / globals.TickInterval())
+                end
+
+                -- If charge-jump enabled issue jump together with charge
+                if Menu.Charge.ChargeJump == true and OnGround then
+                    pCmd:SetButtons(pCmd:GetButtons() | IN_JUMP)
+                end
+
+                -- Determine when to trigger charge based on LateCharge setting
+                local chargeDelay = Menu.Charge.ChargeDelay or 4
+                local chargeTriggerTick
+                if Menu.Charge.LateCharge == true then
+                    -- Late charge: offset from END of swing (charge near the hit)
+                    chargeTriggerTick = weaponSmackDelay - chargeDelay
+                else
+                    -- Early charge: offset from START of swing (server registers attack first)
+                    chargeTriggerTick = chargeDelay
+                end
+                -- Ensure trigger tick is at least 1 to avoid same-tick charge+attack
+                if chargeTriggerTick < 1 then
+                    chargeTriggerTick = 1
+                end
+
+                if attackTickCount >= chargeTriggerTick then
+                    -- Schedule aim then charge via state machine
+                    chargeState = "aim" -- on this tick we aim; next tick we charge
+                    -- Reset attack tracking
+                    attackStarted = false
+                    attackTickCount = 0
+                end
             end
         end
 
