@@ -1197,6 +1197,11 @@ local Menu = {
     -- Charge settings (moved from mixed locations to a dedicated section)
     Charge = {
         ChargeBot = false,
+        ChargeBotFOV = 360,
+        ChargeBotActivationMode = 1,
+        ChargeBotActivationModes = { "Always On", "On Key" },
+        ChargeBotKeybind = KEY_NONE,
+        ChargeBotKeybindName = "Always On",
         ChargeControl = false,
         ChargeSensitivity = 1.0,
         ChargeReach = true,
@@ -1364,6 +1369,12 @@ local function SafeInitMenu()
 
     -- Initialize other sections if needed
     Menu.Charge = Menu.Charge or {}
+    Menu.Charge.ChargeBot = Menu.Charge.ChargeBot ~= nil and Menu.Charge.ChargeBot or false
+    Menu.Charge.ChargeBotFOV = Menu.Charge.ChargeBotFOV or 360
+    Menu.Charge.ChargeBotActivationMode = Menu.Charge.ChargeBotActivationMode or 1
+    Menu.Charge.ChargeBotActivationModes = Menu.Charge.ChargeBotActivationModes or { "Always On", "On Key" }
+    Menu.Charge.ChargeBotKeybind = Menu.Charge.ChargeBotKeybind or KEY_NONE
+    Menu.Charge.ChargeBotKeybindName = Menu.Charge.ChargeBotKeybindName or "Always On"
     Menu.Visuals = Menu.Visuals or {}
     -- LateCharge default
     Menu.Charge.LateCharge = Menu.Charge.LateCharge ~= nil and Menu.Charge.LateCharge or true
@@ -2031,7 +2042,7 @@ local function IsVisible(player, fromEntity)
 end
 
 -- Function to get the best target
-local function GetBestTarget(me)
+local function GetBestTarget(me, maxFov)
     local localPlayer = entities.GetLocalPlayer()
     if not localPlayer then return end
 
@@ -2049,7 +2060,7 @@ local function GetBestTarget(me)
     local localPlayerEyePos = localPlayerOrigin + Vector3(0, 0, 75)
 
     -- Use configured FOV without restrictions
-    local effectiveFOV = Menu.Aimbot.AimbotFOV
+    local effectiveFOV = maxFov or Menu.Aimbot.AimbotFOV
 
     for _, player in pairs(players) do
         if player == nil
@@ -2593,17 +2604,28 @@ local function OnCreateMove(pCmd)
 
     --[-----Get best target------------------]
     local keybind = Menu.Keybind
+    local chargeBotModeActive = IsChargeBotActiveByMode()
+    local chargeBotTargetingActive = Menu.Charge.ChargeBot == true and chargeBotModeActive
+    local isChargeBotLockContext = chargeBotTargetingActive and pLocalClass == 4 and hasChargeShield
+        and (pLocal:InCond(17) or (chargeLeft == 100 and input.IsButtonDown(MOUSE_RIGHT)))
+    local selectedTargetFOV = Menu.Aimbot.AimbotFOV
+    if isChargeBotLockContext then
+        selectedTargetFOV = Menu.Charge.ChargeBotFOV
+    end
 
     -- Get fresh player list each tick
     players = entities.FindByClass("CTFPlayer")
 
     if keybind == 0 then
         -- Check if player has no key bound
-        CurrentTarget = GetBestTarget(pLocal)
+        CurrentTarget = GetBestTarget(pLocal, selectedTargetFOV)
         vPlayer = CurrentTarget
     elseif input.IsButtonDown(keybind) then
         -- If player has bound key for aimbot, only work when it's on
-        CurrentTarget = GetBestTarget(pLocal)
+        CurrentTarget = GetBestTarget(pLocal, selectedTargetFOV)
+        vPlayer = CurrentTarget
+    elseif chargeBotTargetingActive then
+        CurrentTarget = GetBestTarget(pLocal, Menu.Charge.ChargeBotFOV)
         vPlayer = CurrentTarget
     else
         CurrentTarget = nil
@@ -2815,7 +2837,7 @@ local function OnCreateMove(pCmd)
             aim_angles = Math.PositionAngles(pLocalOrigin, aimpos)
         end
 
-        local chargeBotEnabled = Menu.Charge.ChargeBot == true
+        local chargeBotEnabled = Menu.Charge.ChargeBot == true and chargeBotModeActive
         local isDemoknight = pLocalClass == 4 and hasChargeShield
 
         -- Charge-bot steering while actively charging (only when ChargeBot enabled)
@@ -3190,6 +3212,20 @@ end)();
 local bindTimer = 0
 local bindDelay = 0.25 -- Delay of 0.25 seconds
 
+local function IsChargeBotActiveByMode()
+    local chargeActivationMode = Menu.Charge.ChargeBotActivationMode or 1
+    if chargeActivationMode == 1 then
+        return true
+    end
+
+    local chargeKeybind = Menu.Charge.ChargeBotKeybind or KEY_NONE
+    if chargeKeybind == KEY_NONE then
+        return false
+    end
+
+    return input.IsButtonDown(chargeKeybind)
+end
+
 local function handleKeybind(noKeyText, keybind, keybindName)
     if keybindName ~= "Press The Key" and ImMenu.Button(keybindName or noKeyText) then
         bindTimer = os.clock() + bindDelay
@@ -3205,7 +3241,7 @@ local function handleKeybind(noKeyText, keybind, keybindName)
                 if pressedKey == KEY_ESCAPE then
                     -- Reset keybind if the Escape key is pressed
                     keybind = 0
-                    keybindName = "Always On"
+                    keybindName = noKeyText
                     Notify.Simple("Keybind Success", "Bound Key: " .. keybindName, 2)
                 else
                     -- Update keybind with the pressed key
@@ -3302,6 +3338,25 @@ local function doDraw()
             ImMenu.BeginFrame(1)
             Menu.Charge.ChargeBot = ImMenu.Checkbox("Charge Bot", Menu.Charge.ChargeBot)
             ImMenu.EndFrame()
+
+            if Menu.Charge.ChargeBot == true then
+                ImMenu.BeginFrame(1)
+                Menu.Charge.ChargeBotFOV = ImMenu.Slider("Charge Bot Fov", Menu.Charge.ChargeBotFOV, 1, 360)
+                ImMenu.EndFrame()
+
+                ImMenu.BeginFrame(1)
+                Menu.Charge.ChargeBotActivationMode = ImMenu.Option(Menu.Charge.ChargeBotActivationMode,
+                    Menu.Charge.ChargeBotActivationModes)
+                ImMenu.EndFrame()
+
+                if Menu.Charge.ChargeBotActivationMode == 2 then
+                    ImMenu.BeginFrame(1)
+                    ImMenu.Text("Charge Bot Keybind: ")
+                    Menu.Charge.ChargeBotKeybind, Menu.Charge.ChargeBotKeybindName = handleKeybind("No Key",
+                        Menu.Charge.ChargeBotKeybind, Menu.Charge.ChargeBotKeybindName)
+                    ImMenu.EndFrame()
+                end
+            end
 
             ImMenu.BeginFrame(1)
             Menu.Charge.ChargeControl = ImMenu.Checkbox("Charge Control", Menu.Charge.ChargeControl)
