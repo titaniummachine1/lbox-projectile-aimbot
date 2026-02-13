@@ -259,11 +259,13 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 					currentDir = projected
 					table.insert(subSegments, {pos = currentPos, dir = currentDir})
 					
-					-- Step down after surface adjustment
+					-- Step down after surface adjustment (using trace hull)
 					local downDir = -hitNormal
-					local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 150, TRACE_MASK)
+					local downStart = currentPos
+					local downEnd = currentPos + downDir * 150
+					local downTrace = engine.TraceHull(downStart, downEnd, Vector3(-1, -1, -1), Vector3(1, 1, 1), TRACE_MASK)
 					if downTrace.fraction < 1.0 then
-						currentPos = currentPos + downDir * (150 * downTrace.fraction)
+						currentPos = downStart + downDir * (150 * downTrace.fraction)
 						currentPos = clampToRadius(center, currentPos, radius)
 						table.insert(subSegments, {pos = currentPos, dir = currentDir})
 					end
@@ -280,11 +282,13 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 				currentPos = elevatedStart + currentDir * (stepSize * elevatedTrace.fraction)
 				table.insert(subSegments, {pos = currentPos, dir = currentDir})
 				
-				-- Step down after elevation
+				-- Step down after elevation (using trace hull)
 				local downDir = -hitNormal
-				local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 150, TRACE_MASK)
+				local downStart = currentPos
+				local downEnd = currentPos + downDir * 150
+				local downTrace = engine.TraceHull(downStart, downEnd, Vector3(-1, -1, -1), Vector3(1, 1, 1), TRACE_MASK)
 				if downTrace.fraction < 1.0 then
-					currentPos = currentPos + downDir * (150 * downTrace.fraction)
+					currentPos = downStart + downDir * (150 * downTrace.fraction)
 					currentPos = clampToRadius(center, currentPos, radius)
 					table.insert(subSegments, {pos = currentPos, dir = currentDir})
 				end
@@ -301,11 +305,13 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 					currentPos = currentPos + currentDir * (stepSize * slideTrace.fraction)
 					table.insert(subSegments, {pos = currentPos, dir = currentDir})
 					
-					-- Step down after sliding
+					-- Step down after sliding (using trace hull)
 					local downDir = -hitNormal
-					local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 150, TRACE_MASK)
+					local downStart = currentPos
+					local downEnd = currentPos + downDir * 150
+					local downTrace = engine.TraceHull(downStart, downEnd, Vector3(-1, -1, -1), Vector3(1, 1, 1), TRACE_MASK)
 					if downTrace.fraction < 1.0 then
-						currentPos = currentPos + downDir * (150 * downTrace.fraction)
+						currentPos = downStart + downDir * (150 * downTrace.fraction)
 						currentPos = clampToRadius(center, currentPos, radius)
 						table.insert(subSegments, {pos = currentPos, dir = currentDir})
 					end
@@ -324,11 +330,13 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 					currentPos = currentPos + currentDir * (stepSize * 0.5 * altTrace.fraction)
 					table.insert(subSegments, {pos = currentPos, dir = currentDir})
 					
-					-- Step down after alternative direction
+					-- Step down after alternative direction (using trace hull)
 					local downDir = -hitNormal
-					local downTrace = engine.TraceLine(currentPos, currentPos + downDir * 150, TRACE_MASK)
+					local downStart = currentPos
+					local downEnd = currentPos + downDir * 150
+					local downTrace = engine.TraceHull(downStart, downEnd, Vector3(-1, -1, -1), Vector3(1, 1, 1), TRACE_MASK)
 					if downTrace.fraction < 1.0 then
-						currentPos = currentPos + downDir * (150 * downTrace.fraction)
+						currentPos = downStart + downDir * (150 * downTrace.fraction)
 						currentPos = clampToRadius(center, currentPos, radius)
 						table.insert(subSegments, {pos = currentPos, dir = currentDir})
 					end
@@ -368,9 +376,11 @@ function Visuals.drawCrawlingExplosionRadius(center, surfaceNormal, radius, colo
 
 		-- Step down logic using last hit surface normal (always happens)
 		local downDir = -(lastNormal or surfaceNormal)
-		local downTrace = engine.TraceLine(finalPos, finalPos + downDir * 150, TRACE_MASK)
+		local downStart = finalPos
+		local downEnd = finalPos + downDir * 150
+		local downTrace = engine.TraceHull(downStart, downEnd, Vector3(-1, -1, -1), Vector3(1, 1, 1), TRACE_MASK)
 		if downTrace.fraction < 1.0 then
-			finalPos = finalPos + downDir * (150 * downTrace.fraction)
+			finalPos = downStart + downDir * (150 * downTrace.fraction)
 			finalPos = clampToRadius(center, finalPos, radius)
 		end
 		subSegments[#subSegments].pos = finalPos

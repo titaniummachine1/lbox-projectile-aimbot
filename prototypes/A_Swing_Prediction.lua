@@ -21,7 +21,7 @@ local Helpers = lnxLib.TF2.Helpers
 local Input = lnxLib.Utils.Input
 local Notify = lnxLib.UI.Notify
 
-local FastPlayers = require("fast_players")
+-- Player list fetched fresh each tick via entities.FindByClass("CTFPlayer")
 
 -- ============================================================================
 -- VECTOR HELPERS (defined first for use throughout)
@@ -31,32 +31,32 @@ local vectorLength = vector.Length
 local vectorDistance = vector.Distance
 
 --- Normalize vector (fastest method)
-function Normalize(vec)
+local function Normalize(vec)
 	return vectorDivide(vec, vectorLength(vec))
 end
 
 --- Distance 2D using vector Length2D
-function Distance2D(a, b)
+local function Distance2D(a, b)
 	return (a - b):Length2D()
 end
 
 --- Distance 3D (fastest possible in Lua)
-function Distance3D(a, b)
+local function Distance3D(a, b)
 	return vectorDistance(a, b)
 end
 
 --- Cross product of two vectors
-function Cross(a, b)
+local function Cross(a, b)
 	return a:Cross(b)
 end
 
 --- Dot product of two vectors
-function Dot(a, b)
+local function Dot(a, b)
 	return a:Dot(b)
 end
 
 --- 2D vector length (horizontal only)
-function Length2D(vec)
+local function Length2D(vec)
 	return vec:Length2D()
 end
 
@@ -1284,9 +1284,6 @@ local drawVhitbox = {}
 local swingTickCounter = 0
 
 -- Helpers for charge-bot yaw clamping
-local function NormalizeYaw(y)
-    return ((y + 180) % 360) - 180
-end
 local function Clamp(val, min, max)
     if val < min then return min
     elseif val > max then return max end
@@ -1298,8 +1295,8 @@ local MAX_CHARGE_BOT_TURN = 17
 local attackStarted = false
 local attackTickCount = 0
 local lastChargeTime = 0
-local chargeAimAngles = nil -- yaw/pitch to look at when triggering charge reach exploit
--- chargeJumpDone no longer needed (simplified)
+local chargeAimAngles = nil
+local chargeState = "idle"
 
 -- Track the tick index of the last +attack press (user or script)
 local lastAttackTick = -1000 -- initialize far in the past
@@ -1830,7 +1827,7 @@ end
 
 -- Returns whether the entity can be seen from the given entity
 ---@param fromEntity Entity
-function IsVisible(player, fromEntity)
+local function IsVisible(player, fromEntity)
     local from = fromEntity:GetAbsOrigin() + Vheight
     local to = player:GetAbsOrigin() + Vheight
     if from and to then
@@ -2046,7 +2043,7 @@ end
 -- Improved ChargeControl function that incorporates logic from Charge_controll.lua
 local function ChargeControl(pCmd)
     -- Check if charge control is enabled in the menu
-    if Menu.Misc.ChargeControl ~= true then
+    if Menu.Charge.ChargeControl ~= true then
         return
     end
 
@@ -2232,8 +2229,6 @@ local function OnCreateMove(pCmd)
         goto continue -- Return if the local player entity doesn't exist or is dead
     end
 
-    FastPlayers.Update()
-
     local hasChargeShield, shieldDefIndex = playerHasChargeShield(pLocal)
 
     -- Update stepSize per-tick based on current player
@@ -2363,12 +2358,12 @@ local function OnCreateMove(pCmd)
     -- Simple charge reach logic
     local hasFullCharge = chargeLeft == 100
     local isDemoman = pLocalClass == 4
-    local isExploitReady = Menu.Misc.ChargeReach == true and hasFullCharge and isDemoman and hasChargeShield
+    local isExploitReady = Menu.Charge.ChargeReach == true and hasFullCharge and isDemoman and hasChargeShield
     local withinAttackWindow = (globals.TickCount() - lastAttackTick) <= 13
 
     if isCurrentlyCharging then
         -- When charging: check if we swung within last 13 ticks
-        local isDoingExploit = Menu.Misc.ChargeReach == true and withinAttackWindow and hasChargeShield
+        local isDoingExploit = Menu.Charge.ChargeReach == true and withinAttackWindow and hasChargeShield
 
         if isDoingExploit then
             -- Use charge reach range (128) + hull size for total range
@@ -2392,7 +2387,7 @@ local function OnCreateMove(pCmd)
     end
     --[--Manual charge control--]
 
-    if Menu.Misc.ChargeControl == true and pLocal:InCond(17) and hasChargeShield then
+    if Menu.Charge.ChargeControl == true and pLocal:InCond(17) and hasChargeShield then
         ChargeControl(pCmd)
     end
 
@@ -2400,7 +2395,7 @@ local function OnCreateMove(pCmd)
     local keybind = Menu.Keybind
 
     -- Get fresh player list each tick
-    players = FastPlayers.GetAll()
+    players = entities.FindByClass("CTFPlayer")
 
     if keybind == 0 then
         -- Check if player has no key bound
@@ -2476,7 +2471,7 @@ local function OnCreateMove(pCmd)
     local OnGround = (flags & FL_ONGROUND) ~= 0
 
     --[[--------------Modular Charge-Jump (manual) -------------------]]
-    if Menu.Misc.ChargeJump == true and pLocalClass == 4 then
+    if Menu.Charge.ChargeJump == true and pLocalClass == 4 then
         if (pCmd:GetButtons() & IN_ATTACK2) ~= 0 and chargeLeft == 100 and OnGround then
             -- Add jump along with existing charge command
             pCmd:SetButtons(pCmd:GetButtons() | IN_JUMP)
@@ -2490,7 +2485,7 @@ local function OnCreateMove(pCmd)
 
     -- Ensure players list is populated before using in CalcStrafe
     if not players then
-        players = FastPlayers.GetAll()
+        players = entities.FindByClass("CTFPlayer")
     end
     CalcStrafe()
 
@@ -2607,52 +2602,50 @@ local function OnCreateMove(pCmd)
     --[--------------AimBot-------------------]
     local aimpos = CurrentTarget:GetAbsOrigin() + Vheight
 
-    -- Inside your game loop
     if Menu.Aimbot.Aimbot == true then
         local aim_angles
         if inRangePoint then
             aimpos = inRangePoint
-            aimposVis = aimpos -- transfer aim point to visuals
-
-            -- Calculate aim position only once
-            aimpos = Math.PositionAngles(pLocalOrigin, aimpos)
-            aim_angles = aimpos
+            aimposVis = aimpos
+            aim_angles = Math.PositionAngles(pLocalOrigin, aimpos)
         end
 
-        -- Charge-bot steering only relevant to Demoman shield charge (class 4)
-        if Menu.Aimbot.ChargeBot == true and pLocalClass == 4 and pLocal:InCond(17) and not can_attack then
-            local trace = engine.TraceHull(pLocalOrigin, inRangePoint or vPlayerFuture, vHitbox[1], vHitbox[2],
-                MASK_PLAYERSOLID_BRUSHONLY)
-            if trace.fraction == 1 or trace.entity == CurrentTarget then
-                -- If the trace hit something, set the view angles to the position of the hit
-                local aimPosTarget = inRangePoint or vPlayerFuture
-                if aimPosTarget then
+        local chargeBotEnabled = Menu.Charge.ChargeBot == true
+        local isDemoknight = pLocalClass == 4 and hasChargeShield
+
+        -- Charge-bot steering while actively charging (only when ChargeBot enabled)
+        if chargeBotEnabled and isDemoknight and pLocal:InCond(17) and not can_attack then
+            local aimPosTarget = inRangePoint or vPlayerFuture
+            if aimPosTarget then
+                local traceTarget = engine.TraceHull(pLocalOrigin, aimPosTarget, vHitbox[1], vHitbox[2],
+                    MASK_PLAYERSOLID_BRUSHONLY)
+                if traceTarget.fraction == 1 or traceTarget.entity == CurrentTarget then
                     aim_angles = Math.PositionAngles(pLocalOrigin, aimPosTarget)
+                    local currentAng = engine.GetViewAngles()
+                    local yawDiff = NormalizeYaw(aim_angles.yaw - currentAng.yaw)
+                    local limitedYaw = NormalizeYaw(currentAng.yaw + Clamp(yawDiff, -MAX_CHARGE_BOT_TURN, MAX_CHARGE_BOT_TURN))
+                    engine.SetViewAngles(EulerAngles(aim_angles.pitch, limitedYaw, 0))
                 end
-                -- Limit yaw change to MAX_CHARGE_BOT_TURN per tick
-                local currentAng = engine.GetViewAngles()
-                local yawDiff = NormalizeYaw(aim_angles.yaw - currentAng.yaw)
-                local limitedYaw = currentAng.yaw + Clamp(yawDiff, -MAX_CHARGE_BOT_TURN, MAX_CHARGE_BOT_TURN)
-                engine.SetViewAngles(EulerAngles(currentAng.pitch, limitedYaw, 0))
             end
-        -- Angle preparation for charge (works independently when holding right-click with full charge)
-        elseif pLocalClass == 4 and chargeLeft == 100 and input.IsButtonDown(MOUSE_RIGHT) and not can_attack and fDistance < 750 then
-            local trace = engine.TraceHull(pLocalFuture, inRangePoint or vPlayerFuture, vHitbox[1], vHitbox[2],
-                MASK_PLAYERSOLID_BRUSHONLY)
-            if trace.fraction == 1 or trace.entity == CurrentTarget then
-                -- If the trace hit something, set the view angles to the position of the hit
-                local aimPosTarget = inRangePoint or vPlayerFuture
-                if aimPosTarget then
+
+        -- Pre-charge aim: look at target BEFORE initiating charge (only when ChargeBot enabled)
+        elseif chargeBotEnabled and isDemoknight and chargeLeft == 100
+            and input.IsButtonDown(MOUSE_RIGHT) and not can_attack and fDistance < 750 then
+            local aimPosTarget = inRangePoint or vPlayerFuture
+            if aimPosTarget then
+                local traceTarget = engine.TraceHull(pLocalFuture, aimPosTarget, vHitbox[1], vHitbox[2],
+                    MASK_PLAYERSOLID_BRUSHONLY)
+                if traceTarget.fraction == 1 or traceTarget.entity == CurrentTarget then
                     aim_angles = Math.PositionAngles(pLocalOrigin, aimPosTarget)
+                    local currentAng = engine.GetViewAngles()
+                    local yawDiff = NormalizeYaw(aim_angles.yaw - currentAng.yaw)
+                    local limitedYaw = NormalizeYaw(currentAng.yaw + Clamp(yawDiff, -MAX_CHARGE_BOT_TURN, MAX_CHARGE_BOT_TURN))
+                    engine.SetViewAngles(EulerAngles(aim_angles.pitch, limitedYaw, 0))
                 end
-                -- Limit yaw change to MAX_CHARGE_BOT_TURN per tick
-                local currentAng = engine.GetViewAngles()
-                local yawDiff = NormalizeYaw(aim_angles.yaw - currentAng.yaw)
-                local limitedYaw = currentAng.yaw + Clamp(yawDiff, -MAX_CHARGE_BOT_TURN, MAX_CHARGE_BOT_TURN)
-                engine.SetViewAngles(EulerAngles(currentAng.pitch, limitedYaw, 0))
             end
+
+        -- Normal aimbot: snap to target when in range
         elseif can_attack and aim_angles and aim_angles.pitch and aim_angles.yaw then
-            -- Use normal aimbot behavior regardless of charging state
             if Menu.Aimbot.Silent == true then
                 pCmd:SetViewAngles(aim_angles.pitch, aim_angles.yaw, 0)
             else
@@ -2764,7 +2757,7 @@ local function OnCreateMove(pCmd)
             pCmd:SetButtons(pCmd:GetButtons() | IN_ATTACK)
 
             -- Start tracking attack ticks for charge reach exploit
-            if pLocalClass == 4 and Menu.Misc.ChargeReach == true and chargeLeft == 100 and hasChargeShield and not attackStarted then
+            if pLocalClass == 4 and Menu.Charge.ChargeReach == true and chargeLeft == 100 and hasChargeShield and not attackStarted then
                 attackStarted = true
                 attackTickCount = 0
                 -- Store aim direction to target future position so charge travels correctly
@@ -2789,7 +2782,7 @@ local function OnCreateMove(pCmd)
             end
 
             -- If charge-jump enabled issue jump together with charge
-            if Menu.Misc.ChargeJump == true and OnGround then
+            if Menu.Charge.ChargeJump == true and OnGround then
                 pCmd:SetButtons(pCmd:GetButtons() | IN_JUMP)
             end
 
