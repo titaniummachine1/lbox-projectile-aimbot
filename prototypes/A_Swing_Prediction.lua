@@ -536,8 +536,8 @@ function PlayerTick.accelerate(velocity, wishdir, wishspeed, accel, frametime, s
     velocity.z = velocity.z + wishdir.z * accelspeed
 end
 
-function PlayerTick.getAirSpeedCap(target)
-    if target and target:InCond(17) then
+function PlayerTick.getAirSpeedCap(target, suppressCharge)
+    if not suppressCharge and target and target:InCond(17) then
         -- TF_COND_SHIELD_CHARGE: use tf_max_charge_speed (default 750)
         local _, tf_max_charge_speed = client.GetConVar("tf_max_charge_speed")
         return tf_max_charge_speed or 750
@@ -546,9 +546,9 @@ function PlayerTick.getAirSpeedCap(target)
     return 30.0
 end
 
-function PlayerTick.airAccelerate(v, wishdir, wishspeed, accel, dt, surf, target)
+function PlayerTick.airAccelerate(v, wishdir, wishspeed, accel, dt, surf, target, suppressCharge)
     -- Clamp wishspeed to air speed cap (Source engine default: 30)
-    wishspeed = math.min(wishspeed, PlayerTick.getAirSpeedCap(target))
+    wishspeed = math.min(wishspeed, PlayerTick.getAirSpeedCap(target, suppressCharge))
 
     local currentspeed = v:Dot(wishdir)
     local addspeed = wishspeed - currentspeed
@@ -926,7 +926,8 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
                 simCtx.sv_airaccelerate,
                 tickinterval,
                 1.0,
-                playerCtx.entity
+                playerCtx.entity,
+                playerCtx.suppressCharge
             )
         end
     end
@@ -1199,7 +1200,7 @@ local Menu = {
         ChargeBot = false,
         ChargeBotFOV = 360,
         ChargeBotActivationMode = 1,
-        ChargeBotActivationModes = { "Always On", "On Key" },
+        ChargeBotActivationModes = { "Always On", "On Key", "On Release" },
         ChargeBotKeybind = KEY_NONE,
         ChargeBotKeybindName = "Always On",
         ChargeControl = false,
@@ -1372,13 +1373,11 @@ local function SafeInitMenu()
     Menu.Charge.ChargeBot = Menu.Charge.ChargeBot ~= nil and Menu.Charge.ChargeBot or false
     Menu.Charge.ChargeBotFOV = Menu.Charge.ChargeBotFOV or 360
     Menu.Charge.ChargeBotActivationMode = Menu.Charge.ChargeBotActivationMode or 1
-    Menu.Charge.ChargeBotActivationModes = Menu.Charge.ChargeBotActivationModes or { "Always On", "On Key" }
+    Menu.Charge.ChargeBotActivationModes = Menu.Charge.ChargeBotActivationModes or { "Always On", "On Key", "On Release" }
     Menu.Charge.ChargeBotKeybind = Menu.Charge.ChargeBotKeybind or KEY_NONE
     Menu.Charge.ChargeBotKeybindName = Menu.Charge.ChargeBotKeybindName or "Always On"
     Menu.Visuals = Menu.Visuals or {}
-    -- LateCharge default
     Menu.Charge.LateCharge = Menu.Charge.LateCharge ~= nil and Menu.Charge.LateCharge or true
-    Menu.Charge.ChargeDelay = Menu.Charge.ChargeDelay or 4
 end
 
 -- Call the initialization function to ensure no nil values
@@ -1395,6 +1394,19 @@ local normalTotalSwingRange = 48
 local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
 local gravity = client.GetConVar("sv_gravity") or 800
 local stepSize = 18
+
+-- TF2 class walking speeds indexed by m_iClass
+local TF2_CLASS_SPEED = {
+    [1] = 400,  -- Scout
+    [2] = 240,  -- Sniper
+    [3] = 300,  -- Soldier
+    [4] = 280,  -- Demoman
+    [5] = 320,  -- Medic
+    [6] = 230,  -- Heavy
+    [7] = 300,  -- Pyro
+    [8] = 320,  -- Spy
+    [9] = 300,  -- Engineer
+}
 
 -- TF2 Physics Constants (from Auto Trickstab for enhanced prediction)
 local TF2 = {
@@ -1462,12 +1474,68 @@ local function Clamp(val, min, max)
 end
 local MAX_CHARGE_BOT_TURN = 17
 
+-- Jitter tracker: rolling window of latency samples for standard deviation
+local JITTER_WINDOW_SIZE = 66
+local jitterSamples = {}
+local jitterWriteIndex = 0
+local jitterSampleCount = 0
+local cachedJitterTicks = 1
+local lastJitterUpdateTick = -1
+
+local function UpdateJitterTracker()
+    local currentTick = globals.TickCount()
+    if currentTick == lastJitterUpdateTick then return end
+    lastJitterUpdateTick = currentTick
+
+    local nc = clientstate.GetNetChannel()
+    if not nc then return end
+
+    local currentLatency = nc:GetLatency(0)
+    assert(type(currentLatency) == "number", "UpdateJitterTracker: GetLatency returned non-number")
+
+    jitterWriteIndex = (jitterWriteIndex % JITTER_WINDOW_SIZE) + 1
+    jitterSamples[jitterWriteIndex] = currentLatency
+    if jitterSampleCount < JITTER_WINDOW_SIZE then
+        jitterSampleCount = jitterSampleCount + 1
+    end
+
+    if jitterSampleCount < 2 then
+        cachedJitterTicks = 1
+        return
+    end
+
+    local sum = 0
+    for i = 1, jitterSampleCount do
+        sum = sum + jitterSamples[i]
+    end
+    local mean = sum / jitterSampleCount
+
+    local varianceSum = 0
+    for i = 1, jitterSampleCount do
+        local diff = jitterSamples[i] - mean
+        varianceSum = varianceSum + diff * diff
+    end
+    local stdDev = math.sqrt(varianceSum / (jitterSampleCount - 1))
+
+    local tickInterval = globals.TickInterval()
+    assert(tickInterval > 0, "UpdateJitterTracker: invalid TickInterval")
+
+    local jitterTicks = math.ceil(stdDev / tickInterval)
+    if jitterTicks < 1 then jitterTicks = 1 end
+    cachedJitterTicks = jitterTicks
+end
+
+local function GetJitterOffsetTicks()
+    return cachedJitterTicks
+end
+
 -- Variables to track attack and charge state
 local attackStarted = false
 local attackTickCount = 0
 local lastChargeTime = 0
 local chargeAimAngles = nil
 local chargeState = "idle"
+local chargeJumpPendingTick = nil
 
 -- Track the tick index of the last +attack press (user or script)
 local lastAttackTick = -1000 -- initialize far in the past
@@ -1786,8 +1854,10 @@ end
 ---@param d      number?       -- strafe deviation angle per tick (degrees, optional)
 ---@param simulateCharge boolean? -- simulate shield charge starting now
 ---@param fixedAngles EulerAngles? -- view-angle override for charge direction
+---@param pCmd UserCmd?
+---@param suppressChargeInSim boolean? -- suppress charge speed/air cap in simulation (local player charging but not exploiting)
 ---@return { pos : Vector3[], vel: Vector3[], onGround: boolean[] }?
-local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd)
+local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd, suppressChargeInSim)
     assert(player, "PredictPlayer: player is nil")
     assert(t and t > 0, "PredictPlayer: invalid tick count")
 
@@ -1846,7 +1916,19 @@ local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd)
         end
     end
 
-    -- Local player on ground: clamp horizontal speed to maxspeed.
+    -- Local player charge simulation override:
+    -- When charging but NOT doing exploit, simulate as walking speed with forward-only wishdir.
+    -- This prevents the sim from using charge speed (750) which would over-predict movement.
+    if isLocal and suppressChargeInSim then
+        local classIndex = player:GetPropInt("m_iClass") or 4
+        local walkSpeed = TF2_CLASS_SPEED[classIndex] or 280
+        playerCtx.maxspeed = walkSpeed
+        playerCtx.suppressCharge = true
+        playerCtx.relativeWishDir = Vector3(1, 0, 0)
+        playerCtx.yawDeltaPerTick = 0
+    end
+
+    -- Local player: clamp horizontal speed to maxspeed.
     -- Swing cancels charge instantly, so prediction must assume walking speed.
     if isLocal then
         local v = playerCtx.velocity
@@ -2359,26 +2441,31 @@ local function checkInRangeSimple(playerIndex, swingRange, pWeapon, cmd)
     local inRange = false
     local point = nil
 
-    -- Simple range check with current positions
-    inRange, point = checkInRange(vPlayerOrigin, pLocalOrigin, swingRange)
-    if inRange then
-        return inRange, point, false
-    end
-
-    -- If instant attack (warp) is ready, skip future prediction checks.
+    -- If instant attack (warp) is ready, use current positions only (time is frozen).
     local instantAttackReady = Menu.Misc.InstantAttack and warp.CanWarp() and
         warp.GetChargedTicks() >= Menu.Aimbot.SwingTime
     if instantAttackReady then
+        inRange, point = checkInRange(vPlayerOrigin, pLocalOrigin, swingRange)
+        if inRange then
+            return inRange, point, false
+        end
         return false, nil, false
     end
 
-    -- Simple range check with predicted positions
+    -- Prefer predicted positions: swing lands after SwingTime ticks,
+    -- so predicted range is what matters to avoid premature swings.
     inRange, point = checkInRange(vPlayerFuture, pLocalFuture, swingRange)
     if inRange then
-        return inRange, point, false
+        return inRange, point, false, true
     end
 
-    return false, nil, false
+    -- Fallback: current positions (stationary targets, edge cases)
+    inRange, point = checkInRange(vPlayerOrigin, pLocalOrigin, swingRange)
+    if inRange then
+        return inRange, point, false, false
+    end
+
+    return false, nil, false, false
 end
 
 -- Store the original Crit Hack Key value outside the main loop or function
@@ -2396,10 +2483,14 @@ local function IsChargeBotActiveByMode()
 
     local chargeKeybind = Menu.Charge.ChargeBotKeybind or KEY_NONE
     if chargeKeybind == KEY_NONE then
-        return false
+        return chargeActivationMode == 3
     end
 
-    return input.IsButtonDown(chargeKeybind)
+    local keyHeld = input.IsButtonDown(chargeKeybind)
+    if chargeActivationMode == 2 then
+        return keyHeld
+    end
+    return not keyHeld
 end
 
 --[[ Code needed to run 66 times a second ]] --
@@ -2436,6 +2527,9 @@ local function OnCreateMove(pCmd)
         cleanupStaleCacheEntries()
     end
 
+    -- Update jitter tracker each tick
+    UpdateJitterTracker()
+
     -- Reset state flags
     isMelee = false
     can_attack = false
@@ -2469,10 +2563,15 @@ local function OnCreateMove(pCmd)
     end
 
     -- ===== Charge Reach State Machine (Demoman only) =====
+    local chargeBotActiveNow = Menu.Charge.ChargeBot == true and IsChargeBotActiveByMode()
     if chargeReachEnabled and pLocalClass == 4 and hasChargeShield then
         if chargeState == "aim" then
             if chargeAimAngles then
-                engine.SetViewAngles(EulerAngles(chargeAimAngles.pitch, chargeAimAngles.yaw, 0))
+                if chargeBotActiveNow then
+                    engine.SetViewAngles(EulerAngles(chargeAimAngles.pitch, chargeAimAngles.yaw, 0))
+                else
+                    pCmd:SetViewAngles(chargeAimAngles.pitch, chargeAimAngles.yaw, 0)
+                end
             end
             chargeState = "charge" -- next tick will trigger charge
         elseif chargeState == "charge" then
@@ -2662,7 +2761,9 @@ local function OnCreateMove(pCmd)
     menuWasOpen = menuIsOpen
 
     -- Only proceed with crit refill logic when menu is closed
-    if not menuIsOpen and pWeapon then
+    local serverAllowsCrits = (client.GetConVar("tf_weapon_criticals") or 0) ~= 0
+        and (client.GetConVar("tf_weapon_criticals_melee") or 0) ~= 0
+    if not menuIsOpen and pWeapon and serverAllowsCrits then
         local CritValue = 39 -- Base value for crit token bucket calculation
         local CritBucket = pWeapon:GetCritTokenBucket()
         local NumCrits = CritValue * Menu.Misc.CritRefill.NumCrits
@@ -2698,6 +2799,12 @@ local function OnCreateMove(pCmd)
                 critRefillActive = false
             end
         end
+    else
+        if critRefillActive then
+            gui.SetValue("Crit Hack Key", originalCritHackKey)
+            gui.SetValue("Melee Crit Hack", Menu.Misc.CritMode)
+            critRefillActive = false
+        end
     end
 
     local Target_ONGround
@@ -2707,10 +2814,16 @@ local function OnCreateMove(pCmd)
     local OnGround = (flags & FL_ONGROUND) ~= 0
 
     --[[--------------Modular Charge-Jump (manual) -------------------]]
-    if Menu.Charge.ChargeJump == true and pLocalClass == 4 then
+    if Menu.Charge.ChargeJump == true and pLocalClass == 4 and hasChargeShield then
         if (pCmd:GetButtons() & IN_ATTACK2) ~= 0 and chargeLeft == 100 and OnGround then
-            -- Add jump along with existing charge command
+            local jumpJitterDelay = GetJitterOffsetTicks()
+            pCmd:SetButtons(pCmd:GetButtons() & ~IN_ATTACK2)
             pCmd:SetButtons(pCmd:GetButtons() | IN_JUMP)
+            chargeJumpPendingTick = globals.TickCount() + jumpJitterDelay
+        end
+        if chargeJumpPendingTick and globals.TickCount() >= chargeJumpPendingTick then
+            pCmd:SetButtons(pCmd:GetButtons() | IN_ATTACK2)
+            chargeJumpPendingTick = nil
         end
     end
 
@@ -2747,9 +2860,14 @@ local function OnCreateMove(pCmd)
             simTicks = Menu.Aimbot.SwingTime
         end
 
-        -- Never simulate charge boost for local player: swing cancels charge instantly.
-        -- Current velocity already reflects active charge speed; friction handles deceleration.
-        local predData = PredictPlayer(player, simTicks, strafeAngle, false, nil, pCmd)
+        -- When charging but NOT doing exploit: suppress charge speed in sim.
+        -- Swing cancels charge instantly, so predict at walking speed.
+        -- During exploit execution (swinging during charge): allow full charge speed.
+        local localCharging = pLocal:InCond(17)
+        local localExploitActive = localCharging and Menu.Charge.ChargeReach == true
+            and (globals.TickCount() - lastAttackTick) <= 13 and hasChargeShield
+        local suppressCharge = localCharging and not localExploitActive
+        local predData = PredictPlayer(player, simTicks, strafeAngle, false, nil, pCmd, suppressCharge)
         if not predData then return end
 
         pLocalPath = predData.pos
@@ -2836,17 +2954,28 @@ local function OnCreateMove(pCmd)
     local inRangePoint = Vector3(0, 0, 0)
 
     -- Use TotalSwingRange for range checking (already calculated with charge reach logic)
-    inRange, inRangePoint, can_charge = checkInRangeSimple(CurrentTarget:GetIndex(), TotalSwingRange, pWeapon, pCmd)
+    local hitFromPredicted
+    inRange, inRangePoint, can_charge, hitFromPredicted = checkInRangeSimple(CurrentTarget:GetIndex(), TotalSwingRange, pWeapon, pCmd)
     -- Use inRange to decide if can attack
     can_attack = inRange
+
+    -- Always aim at current position, even when range check used predicted positions.
+    -- Recompute aim point from current positions so we aim where the target IS now.
+    local currentAimPoint = inRangePoint
+    if inRange and hitFromPredicted then
+        local _, curPoint = checkInRange(vPlayerOrigin, pLocalOrigin, TotalSwingRange)
+        if curPoint then
+            currentAimPoint = curPoint
+        end
+    end
 
     --[--------------AimBot-------------------]
     local aimpos = CurrentTarget:GetAbsOrigin() + Vheight
 
     if Menu.Aimbot.Aimbot == true then
         local aim_angles
-        if inRangePoint then
-            aimpos = inRangePoint
+        if currentAimPoint then
+            aimpos = currentAimPoint
             aimposVis = aimpos
             aim_angles = Math.PositionAngles(pLocalOrigin, aimpos)
         end
@@ -3027,22 +3156,21 @@ local function OnCreateMove(pCmd)
                     weaponSmackDelay = math.floor(pWeapon:GetWeaponData().smackDelay / globals.TickInterval())
                 end
 
-                -- If charge-jump enabled issue jump together with charge
+                -- If charge-jump enabled issue jump with jitter delay before charge
                 if Menu.Charge.ChargeJump == true and OnGround then
                     pCmd:SetButtons(pCmd:GetButtons() | IN_JUMP)
                 end
 
-                -- Determine when to trigger charge based on LateCharge setting
-                local chargeDelay = Menu.Charge.ChargeDelay or 4
+                -- Determine when to trigger charge based on LateCharge + jitter
+                local jitterOffset = GetJitterOffsetTicks()
                 local chargeTriggerTick
                 if Menu.Charge.LateCharge == true then
-                    -- Late charge: offset from END of swing (charge near the hit)
-                    chargeTriggerTick = weaponSmackDelay - chargeDelay
+                    -- Late charge: as late as possible (near the hit), offset by jitter from end
+                    chargeTriggerTick = weaponSmackDelay - jitterOffset
                 else
-                    -- Early charge: offset from START of swing (server registers attack first)
-                    chargeTriggerTick = chargeDelay
+                    -- Early charge: as soon as possible, jitter floor from start
+                    chargeTriggerTick = jitterOffset
                 end
-                -- Ensure trigger tick is at least 1 to avoid same-tick charge+attack
                 if chargeTriggerTick < 1 then
                     chargeTriggerTick = 1
                 end
@@ -3349,7 +3477,7 @@ local function doDraw()
                     Menu.Charge.ChargeBotActivationModes)
                 ImMenu.EndFrame()
 
-                if Menu.Charge.ChargeBotActivationMode == 2 then
+                if Menu.Charge.ChargeBotActivationMode >= 2 then
                     ImMenu.BeginFrame(1)
                     ImMenu.Text("Charge Bot Keybind: ")
                     Menu.Charge.ChargeBotKeybind, Menu.Charge.ChargeBotKeybindName = handleKeybind("No Key",
@@ -3366,7 +3494,8 @@ local function doDraw()
             Menu.Charge.ChargeReach = ImMenu.Checkbox("Charge Reach", Menu.Charge.ChargeReach)
             if Menu.Charge.ChargeReach == true then
                 Menu.Charge.LateCharge = ImMenu.Checkbox("Late Charge", Menu.Charge.LateCharge)
-                Menu.Charge.ChargeDelay = ImMenu.Slider("Charge Delay", Menu.Charge.ChargeDelay, 1, 10)
+                local jitterDisplay = string.format("Jitter Offset: %d tick(s)", GetJitterOffsetTicks())
+                ImMenu.Text(jitterDisplay)
             end
             ImMenu.EndFrame()
 
