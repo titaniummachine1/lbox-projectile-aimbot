@@ -2388,6 +2388,20 @@ local menuWasOpen = false
 local critRefillActive = false
 local dashKeyNotBoundNotified = true
 
+local function IsChargeBotActiveByMode()
+    local chargeActivationMode = Menu.Charge.ChargeBotActivationMode or 1
+    if chargeActivationMode == 1 then
+        return true
+    end
+
+    local chargeKeybind = Menu.Charge.ChargeBotKeybind or KEY_NONE
+    if chargeKeybind == KEY_NONE then
+        return false
+    end
+
+    return input.IsButtonDown(chargeKeybind)
+end
+
 --[[ Code needed to run 66 times a second ]] --
 -- Predicts player position after set amount of ticks
 ---@param strafeAngle number
@@ -3211,20 +3225,6 @@ end)();
 
 local bindTimer = 0
 local bindDelay = 0.25 -- Delay of 0.25 seconds
-
-local function IsChargeBotActiveByMode()
-    local chargeActivationMode = Menu.Charge.ChargeBotActivationMode or 1
-    if chargeActivationMode == 1 then
-        return true
-    end
-
-    local chargeKeybind = Menu.Charge.ChargeBotKeybind or KEY_NONE
-    if chargeKeybind == KEY_NONE then
-        return false
-    end
-
-    return input.IsButtonDown(chargeKeybind)
-end
 
 local function handleKeybind(noKeyText, keybind, keybindName)
     if keybindName ~= "Press The Key" and ImMenu.Button(keybindName or noKeyText) then
