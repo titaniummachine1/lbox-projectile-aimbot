@@ -480,6 +480,82 @@ for i = 1, PlayerTick.MAX_CLIP_PLANES do
     moveClipPlanes[i] = Vector3()
 end
 
+local movementConVarTick = -1
+local movementConVarCache = nil
+local airSnapshotCacheTick = -1
+local airSnapshotCacheByEntityIndex = {}
+
+local function GetMovementConVarsForTick()
+    local currentTick = globals.TickCount()
+    if movementConVarCache and movementConVarTick == currentTick then
+        return movementConVarCache
+    end
+
+    local _, tfGrappleMoveSpeed = client.GetConVar("tf_grapplinghook_move_speed")
+    local _, tfMaxChargeSpeed = client.GetConVar("tf_max_charge_speed")
+    local _, tfParachuteAircontrol = client.GetConVar("tf_parachute_aircontrol")
+    local _, tfKartDashSpeed = client.GetConVar("tf_halloween_kart_dash_speed")
+    local _, tfKartAircontrol = client.GetConVar("tf_hallowen_kart_aircontrol")
+
+    movementConVarCache = {
+        tf_grapplinghook_move_speed = tfGrappleMoveSpeed,
+        tf_max_charge_speed = tfMaxChargeSpeed,
+        tf_parachute_aircontrol = tfParachuteAircontrol,
+        tf_halloween_kart_dash_speed = tfKartDashSpeed,
+        tf_hallowen_kart_aircontrol = tfKartAircontrol,
+    }
+    movementConVarTick = currentTick
+
+    return movementConVarCache
+end
+
+local function BuildAirMovementSnapshot(entity)
+    assert(entity, "BuildAirMovementSnapshot: entity is nil")
+
+    local carryingRuneType = nil
+    if entity.GetCarryingRuneType and type(entity.GetCarryingRuneType) == "function" then
+        carryingRuneType = entity:GetCarryingRuneType()
+    end
+
+    local airControlScale = entity:AttributeHookFloat("mod_air_control")
+    if not airControlScale then
+        airControlScale = 1.0
+    end
+
+    return {
+        hasHookTarget = entity:GetPropEntity("m_hGrapplingHookTarget") ~= nil,
+        carryingRuneType = carryingRuneType,
+        classIndex = entity:GetPropInt("m_iClass"),
+        isCharging = entity:InCond(E_TFCOND.TFCond_Charging),
+        isParachute = entity:InCond(E_TFCOND.TFCond_ParachuteDeployed),
+        isKart = entity:InCond(E_TFCOND.TFCond_HalloweenKart),
+        isKartDash = entity:InCond(E_TFCOND.TFCond_HalloweenKartDash),
+        airControlScale = airControlScale,
+    }
+end
+
+local function GetAirMovementSnapshotForTick(entity)
+    assert(entity, "GetAirMovementSnapshotForTick: entity is nil")
+
+    local currentTick = globals.TickCount()
+    if airSnapshotCacheTick ~= currentTick then
+        airSnapshotCacheTick = currentTick
+        airSnapshotCacheByEntityIndex = {}
+    end
+
+    local entityIndex = entity:GetIndex()
+    assert(entityIndex, "GetAirMovementSnapshotForTick: missing entity index")
+
+    local cachedSnapshot = airSnapshotCacheByEntityIndex[entityIndex]
+    if cachedSnapshot then
+        return cachedSnapshot
+    end
+
+    local freshSnapshot = BuildAirMovementSnapshot(entity)
+    airSnapshotCacheByEntityIndex[entityIndex] = freshSnapshot
+    return freshSnapshot
+end
+
 -- Note: Length2D is defined in global helpers section
 
 function PlayerTick.rotateDirByAngle(dir, angleDeg)
@@ -571,7 +647,7 @@ end
 function PlayerTick.accelerate(velocity, wishdir, wishspeed, accel, frametime, surface_friction)
     surface_friction = surface_friction or 1.0
 
-    local currentspeed = velocity:Length()
+    local currentspeed = velocity:Dot(wishdir)
     local addspeed = wishspeed - currentspeed
 
     if addspeed <= 0 then
@@ -585,55 +661,55 @@ function PlayerTick.accelerate(velocity, wishdir, wishspeed, accel, frametime, s
     velocity.z = velocity.z + wishdir.z * accelspeed
 end
 
-function PlayerTick.getAirSpeedCap(target, suppressCharge)
-    if not target then
+function PlayerTick.getAirSpeedCap(airSnapshot, suppressCharge, movementConVars)
+    if not airSnapshot then
         return 30.0
     end
+    assert(movementConVars, "PlayerTick.getAirSpeedCap: movementConVars missing")
 
-    local hookTarget = target:GetPropEntity("m_hGrapplingHookTarget")
-    if hookTarget then
-        if target.GetCarryingRuneType and target:GetCarryingRuneType() == RuneTypes_t.RUNE_AGILITY then
-            local classIndex = target:GetPropInt("m_iClass")
+    if airSnapshot.hasHookTarget then
+        if airSnapshot.carryingRuneType == RuneTypes_t.RUNE_AGILITY then
+            local classIndex = airSnapshot.classIndex
             if classIndex == E_Character.TF2_Soldier or classIndex == E_Character.TF2_Heavy then
                 return 850
             end
             return 950
         end
-        local _, grappleMoveSpeed = client.GetConVar("tf_grapplinghook_move_speed")
+        local grappleMoveSpeed = movementConVars.tf_grapplinghook_move_speed
         return grappleMoveSpeed or 30.0
     end
 
-    if not suppressCharge and target:InCond(E_TFCOND.TFCond_Charging) then
-        local _, tf_max_charge_speed = client.GetConVar("tf_max_charge_speed")
+    if not suppressCharge and airSnapshot.isCharging then
+        local tf_max_charge_speed = movementConVars.tf_max_charge_speed
         return tf_max_charge_speed or 750
     end
 
     local flCap = 30.0
-    if target:InCond(E_TFCOND.TFCond_ParachuteDeployed) then
-        local _, parachuteAirControl = client.GetConVar("tf_parachute_aircontrol")
+    if airSnapshot.isParachute then
+        local parachuteAirControl = movementConVars.tf_parachute_aircontrol
         flCap = flCap * (parachuteAirControl or 1.0)
     end
 
-    if target:InCond(E_TFCOND.TFCond_HalloweenKart) then
-        if target:InCond(E_TFCOND.TFCond_HalloweenKartDash) then
-            local _, kartDashSpeed = client.GetConVar("tf_halloween_kart_dash_speed")
+    if airSnapshot.isKart then
+        if airSnapshot.isKartDash then
+            local kartDashSpeed = movementConVars.tf_halloween_kart_dash_speed
             return kartDashSpeed or flCap
         end
-        local _, kartAirControl = client.GetConVar("tf_hallowen_kart_aircontrol")
+        local kartAirControl = movementConVars.tf_hallowen_kart_aircontrol
         flCap = flCap * (kartAirControl or 1.0)
     end
 
-    local airControlScale = target:AttributeHookFloat("mod_air_control")
+    local airControlScale = airSnapshot.airControlScale
     if not airControlScale then
         return flCap
     end
     return flCap * airControlScale
 end
 
-function PlayerTick.airAccelerate(v, wishdir, wishspeed, accel, dt, surf, target, suppressCharge)
-    wishspeed = math.min(wishspeed, PlayerTick.getAirSpeedCap(target, suppressCharge))
+function PlayerTick.airAccelerate(v, wishdir, wishspeed, accel, dt, surf, airSpeedCap)
+    wishspeed = math.min(wishspeed, airSpeedCap or 30.0)
 
-    local currentspeed = v:Length()
+    local currentspeed = v:Dot(wishdir)
     local addspeed = wishspeed - currentspeed
     if addspeed <= 0 then
         return
@@ -756,50 +832,40 @@ function PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinter
 end
 
 function PlayerTick.stepMove(origin, velocity, mins, maxs, index, tickinterval, stepheight)
-    local originalX, originalY, originalZ = origin.x, origin.y, origin.z
-    local originalVx, originalVy, originalVz = velocity.x, velocity.y, velocity.z
+    local originalPos = Vector3(origin.x, origin.y, origin.z)
+    local originalVel = Vector3(velocity.x, velocity.y, velocity.z)
 
     PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval, 1.0)
 
-    local downDistance = (origin.x - originalX) + (origin.y - originalY)
+    local downPos = Vector3(origin.x, origin.y, origin.z)
+    local downVel = Vector3(velocity.x, velocity.y, velocity.z)
 
-    if downDistance > 5.0 or (originalVx * originalVx + originalVy * originalVy) < 1.0 then
-        return origin
-    end
-
-    origin.x = originalX
-    origin.y = originalY
-    origin.z = originalZ
-    velocity.x = originalVx
-    velocity.y = originalVy
-    velocity.z = originalVz
+    origin.x = originalPos.x
+    origin.y = originalPos.y
+    origin.z = originalPos.z
+    velocity.x = originalVel.x
+    velocity.y = originalVel.y
+    velocity.z = originalVel.z
 
     moveTemp1.x = origin.x
     moveTemp1.y = origin.y
     moveTemp1.z = origin.z + stepheight + PlayerTick.DIST_EPSILON
-
     currentTraceIndex = index
     local upTrace = engine.TraceHull(origin, moveTemp1, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
-
-    if not upTrace.startsolid and not upTrace.allsolid then
-        origin.x = upTrace.endpos.x
-        origin.y = upTrace.endpos.y
-        origin.z = upTrace.endpos.z
-    end
-
-    local upOriginalX, upOriginalY, upOriginalZ = origin.x, origin.y, origin.z
-    PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval, 1.0)
-
-    local upDistance = (origin.x - upOriginalX) + (origin.y - upOriginalY)
-    if upDistance <= downDistance then
-        origin.x = originalX + (origin.x - originalX)
-        origin.y = originalY + (origin.y - originalY)
-        origin.z = originalZ
-        velocity.x = originalVx
-        velocity.y = originalVy
-        velocity.z = originalVz
+    if upTrace.startsolid or upTrace.allsolid then
+        origin.x = downPos.x
+        origin.y = downPos.y
+        origin.z = downPos.z
+        velocity.x = downVel.x
+        velocity.y = downVel.y
+        velocity.z = downVel.z
         return origin
     end
+
+    origin.x = upTrace.endpos.x
+    origin.y = upTrace.endpos.y
+    origin.z = upTrace.endpos.z
+    PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval, 1.0)
 
     moveTemp1.x = origin.x
     moveTemp1.y = origin.y
@@ -807,10 +873,36 @@ function PlayerTick.stepMove(origin, velocity, mins, maxs, index, tickinterval, 
     currentTraceIndex = index
     local downTrace = engine.TraceHull(origin, moveTemp1, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
 
-    if downTrace.plane and downTrace.plane.z >= PlayerTick.IMPACT_NORMAL_FLOOR and not downTrace.startsolid and not downTrace.allsolid then
+    if downTrace.plane and downTrace.plane.z < PlayerTick.IMPACT_NORMAL_FLOOR then
+        origin.x = downPos.x
+        origin.y = downPos.y
+        origin.z = downPos.z
+        velocity.x = downVel.x
+        velocity.y = downVel.y
+        velocity.z = downVel.z
+        return origin
+    end
+
+    if not downTrace.startsolid and not downTrace.allsolid then
         origin.x = downTrace.endpos.x
         origin.y = downTrace.endpos.y
         origin.z = downTrace.endpos.z
+    end
+
+    local downDist = (downPos.x - originalPos.x) * (downPos.x - originalPos.x)
+        + (downPos.y - originalPos.y) * (downPos.y - originalPos.y)
+    local upDist = (origin.x - originalPos.x) * (origin.x - originalPos.x)
+        + (origin.y - originalPos.y) * (origin.y - originalPos.y)
+
+    if downDist > upDist then
+        origin.x = downPos.x
+        origin.y = downPos.y
+        origin.z = downPos.z
+        velocity.x = downVel.x
+        velocity.y = downVel.y
+        velocity.z = downVel.z
+    else
+        velocity.z = downVel.z
     end
 
     return origin
@@ -926,6 +1018,12 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
                 surface_friction
             )
         elseif playerCtx.velocity.z < 0 then
+            local movementConVars = GetMovementConVarsForTick()
+            local airSpeedCap = PlayerTick.getAirSpeedCap(
+                playerCtx.airMovementSnapshot,
+                playerCtx.suppressCharge,
+                movementConVars
+            )
             PlayerTick.airAccelerate(
                 playerCtx.velocity,
                 wishdir,
@@ -933,19 +1031,17 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
                 simCtx.sv_airaccelerate,
                 tickinterval,
                 surface_friction,
-                playerCtx.entity,
-                playerCtx.suppressCharge
+                airSpeedCap
             )
         end
     end
 
-    if is_on_ground then
-        local velLength = playerCtx.velocity:Length()
-        if velLength > effectiveMaxspeed and effectiveMaxspeed > 0 then
-            local scale = effectiveMaxspeed / velLength
+    if is_on_ground and effectiveMaxspeed > 0 then
+        local horizontalSpeed = Length2D(playerCtx.velocity)
+        if horizontalSpeed > effectiveMaxspeed then
+            local scale = effectiveMaxspeed / horizontalSpeed
             playerCtx.velocity.x = playerCtx.velocity.x * scale
             playerCtx.velocity.y = playerCtx.velocity.y * scale
-            playerCtx.velocity.z = playerCtx.velocity.z * scale
         end
     end
 
@@ -1054,6 +1150,7 @@ local function clonePlayerContext(src)
         viewYaw = src.viewYaw,
         wasOnGround = src.wasOnGround,
         isDucked = src.isDucked,
+        airMovementSnapshot = src.airMovementSnapshot,
     }
 
     assert(src.origin, "clonePlayerContext: origin missing")
@@ -1179,6 +1276,7 @@ local function createPlayerContext(entity, relativeWishDir)
 
     -- Ducking state via netvar
     local isDucked = entity:GetPropBool("m_bDucked") or false
+    local airMovementSnapshot = GetAirMovementSnapshotForTick(entity)
 
     return {
         entity = entity,
@@ -1194,6 +1292,7 @@ local function createPlayerContext(entity, relativeWishDir)
         yawDeltaPerTick = yawDeltaPerTick,
         relativeWishDir = relativeWishDir, -- Already a Vector3, no need to clone
         isDucked = isDucked,
+        airMovementSnapshot = airMovementSnapshot,
     }
 end
 
@@ -1594,6 +1693,25 @@ local function resetAttackTracking()
     attackTickCount = 0
 end
 
+local function GetActiveSwingWindowTicks(weapon)
+    local swingWindowTicks = Menu.Aimbot.SwingTime or 1
+    if weapon and weapon.GetWeaponData and weapon:GetWeaponData() and weapon:GetWeaponData().smackDelay then
+        local tickInterval = globals.TickInterval()
+        if tickInterval > 0 then
+            swingWindowTicks = math.floor(weapon:GetWeaponData().smackDelay / tickInterval)
+        end
+    end
+    if swingWindowTicks < 1 then
+        swingWindowTicks = 1
+    end
+    return swingWindowTicks
+end
+
+local function IsWithinActiveSwingWindow(weapon)
+    local ticksSinceAttack = globals.TickCount() - lastAttackTick
+    return ticksSinceAttack >= 0 and ticksSinceAttack <= GetActiveSwingWindowTicks(weapon)
+end
+
 
 
 
@@ -1972,8 +2090,6 @@ local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd, su
         local walkSpeed = TF2_CLASS_SPEED[classIndex] or 280
         playerCtx.maxspeed = walkSpeed
         playerCtx.suppressCharge = true
-        playerCtx.relativeWishDir = Vector3(1, 0, 0)
-        playerCtx.yawDeltaPerTick = 0
     end
 
     -- Local player: clamp horizontal speed to maxspeed.
@@ -2949,8 +3065,7 @@ local function OnCreateMove(pCmd)
         -- Swing cancels charge instantly, so predict at walking speed.
         -- During exploit execution (swinging during charge): allow full charge speed.
         local localCharging = pLocal:InCond(17)
-        local localExploitActive = localCharging and Menu.Charge.ChargeReach == true
-            and (globals.TickCount() - lastAttackTick) <= 13 and hasChargeShield
+        local localExploitActive = localCharging and IsWithinActiveSwingWindow(pWeapon)
         local suppressCharge = localCharging and not localExploitActive
         local predData = PredictPlayer(player, simTicks, strafeAngle, false, nil, pCmd, suppressCharge)
         if not predData then
