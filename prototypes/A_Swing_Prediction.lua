@@ -2699,10 +2699,7 @@ local originalCritHackKey = 0
 local originalMeleeCritHack = 0
 local menuWasOpen = false
 local critRefillActive = false
-local lastCritBucketValue = -1
-local critBucketStallCount = 0
 local CRIT_REFILL_PROXIMITY_MULTIPLIER = 4
-local CRIT_BUCKET_MAX_STALL_TICKS = 132
 local dashKeyNotBoundNotified = true
 
 local function AnyEnemyWithinRange(localPlayer, range)
@@ -3045,33 +3042,15 @@ local function OnCreateMove(pCmd)
                 gui.SetValue("Crit Hack Key", 0)
                 gui.SetValue("Melee Crit Hack", 2)
                 critRefillActive = true
-                lastCritBucketValue = CritBucket
-                critBucketStallCount = 0
             end
 
-            if CritBucket > lastCritBucketValue then
-                lastCritBucketValue = CritBucket
-                critBucketStallCount = 0
-            else
-                critBucketStallCount = critBucketStallCount + 1
-            end
-
-            if critBucketStallCount >= CRIT_BUCKET_MAX_STALL_TICKS then
-                gui.SetValue("Crit Hack Key", originalCritHackKey)
-                gui.SetValue("Melee Crit Hack", Menu.Misc.CritMode)
-                critRefillActive = false
-                lastCritBucketValue = -1
-                critBucketStallCount = 0
-            else
-                pCmd:SetButtons(pCmd:GetButtons() | IN_ATTACK)
-            end
+            -- Always attack to build crits while refilling
+            pCmd:SetButtons(pCmd:GetButtons() | IN_ATTACK)
         else
             if critRefillActive then
                 gui.SetValue("Crit Hack Key", originalCritHackKey)
                 gui.SetValue("Melee Crit Hack", Menu.Misc.CritMode)
                 critRefillActive = false
-                lastCritBucketValue = -1
-                critBucketStallCount = 0
             end
         end
     else
@@ -3079,8 +3058,6 @@ local function OnCreateMove(pCmd)
             gui.SetValue("Crit Hack Key", originalCritHackKey)
             gui.SetValue("Melee Crit Hack", Menu.Misc.CritMode)
             critRefillActive = false
-            lastCritBucketValue = -1
-            critBucketStallCount = 0
         end
     end
 
@@ -3216,7 +3193,7 @@ local function OnCreateMove(pCmd)
 
         local predData
         if targetDistance <= complexSimDistance then
-            predData = PredictPlayer(player, simTicks, strafeAngle, false, nil)
+            predData = PredictPlayer(player, simTicks, strafeAngle, false, nil, pCmd, false)
         else
             -- Far target: keep history updated, but skip expensive collision simulation.
             StrafePredictor.updateAll({ CurrentTarget })
