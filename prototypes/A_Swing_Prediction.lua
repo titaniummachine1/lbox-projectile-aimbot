@@ -52,32 +52,32 @@ local vectorDistance = vector.Distance
 
 --- Normalize vector (fastest method)
 local function Normalize(vec)
-	return vectorDivide(vec, vectorLength(vec))
+    return vectorDivide(vec, vectorLength(vec))
 end
 
 --- Distance 2D using vector Length2D
 local function Distance2D(a, b)
-	return (a - b):Length2D()
+    return (a - b):Length2D()
 end
 
 --- Distance 3D (fastest possible in Lua)
 local function Distance3D(a, b)
-	return vectorDistance(a, b)
+    return vectorDistance(a, b)
 end
 
 --- Cross product of two vectors
 local function Cross(a, b)
-	return a:Cross(b)
+    return a:Cross(b)
 end
 
 --- Dot product of two vectors
 local function Dot(a, b)
-	return a:Dot(b)
+    return a:Dot(b)
 end
 
 --- 2D vector length (horizontal only)
 local function Length2D(vec)
-	return vec:Length2D()
+    return vec:Length2D()
 end
 
 -- ============================================================================
@@ -105,68 +105,68 @@ function StrafePredictor.recordVelocity(entityIndex, velocity, maxSamples)
 end
 
 function StrafePredictor.calculateAverageYawChange(entityIndex, minSamples)
-        local history = StrafePredictor.velocityHistory[entityIndex]
-        if not history or #history < (minSamples or 3) then
+    local history = StrafePredictor.velocityHistory[entityIndex]
+    if not history or #history < (minSamples or 3) then
+        return nil
+    end
+
+    local maxDeltaPerTickRad = math.rad(45)
+    local minSpeedForSample = 25
+
+    local deltas = {}
+    local deltaCount = 0
+
+    for i = 1, #history - 1 do
+        local vel1 = history[i]
+        local vel2 = history[i + 1]
+
+        if vel1:Length2D() >= minSpeedForSample and vel2:Length2D() >= minSpeedForSample then
+            local yaw1 = math.atan(vel1.y, vel1.x)
+            local yaw2 = math.atan(vel2.y, vel2.x)
+
+            local diff = yaw1 - yaw2
+            while diff > math.pi do
+                diff = diff - 2 * math.pi
+            end
+            while diff < -math.pi do
+                diff = diff + 2 * math.pi
+            end
+
+            if math.abs(diff) <= maxDeltaPerTickRad then
+                deltaCount = deltaCount + 1
+                deltas[deltaCount] = diff
+            end
+        end
+    end
+
+    if deltaCount < (minSamples or 3) then
+        return nil
+    end
+
+    -- Reject if deltas flip sign (left/right dodging, not consistent strafing)
+    local posCount = 0
+    local negCount = 0
+    local totalYawChange = 0
+    for i = 1, deltaCount do
+        local d = deltas[i]
+        totalYawChange = totalYawChange + d
+        if d > 0.01 then
+            posCount = posCount + 1
+        elseif d < -0.01 then
+            negCount = negCount + 1
+        end
+    end
+
+    -- If both positive and negative deltas exist, direction is inconsistent
+    local signedSamples = posCount + negCount
+    if signedSamples > 0 then
+        local dominantRatio = math.max(posCount, negCount) / signedSamples
+        if dominantRatio < 0.6 then
             return nil
         end
+    end
 
-        local maxDeltaPerTickRad = math.rad(45)
-        local minSpeedForSample = 25
-
-        local deltas = {}
-        local deltaCount = 0
-
-        for i = 1, #history - 1 do
-            local vel1 = history[i]
-            local vel2 = history[i + 1]
-
-            if vel1:Length2D() >= minSpeedForSample and vel2:Length2D() >= minSpeedForSample then
-                local yaw1 = math.atan(vel1.y, vel1.x)
-                local yaw2 = math.atan(vel2.y, vel2.x)
-
-                local diff = yaw1 - yaw2
-                while diff > math.pi do
-                    diff = diff - 2 * math.pi
-                end
-                while diff < -math.pi do
-                    diff = diff + 2 * math.pi
-                end
-
-                if math.abs(diff) <= maxDeltaPerTickRad then
-                    deltaCount = deltaCount + 1
-                    deltas[deltaCount] = diff
-                end
-            end
-        end
-
-        if deltaCount < (minSamples or 3) then
-            return nil
-        end
-
-        -- Reject if deltas flip sign (left/right dodging, not consistent strafing)
-        local posCount = 0
-        local negCount = 0
-        local totalYawChange = 0
-        for i = 1, deltaCount do
-            local d = deltas[i]
-            totalYawChange = totalYawChange + d
-            if d > 0.01 then
-                posCount = posCount + 1
-            elseif d < -0.01 then
-                negCount = negCount + 1
-            end
-        end
-
-        -- If both positive and negative deltas exist, direction is inconsistent
-        local signedSamples = posCount + negCount
-        if signedSamples > 0 then
-            local dominantRatio = math.max(posCount, negCount) / signedSamples
-            if dominantRatio < 0.6 then
-                return nil
-            end
-        end
-
-        return totalYawChange / deltaCount
+    return totalYawChange / deltaCount
 end
 
 function StrafePredictor.getYawDeltaPerTickDegrees(entityIndex, minSamples)
@@ -202,15 +202,15 @@ WishdirTracker.EXPIRY_TICKS = 66
 WishdirTracker.STILL_SPEED_THRESHOLD = 50
 
 WishdirTracker.DIRECTIONS = {
-    { name = "forward", x = 450, y = 0 },
-    { name = "forwardright", x = 450, y = -450 },
-    { name = "right", x = 0, y = -450 },
-    { name = "backright", x = -450, y = -1 },
-    { name = "back", x = -450, y = 0 },
-    { name = "backleft", x = -450, y = 450 },
-    { name = "left", x = 0, y = 450 },
-    { name = "forwardleft", x = 450, y = 450 },
-    { name = "coast", x = 0, y = 0 },
+    { name = "forward",      x = 450,  y = 0 },
+    { name = "forwardright", x = 450,  y = -450 },
+    { name = "right",        x = 0,    y = -450 },
+    { name = "backright",    x = -450, y = -1 },
+    { name = "back",         x = -450, y = 0 },
+    { name = "backleft",     x = -450, y = 450 },
+    { name = "left",         x = 0,    y = 450 },
+    { name = "forwardleft",  x = 450,  y = 450 },
+    { name = "coast",        x = 0,    y = 0 },
 }
 
 function WishdirTracker.normalizeDirection(x, y)
@@ -963,7 +963,8 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
             tickinterval,
             playerCtx.stepheight or 18
         )
-        PlayerTick.stayOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.stepheight or 18, playerCtx.index)
+        PlayerTick.stayOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.stepheight or 18,
+            playerCtx.index)
     else
         playerCtx.origin = PlayerTick.tryPlayerMove(
             playerCtx.origin,
@@ -1178,10 +1179,10 @@ local function clonePlayerContext(src)
     }
 
     assert(src.origin, "clonePlayerContext: origin missing")
-    clone.origin = src.origin  -- No clone needed, gets replaced in simulation
+    clone.origin = src.origin -- No clone needed, gets replaced in simulation
 
     assert(src.velocity, "clonePlayerContext: velocity missing")
-    clone.velocity = Vector3(src.velocity:Unpack())  -- Must clone, gets mutated
+    clone.velocity = Vector3(src.velocity:Unpack()) -- Must clone, gets mutated
 
     -- Assigned, not mutated, no cloning needed
     clone.relativeWishDir = src.relativeWishDir
@@ -1221,7 +1222,7 @@ local function simulateWishdirCandidates(baseCtx, simCtx)
         results[#results + 1] = {
             name = dirSpec.name,
             dir = dirVec,
-            pos = predictedPos,  -- simulateTick already returns Vector3, no need to clone
+            pos = predictedPos, -- simulateTick already returns Vector3, no need to clone
             vel = Vector3(workCtx.velocity:Unpack()),
         }
     end
@@ -1303,8 +1304,8 @@ local function createPlayerContext(entity, relativeWishDir)
 
     return {
         entity = entity,
-        velocity = Vector3(velocity:Unpack()),  -- Clone once for mutation safety
-        origin = originWithOffset,  -- Already a Vector3 from line 937, no need to clone
+        velocity = Vector3(velocity:Unpack()), -- Clone once for mutation safety
+        origin = originWithOffset,             -- Already a Vector3 from line 937, no need to clone
         mins = mins,
         maxs = maxs,
         maxspeed = maxspeed,
@@ -1313,7 +1314,7 @@ local function createPlayerContext(entity, relativeWishDir)
         stepheight = 18,
         yaw = yaw,
         yawDeltaPerTick = yawDeltaPerTick,
-        relativeWishDir = relativeWishDir,  -- Already a Vector3, no need to clone
+        relativeWishDir = relativeWishDir, -- Already a Vector3, no need to clone
         isDucked = isDucked,
     }
 end
@@ -1356,8 +1357,8 @@ local Menu = {
         AimbotFOV = 360,
         SwingTime = 13,
         AlwaysUseMaxSwingTime = false, -- Default to always use max for best experience
-        MaxSwingTime = 11,            -- Starting value, will be updated based on weapon
-        ChargeBot = true,             -- Moved to Charge tab in UI but kept here for backward compatibility
+        MaxSwingTime = 11,             -- Starting value, will be updated based on weapon
+        ChargeBot = true,              -- Moved to Charge tab in UI but kept here for backward compatibility
     },
 
     -- Charge settings (moved from mixed locations to a dedicated section)
@@ -1524,7 +1525,7 @@ local function SafeInitMenu()
     Menu.Aimbot.AimbotFOV = Menu.Aimbot.AimbotFOV or 360
     Menu.Aimbot.SwingTime = Menu.Aimbot.SwingTime or 13
     Menu.Aimbot.AlwaysUseMaxSwingTime = Menu.Aimbot.AlwaysUseMaxSwingTime ~= nil and Menu.Aimbot.AlwaysUseMaxSwingTime or
-    true
+        true
     Menu.Aimbot.MaxSwingTime = Menu.Aimbot.MaxSwingTime or 13
     Menu.Aimbot.ChargeBot = Menu.Aimbot.ChargeBot ~= nil and Menu.Aimbot.ChargeBot or true
 
@@ -1538,7 +1539,8 @@ local function SafeInitMenu()
     Menu.Charge.ChargeBot = Menu.Charge.ChargeBot ~= nil and Menu.Charge.ChargeBot or false
     Menu.Charge.ChargeBotFOV = Menu.Charge.ChargeBotFOV or 360
     Menu.Charge.ChargeBotActivationMode = Menu.Charge.ChargeBotActivationMode or 1
-    Menu.Charge.ChargeBotActivationModes = Menu.Charge.ChargeBotActivationModes or { "Always On", "On Key", "On Release" }
+    Menu.Charge.ChargeBotActivationModes = Menu.Charge.ChargeBotActivationModes or
+        { "Always On", "On Key", "On Release" }
     Menu.Charge.ChargeBotKeybind = Menu.Charge.ChargeBotKeybind or KEY_NONE
     Menu.Charge.ChargeBotKeybindName = Menu.Charge.ChargeBotKeybindName or "Always On"
     Menu.Visuals = Menu.Visuals or {}
@@ -1562,30 +1564,30 @@ local stepSize = 18
 
 -- TF2 class walking speeds indexed by m_iClass
 local TF2_CLASS_SPEED = {
-    [1] = 400,  -- Scout
-    [2] = 240,  -- Sniper
-    [3] = 300,  -- Soldier
-    [4] = 280,  -- Demoman
-    [5] = 320,  -- Medic
-    [6] = 230,  -- Heavy
-    [7] = 300,  -- Pyro
-    [8] = 320,  -- Spy
-    [9] = 300,  -- Engineer
+    [1] = 400, -- Scout
+    [2] = 240, -- Sniper
+    [3] = 300, -- Soldier
+    [4] = 280, -- Demoman
+    [5] = 320, -- Medic
+    [6] = 230, -- Heavy
+    [7] = 300, -- Pyro
+    [8] = 320, -- Spy
+    [9] = 300, -- Engineer
 }
 
 -- TF2 Physics Constants (from Auto Trickstab for enhanced prediction)
 local TF2 = {
     -- Movement & physics
-    MAX_SPEED = 320, -- Base movement speed
-    ACCELERATION = 10, -- Ground acceleration
+    MAX_SPEED = 320,       -- Base movement speed
+    ACCELERATION = 10,     -- Ground acceleration
     GROUND_FRICTION = 4.0, -- Friction coefficient
-    STOP_SPEED = 100, -- Speed at which friction stops
-    
+    STOP_SPEED = 100,      -- Speed at which friction stops
+
     -- Collision angles
     FORWARD_COLLISION_ANGLE = 55, -- Wall collision angle
-    GROUND_ANGLE_LOW = 45, -- Ground collision low angle
-    GROUND_ANGLE_HIGH = 55, -- Ground collision high angle
-    
+    GROUND_ANGLE_LOW = 45,        -- Ground collision low angle
+    GROUND_ANGLE_HIGH = 55,       -- Ground collision high angle
+
     -- Player dimensions
     HITBOX_RADIUS = 24, -- Player collision radius
     HITBOX_HEIGHT = 82, -- Player height
@@ -1633,8 +1635,11 @@ local swingTickCounter = 0
 
 -- Helpers for charge-bot yaw clamping
 local function Clamp(val, min, max)
-    if val < min then return min
-    elseif val > max then return max end
+    if val < min then
+        return min
+    elseif val > max then
+        return max
+    end
     return val
 end
 local MAX_CHARGE_BOT_TURN = 17
@@ -1755,7 +1760,7 @@ local function CalcStrafe()
         if not entity or not entity:IsValid() then
             goto continue
         end
-        
+
         local entityIndex = entity:GetIndex()
         if not entityIndex then
             goto continue
@@ -1922,7 +1927,7 @@ local function cleanupStaleCacheEntries()
             WishdirTracker.state[idx] = nil
         end
     end
-    
+
     -- Clean up positionHistory for invalid entities
     for idx, _ in pairs(positionHistory) do
         local ent = entities.GetByIndex(idx)
@@ -1930,7 +1935,7 @@ local function cleanupStaleCacheEntries()
             positionHistory[idx] = nil
         end
     end
-    
+
     -- Clean up StrafePredictor.velocityHistory for invalid entities
     for idx, _ in pairs(StrafePredictor.velocityHistory) do
         local ent = entities.GetByIndex(idx)
@@ -1946,16 +1951,16 @@ local function ApplyLagCompensation(enemyPos, enemyEntity)
     if not enemyEntity then
         return enemyPos
     end
-    
+
     local netChan = clientstate.GetNetChannel()
     if not netChan then
         return enemyPos
     end
-    
+
     local latOut = netChan:GetLatency(0) -- FLOW_OUTGOING
-    local latIn = netChan:GetLatency(1) -- FLOW_INCOMING
+    local latIn = netChan:GetLatency(1)  -- FLOW_INCOMING
     local totalLatency = latOut + latIn
-    local halfPing = totalLatency / 2 -- Time for server to receive our position
+    local halfPing = totalLatency / 2    -- Time for server to receive our position
 
     -- Convert to ticks for simulation consistency
     local tick_interval = globals.TickInterval()
@@ -1967,7 +1972,7 @@ local function ApplyLagCompensation(enemyPos, enemyEntity)
     if enemyVelocity then
         return enemyPos + enemyVelocity * predictionTime
     end
-    
+
     return enemyPos
 end
 
@@ -1976,20 +1981,20 @@ local function UpdatePositionHistory(entity)
     if not entity or not entity:IsValid() then
         return
     end
-    
+
     local entityIndex = entity:GetIndex()
     local currentPos = entity:GetAbsOrigin()
-    
+
     if not positionHistory[entityIndex] then
         positionHistory[entityIndex] = {}
     end
-    
+
     -- Add new position to the front of the queue
     table.insert(positionHistory[entityIndex], 1, {
         pos = currentPos,
         tick = globals.TickCount()
     })
-    
+
     -- Remove old positions beyond history size
     while #positionHistory[entityIndex] > POSITION_HISTORY_SIZE do
         table.remove(positionHistory[entityIndex])
@@ -2001,17 +2006,17 @@ local function GetPredictedPosition(entity, ticksAhead)
     if not entity or not entity:IsValid() then
         return nil
     end
-    
+
     local currentPos = entity:GetAbsOrigin()
     local velocity = entity:EstimateAbsVelocity()
-    
+
     if not velocity then
         return currentPos
     end
-    
+
     local tickInterval = globals.TickInterval()
     local predictionTime = ticksAhead * tickInterval
-    
+
     return currentPos + velocity * predictionTime
 end
 ---@param player WPlayer
@@ -2193,10 +2198,10 @@ local function PredictPlayerSimpleLinear(player, t, d)
 end
 
 -- Constants for minimum and maximum speed
-local MIN_SPEED = 10                     -- Minimum speed to avoid jittery movements
-local MAX_SPEED = 650                    -- Maximum speed the player can move
+local MIN_SPEED = 10             -- Minimum speed to avoid jittery movements
+local MAX_SPEED = 650            -- Maximum speed the player can move
 
-local MoveDir = Vector3(0, 0, 0)         -- Variable to store the movement direction
+local MoveDir = Vector3(0, 0, 0) -- Variable to store the movement direction
 -- Using tick-scoped pLocal defined in OnCreateMove; avoid shadowing here
 
 -- Function to compute the move direction
@@ -2735,8 +2740,8 @@ local function OnCreateMove(pCmd)
     end
 
     -- Quick reference values used multiple times
-    pLocalClass = pLocal:GetPropInt("m_iClass")
-    chargeLeft  = pLocal:GetPropFloat("m_flChargeMeter")
+    pLocalClass              = pLocal:GetPropInt("m_iClass")
+    chargeLeft               = pLocal:GetPropFloat("m_flChargeMeter")
     local chargeReachEnabled = Menu.Charge and Menu.Charge.ChargeReach == true
 
     if not chargeReachEnabled then
@@ -3052,7 +3057,8 @@ local function OnCreateMove(pCmd)
             warp.GetChargedTicks() >= Menu.Aimbot.SwingTime
 
         -- Don't use strafe prediction when warping (time is frozen for us too)
-        local useStrafePred = Menu.Misc.strafePred == true and not (instantAttackReady and Menu.Misc.WarpOnAttack == true)
+        local useStrafePred = Menu.Misc.strafePred == true and
+            not (instantAttackReady and Menu.Misc.WarpOnAttack == true)
         strafeAngle = useStrafePred and strafeAngles[pLocal:GetIndex()] or 0
 
         -- Always use weapon-specific ticks for simulation with instant attack
@@ -3069,7 +3075,11 @@ local function OnCreateMove(pCmd)
             and (globals.TickCount() - lastAttackTick) <= 13 and hasChargeShield
         local suppressCharge = localCharging and not localExploitActive
         local predData = PredictPlayer(player, simTicks, strafeAngle, false, nil, pCmd, suppressCharge)
-        if not predData then Profiler.End("LocalPrediction") Profiler.EndSystem("SwingPred_Tick") return end
+        if not predData then
+            Profiler.End("LocalPrediction")
+            Profiler.EndSystem("SwingPred_Tick")
+            return
+        end
 
         pLocalPath = predData.pos
         pLocalFuture = predData.pos[simTicks] + viewOffset
@@ -3135,7 +3145,11 @@ local function OnCreateMove(pCmd)
             predData = PredictPlayerSimpleLinear(CurrentTarget, simTicks, strafeAngle)
         end
 
-        if not predData then Profiler.End("EnemyPrediction") Profiler.EndSystem("SwingPred_Tick") return end
+        if not predData then
+            Profiler.End("EnemyPrediction")
+            Profiler.EndSystem("SwingPred_Tick")
+            return
+        end
 
         vPlayerPath = predData.pos
         vPlayerFuture = predData.pos[simTicks]
@@ -3162,7 +3176,8 @@ local function OnCreateMove(pCmd)
     Profiler.Begin("RangeCheck")
     -- Use TotalSwingRange for range checking (already calculated with charge reach logic)
     local hitFromPredicted
-    inRange, inRangePoint, can_charge, hitFromPredicted = checkInRangeSimple(CurrentTarget:GetIndex(), TotalSwingRange, pWeapon, pCmd)
+    inRange, inRangePoint, can_charge, hitFromPredicted = checkInRangeSimple(CurrentTarget:GetIndex(), TotalSwingRange,
+        pWeapon, pCmd)
     -- Use inRange to decide if can attack
     can_attack = inRange
 
@@ -3203,12 +3218,13 @@ local function OnCreateMove(pCmd)
                     aim_angles = Math.PositionAngles(pLocalOrigin, aimPosTarget)
                     local currentAng = engine.GetViewAngles()
                     local yawDiff = NormalizeYaw(aim_angles.yaw - currentAng.yaw)
-                    local limitedYaw = NormalizeYaw(currentAng.yaw + Clamp(yawDiff, -MAX_CHARGE_BOT_TURN, MAX_CHARGE_BOT_TURN))
+                    local limitedYaw = NormalizeYaw(currentAng.yaw +
+                        Clamp(yawDiff, -MAX_CHARGE_BOT_TURN, MAX_CHARGE_BOT_TURN))
                     engine.SetViewAngles(EulerAngles(aim_angles.pitch, limitedYaw, 0))
                 end
             end
 
-        -- Pre-charge aim: look at target BEFORE initiating charge (only when ChargeBot enabled)
+            -- Pre-charge aim: look at target BEFORE initiating charge (only when ChargeBot enabled)
         elseif chargeBotEnabled and isDemoknight and chargeLeft == 100
             and input.IsButtonDown(MOUSE_RIGHT) and not can_attack and fDistance < 750 then
             local aimPosTarget = inRangePoint or vPlayerFuture
@@ -3219,12 +3235,13 @@ local function OnCreateMove(pCmd)
                     aim_angles = Math.PositionAngles(pLocalOrigin, aimPosTarget)
                     local currentAng = engine.GetViewAngles()
                     local yawDiff = NormalizeYaw(aim_angles.yaw - currentAng.yaw)
-                    local limitedYaw = NormalizeYaw(currentAng.yaw + Clamp(yawDiff, -MAX_CHARGE_BOT_TURN, MAX_CHARGE_BOT_TURN))
+                    local limitedYaw = NormalizeYaw(currentAng.yaw +
+                        Clamp(yawDiff, -MAX_CHARGE_BOT_TURN, MAX_CHARGE_BOT_TURN))
                     engine.SetViewAngles(EulerAngles(aim_angles.pitch, limitedYaw, 0))
                 end
             end
 
-        -- Normal aimbot: snap to target when in range
+            -- Normal aimbot: snap to target when in range
         elseif can_attack and aim_angles and aim_angles.pitch and aim_angles.yaw then
             if Menu.Aimbot.Silent == true then
                 pCmd:SetViewAngles(aim_angles.pitch, aim_angles.yaw, 0)
@@ -3319,7 +3336,7 @@ local function OnCreateMove(pCmd)
             else
                 -- Not enough ticks for warp, but still do instant attack without warp
                 client.ChatPrintf("[Debug] Instant Attack: Not enough ticks (" ..
-                chargedTicks .. "/" .. safeTickValue .. "), normal attack")
+                    chargedTicks .. "/" .. safeTickValue .. "), normal attack")
             end
 
             can_attack = false
@@ -3905,7 +3922,8 @@ local function doDraw()
                             local screenFinalPos = client.WorldToScreen(finalPos)
 
                             if screenFinalPos then
-                                draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenFinalPos[1], screenFinalPos[2])
+                                draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenFinalPos[1],
+                                    screenFinalPos[2])
                                 draw.Line(lastRightBaseScreen[1], lastRightBaseScreen[2], screenFinalPos[1],
                                     screenFinalPos[2])
                             end
@@ -4084,9 +4102,11 @@ local function doDraw()
 
                                         if screenLeftBase and screenRightBase then
                                             if lastLeftBaseScreen and lastRightBaseScreen then
-                                                draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenLeftBase[1],
+                                                draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenLeftBase
+                                                    [1],
                                                     screenLeftBase[2])
-                                                draw.Line(lastRightBaseScreen[1], lastRightBaseScreen[2], screenRightBase[1],
+                                                draw.Line(lastRightBaseScreen[1], lastRightBaseScreen[2],
+                                                    screenRightBase[1],
                                                     screenRightBase[2])
                                             end
 
@@ -4126,9 +4146,11 @@ local function doDraw()
 
                                         if screenLeftBase and screenRightBase then
                                             if lastLeftBaseScreen and lastRightBaseScreen then
-                                                draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenLeftBase[1],
+                                                draw.Line(lastLeftBaseScreen[1], lastLeftBaseScreen[2], screenLeftBase
+                                                    [1],
                                                     screenLeftBase[2])
-                                                draw.Line(lastRightBaseScreen[1], lastRightBaseScreen[2], screenRightBase[1],
+                                                draw.Line(lastRightBaseScreen[1], lastRightBaseScreen[2],
+                                                    screenRightBase[1],
                                                     screenRightBase[2])
                                             end
 
