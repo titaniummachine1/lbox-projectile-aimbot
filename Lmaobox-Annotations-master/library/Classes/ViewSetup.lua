@@ -1,0 +1,27 @@
+---@meta
+
+---The ViewSetup object is used to get information about the the origin, angles, fov, zNear, zFar, and aspect ratio of the player's view.
+---
+---[View Docs](https://lmaobox.net/lua/Lua_Classes/ViewSetup/)
+---@class ViewSetup
+---@field x integer # Left side of view window
+---@field unscaledX integer # Left side of view window without HUD scaling
+---@field y integer # Top side of view window
+---@field unscaledY integer # Top side of view window without HUD scaling
+---@field width integer # Width of view window
+---@field unscaledWidth integer # Width of view window without HUD scaling
+---@field height integer # Height of view window
+---@field unscaledHeight integer # Height of view window without HUD scaling
+---@field ortho boolean # Whether the view is orthographic
+---@field orthoLeft number # Left side of orthographic view
+---@field orthoTop number # Top side of orthographic view
+---@field orthoRight number # Right side of orthographic view
+---@field orthoBottom number # Bottom side of orthographic view
+---@field fov number # Field of view
+---@field fovViewmodel number # Field of view of the viewmodel
+---@field origin Vector3 # Origin of the view
+---@field angles EulerAngles # Angles of the view
+---@field zNear number # Near clipping plane
+---@field zFar number # Far clipping plane
+---@field aspectRatio number # Aspect ratio of the view
+local ViewSetup = {}
