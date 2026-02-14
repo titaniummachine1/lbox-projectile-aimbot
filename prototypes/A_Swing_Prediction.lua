@@ -12,8 +12,46 @@ end
 -- Initialize libraries
 local lnxLib = require("lnxlib")
 local ImMenu = require("immenu")
-local Profiler = require("Profiler")
-Profiler.SetVisible(true)
+
+-- Debug profiler flag - set to false to disable all profiling
+local DEBUG_PROFILER = false
+
+local Profiler = nil
+if DEBUG_PROFILER then
+    Profiler = require("Profiler")
+    Profiler.SetVisible(true)
+end
+
+-- Debug profiler wrapper functions (no-ops when disabled)
+local function ProfilerBegin(name)
+    if DEBUG_PROFILER and Profiler then
+        Profiler.Begin(name)
+    end
+end
+
+local function ProfilerEnd(name)
+    if DEBUG_PROFILER and Profiler then
+        Profiler.End(name)
+    end
+end
+
+local function ProfilerBeginSystem(name)
+    if DEBUG_PROFILER and Profiler then
+        Profiler.BeginSystem(name)
+    end
+end
+
+local function ProfilerEndSystem(name)
+    if DEBUG_PROFILER and Profiler then
+        Profiler.EndSystem(name)
+    end
+end
+
+local function ProfilerDraw()
+    if DEBUG_PROFILER and Profiler then
+        Profiler.Draw()
+    end
+end
 
 local Math, Conversion = lnxLib.Utils.Math, lnxLib.Utils.Conversion
 local WPlayer, WWeapon = lnxLib.TF2.WPlayer, lnxLib.TF2.WWeapon
@@ -538,19 +576,18 @@ function PlayerTick.accelerate(velocity, wishdir, wishspeed, accel, frametime, s
     velocity.z = velocity.z + wishdir.z * accelspeed
 end
 
-function PlayerTick.getAirSpeedCap(target, suppressCharge)
+function PlayerTick.getAirSpeedCap(target, suppressCharge, tf_max_charge_speed)
     if not suppressCharge and target and target:InCond(17) then
-        -- TF_COND_SHIELD_CHARGE: use tf_max_charge_speed (default 750)
-        local _, tf_max_charge_speed = client.GetConVar("tf_max_charge_speed")
+        -- TF_COND_SHIELD_CHARGE: use tf_max_charge_speed from simulation context
         return tf_max_charge_speed or 750
     end
     -- Default air speed cap in Source engine
     return 30.0
 end
 
-function PlayerTick.airAccelerate(v, wishdir, wishspeed, accel, dt, surf, target, suppressCharge)
+function PlayerTick.airAccelerate(v, wishdir, wishspeed, accel, dt, surf, target, suppressCharge, tf_max_charge_speed)
     -- Clamp wishspeed to air speed cap (Source engine default: 30)
-    wishspeed = math.min(wishspeed, PlayerTick.getAirSpeedCap(target, suppressCharge))
+    wishspeed = math.min(wishspeed, PlayerTick.getAirSpeedCap(target, suppressCharge, tf_max_charge_speed))
 
     local currentspeed = v:Dot(wishdir)
     local addspeed = wishspeed - currentspeed
@@ -929,7 +966,8 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
                 tickinterval,
                 1.0,
                 playerCtx.entity,
-                playerCtx.suppressCharge
+                playerCtx.suppressCharge,
+                simCtx.tf_max_charge_speed
             )
         end
     end
@@ -1004,6 +1042,9 @@ local function createSimulationContext()
     local _, sv_airaccelerate = client.GetConVar("sv_airaccelerate")
     assert(sv_airaccelerate, "createContext: client.GetConVar('sv_airaccelerate') returned nil")
 
+    local _, tf_max_charge_speed = client.GetConVar("tf_max_charge_speed")
+    assert(tf_max_charge_speed, "createContext: client.GetConVar('tf_max_charge_speed') returned nil")
+
     local tickinterval = globals.TickInterval()
     assert(tickinterval, "createContext: globals.TickInterval() returned nil")
     assert(tickinterval > 0, "createContext: tickinterval must be positive")
@@ -1014,6 +1055,7 @@ local function createSimulationContext()
         sv_stopspeed = sv_stopspeed,
         sv_accelerate = sv_accelerate,
         sv_airaccelerate = sv_airaccelerate,
+        tf_max_charge_speed = tf_max_charge_speed,
         tickinterval = tickinterval,
     }
 
@@ -1418,7 +1460,6 @@ local Charge_Range = 128
 local normalWeaponRange = 48
 local normalTotalSwingRange = 48
 local vHitbox = { Vector3(-24, -24, 0), Vector3(24, 24, 82) }
-local gravity = client.GetConVar("sv_gravity") or 800
 local stepSize = 18
 
 -- TF2 class walking speeds indexed by m_iClass
@@ -1470,13 +1511,6 @@ local MATH = {
     HALF_CIRCLE = 180,
     FULL_CIRCLE = 360,
 }
-
--- Function to update server cvars only on events
-local function UpdateServerCvars()
-    gravity = client.GetConVar("sv_gravity") or 800
-end
-
-UpdateServerCvars() -- Initialize on script load
 
 -- Per-tick variables (reset each tick)
 local isMelee = false
@@ -2535,7 +2569,7 @@ end
 -- Predicts player position after set amount of ticks
 ---@param strafeAngle number
 local function OnCreateMove(pCmd)
-    Profiler.BeginSystem("SwingPred_Tick")
+    ProfilerBeginSystem("SwingPred_Tick")
 
     -- Clear ALL entity variables at start of every tick to prevent stale references
     pLocal = nil
@@ -2560,7 +2594,7 @@ local function OnCreateMove(pCmd)
     vPlayerPath = {}
     drawVhitbox = {}
 
-    Profiler.Begin("Setup")
+    ProfilerBegin("Setup")
     -- Periodic cleanup of stale cache entries (once every 5 seconds)
     local currentTime = globals.RealTime()
     if currentTime - (lastCacheCleanup or 0) > 5 then
@@ -2578,9 +2612,9 @@ local function OnCreateMove(pCmd)
 
     -- Get the local player entity
     pLocal = entities.GetLocalPlayer()
-    Profiler.End("Setup")
+    ProfilerEnd("Setup")
     if not pLocal or not pLocal:IsAlive() then
-        Profiler.EndSystem("SwingPred_Tick")
+        ProfilerEndSystem("SwingPred_Tick")
         goto continue -- Return if the local player entity doesn't exist or is dead
     end
 
@@ -2606,7 +2640,7 @@ local function OnCreateMove(pCmd)
     end
 
     -- ===== Charge Reach State Machine (Demoman only) =====
-    Profiler.Begin("ChargeStateMachine")
+    ProfilerBegin("ChargeStateMachine")
     local chargeBotActiveNow = Menu.Charge.ChargeBot == true and IsChargeBotActiveByMode()
     if chargeReachEnabled and pLocalClass == 4 and hasChargeShield then
         if chargeState == "aim" then
@@ -2629,7 +2663,7 @@ local function OnCreateMove(pCmd)
         chargeAimAngles = nil
     end
     -- =====================================
-    Profiler.End("ChargeStateMachine")
+    ProfilerEnd("ChargeStateMachine")
 
     -- Show notification if instant attack is enabled but dash key is not bound
     if Menu.Misc.InstantAttack == true and gui.GetValue("dash move key") == 0 and not dashKeyNotBoundNotified then
@@ -2644,14 +2678,14 @@ local function OnCreateMove(pCmd)
     -- Check if the local player is a spy
     pLocalClass = pLocal:GetPropInt("m_iClass")
     if pLocalClass == nil or pLocalClass == 8 then
-        Profiler.EndSystem("SwingPred_Tick")
+        ProfilerEndSystem("SwingPred_Tick")
         goto continue -- Skip the rest of the code if the local player is a spy or hasn't chosen a class
     end
 
     -- Get the local player's active weapon
     pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
     if not pWeapon then
-        Profiler.EndSystem("SwingPred_Tick")
+        ProfilerEndSystem("SwingPred_Tick")
         goto continue -- Return if the local player doesn't have an active weapon
     end
     local nextPrimaryAttack = pWeapon:GetPropFloat("LocalActiveWeaponData", "m_flNextPrimaryAttack")
@@ -2694,7 +2728,7 @@ local function OnCreateMove(pCmd)
 
     isMelee = pWeapon:IsMeleeWeapon() -- check if using melee weapon
     if not isMelee then
-        Profiler.EndSystem("SwingPred_Tick")
+        ProfilerEndSystem("SwingPred_Tick")
         goto continue
     end -- if not melee then skip code
 
@@ -2890,15 +2924,15 @@ local function OnCreateMove(pCmd)
     gravity = client.GetConVar("sv_gravity")
     stepSize = pLocal:GetPropFloat("localdata", "m_flStepSize") or stepSize
 
-    Profiler.Begin("CalcStrafe")
+    ProfilerBegin("CalcStrafe")
     -- Ensure players list is populated before using in CalcStrafe
     if not players then
         players = entities.FindByClass("CTFPlayer")
     end
     CalcStrafe()
-    Profiler.End("CalcStrafe")
+    ProfilerEnd("CalcStrafe")
 
-    Profiler.Begin("LocalPrediction")
+    ProfilerBegin("LocalPrediction")
     -- Local player prediction
     if pLocal:EstimateAbsVelocity():Length() < 10 then
         -- If the local player is not accelerating, set the predicted position to the current position
@@ -2929,22 +2963,22 @@ local function OnCreateMove(pCmd)
             and (globals.TickCount() - lastAttackTick) <= 13 and hasChargeShield
         local suppressCharge = localCharging and not localExploitActive
         local predData = PredictPlayer(player, simTicks, strafeAngle, false, nil, pCmd, suppressCharge)
-        if not predData then Profiler.End("LocalPrediction") Profiler.EndSystem("SwingPred_Tick") return end
+        if not predData then ProfilerEnd("LocalPrediction") ProfilerEndSystem("SwingPred_Tick") return end
 
         pLocalPath = predData.pos
         pLocalFuture = predData.pos[simTicks] + viewOffset
     end
-    Profiler.End("LocalPrediction")
+    ProfilerEnd("LocalPrediction")
 
     -- stop if no target
     if CurrentTarget == nil then
-        Profiler.EndSystem("SwingPred_Tick")
+        ProfilerEndSystem("SwingPred_Tick")
         return
     end
 
     -- Validate target is still valid (alive, not dormant, etc.)
     if not CurrentTarget:IsValid() or not CurrentTarget:IsAlive() or CurrentTarget:IsDormant() then
-        Profiler.EndSystem("SwingPred_Tick")
+        ProfilerEndSystem("SwingPred_Tick")
         return
     end
 
@@ -2973,7 +3007,7 @@ local function OnCreateMove(pCmd)
             tostring(canWarp), chargedTicks, swingTime, tostring(instantAttackReady)))
     end
 
-    Profiler.Begin("EnemyPrediction")
+    ProfilerBegin("EnemyPrediction")
     if not instantAttackReady then
         -- Only predict enemy movement when NOT using instant attack
         local player = WPlayer.FromEntity(CurrentTarget)
@@ -2995,7 +3029,7 @@ local function OnCreateMove(pCmd)
             predData = PredictPlayerSimpleLinear(CurrentTarget, simTicks, strafeAngle)
         end
 
-        if not predData then Profiler.End("EnemyPrediction") Profiler.EndSystem("SwingPred_Tick") return end
+        if not predData then ProfilerEnd("EnemyPrediction") ProfilerEndSystem("SwingPred_Tick") return end
 
         vPlayerPath = predData.pos
         vPlayerFuture = predData.pos[simTicks]
@@ -3008,7 +3042,7 @@ local function OnCreateMove(pCmd)
         drawVhitbox[1] = vPlayerFuture + vHitbox[1]
         drawVhitbox[2] = vPlayerFuture + vHitbox[2]
     end
-    Profiler.End("EnemyPrediction")
+    ProfilerEnd("EnemyPrediction")
 
     --[--------------Distance check using TotalSwingRange-------------------]
     -- Get current distance between local player and closest player
@@ -3019,7 +3053,7 @@ local function OnCreateMove(pCmd)
     local inRange = false
     local inRangePoint = Vector3(0, 0, 0)
 
-    Profiler.Begin("RangeCheck")
+    ProfilerBegin("RangeCheck")
     -- Use TotalSwingRange for range checking (already calculated with charge reach logic)
     local hitFromPredicted
     inRange, inRangePoint, can_charge, hitFromPredicted = checkInRangeSimple(CurrentTarget:GetIndex(), TotalSwingRange, pWeapon, pCmd)
@@ -3036,10 +3070,10 @@ local function OnCreateMove(pCmd)
         end
     end
 
-    Profiler.End("RangeCheck")
+    ProfilerEnd("RangeCheck")
 
     --[--------------AimBot-------------------]
-    Profiler.Begin("Aimbot")
+    ProfilerBegin("Aimbot")
     local aimpos = CurrentTarget:GetAbsOrigin() + Vheight
 
     if Menu.Aimbot.Aimbot == true then
@@ -3093,11 +3127,11 @@ local function OnCreateMove(pCmd)
             end
         end
     end
-    Profiler.End("Aimbot")
+    ProfilerEnd("Aimbot")
 
 
 
-    Profiler.Begin("AttackLogic")
+    ProfilerBegin("AttackLogic")
     -- Only try instant attack when it's possible
     if can_attack then
         -- Get the actual weapon smack delay if available
@@ -3260,10 +3294,10 @@ local function OnCreateMove(pCmd)
         -- No need to track exploit flag anymore; logic is purely timing-based
     end
 
-    Profiler.End("AttackLogic")
+    ProfilerEnd("AttackLogic")
     -- Update last variables
     vHitbox[2].z = 82
-    Profiler.EndSystem("SwingPred_Tick")
+    ProfilerEndSystem("SwingPred_Tick")
     ::continue::
 end
 
