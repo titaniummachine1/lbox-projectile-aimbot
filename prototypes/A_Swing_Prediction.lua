@@ -3529,7 +3529,7 @@ local Verdana = draw.CreateFont("Verdana", 16, 800) -- Create a font for doDraw
 draw.SetFont(Verdana)
 --[[ Code called every frame ]]                     --
 local function doDraw()
-    Profiler.Draw()
+    ProfilerDraw()
     -- Render menu UI even when dead or visuals disabled
     if gui.IsMenuOpen() and ImMenu and ImMenu.Begin("Swing Prediction") then
         ImMenu.BeginFrame(1) -- tabs
@@ -4146,7 +4146,6 @@ local function OnUnload()                                     -- Called when the
 end
 
 local function damageLogger(event)
-    UpdateServerCvars() -- Update cvars on event
     if (event:GetName() == 'player_hurt') then
         local victim = entities.GetByUserID(event:GetInt("userid"))
         local attacker = entities.GetByUserID(event:GetInt("attacker"))
