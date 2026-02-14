@@ -273,6 +273,34 @@ function WishdirTracker.clampVelocityTo8Directions(velocity, yaw)
     return WishdirTracker.normalizeDirection(snapX, snapY)
 end
 
+function WishdirTracker.resolveRelativeWishdirFromVelocity(velocity, yaw)
+    local horizLen = Length2D(velocity)
+    if horizLen < WishdirTracker.STILL_SPEED_THRESHOLD then
+        return Vector3(0, 0, 0)
+    end
+
+    local yawRad = yaw * (math.pi / 180)
+    local cosYaw = math.cos(yawRad)
+    local sinYaw = math.sin(yawRad)
+
+    local forwardX = cosYaw
+    local forwardY = sinYaw
+    local leftX = -sinYaw
+    local leftY = cosYaw
+
+    local velNormX = velocity.x / horizLen
+    local velNormY = velocity.y / horizLen
+    local relForward = velNormX * forwardX + velNormY * forwardY
+    local relSide = velNormX * leftX + velNormY * leftY
+
+    local relLen = math.sqrt(relForward * relForward + relSide * relSide)
+    if relLen < 0.0001 then
+        return Vector3(0, 0, 0)
+    end
+
+    return Vector3(relForward / relLen, relSide / relLen, 0)
+end
+
 function WishdirTracker.update(entity)
     if not entity or not entity:IsAlive() or entity:IsDormant() then
         return
@@ -338,12 +366,12 @@ function WishdirTracker.update(entity)
     if not detectedWishdir then
         detectedWishdir = Vector3(0, 0, 0)
         if horizLen >= WishdirTracker.STILL_SPEED_THRESHOLD then
-            detectedWishdir = WishdirTracker.clampVelocityTo8Directions(currentVel, currentYaw)
+            detectedWishdir = WishdirTracker.resolveRelativeWishdirFromVelocity(currentVel, currentYaw)
         elseif s.lastPos then
             local movementDelta = currentPos - s.lastPos
             local movementHorizLen = Length2D(movementDelta)
             if movementHorizLen > 1.0 then
-                detectedWishdir = WishdirTracker.clampVelocityTo8Directions(movementDelta, currentYaw)
+                detectedWishdir = WishdirTracker.resolveRelativeWishdirFromVelocity(movementDelta, currentYaw)
             end
         end
     elseif horizLen < WishdirTracker.STILL_SPEED_THRESHOLD then
@@ -391,11 +419,11 @@ function WishdirTracker.updateLight(entity)
     local detectedWishdir = Vector3(0, 0, 0)
     local horizLen = Length2D(currentVel)
     if horizLen >= WishdirTracker.STILL_SPEED_THRESHOLD then
-        detectedWishdir = WishdirTracker.clampVelocityTo8Directions(currentVel, currentYaw)
+        detectedWishdir = WishdirTracker.resolveRelativeWishdirFromVelocity(currentVel, currentYaw)
     elseif s.lastPos then
         local movementDelta = currentPos - s.lastPos
         if Length2D(movementDelta) > 1.0 then
-            detectedWishdir = WishdirTracker.clampVelocityTo8Directions(movementDelta, currentYaw)
+            detectedWishdir = WishdirTracker.resolveRelativeWishdirFromVelocity(movementDelta, currentYaw)
         end
     end
 
@@ -662,17 +690,16 @@ function PlayerTick.accelerate(velocity, wishdir, wishspeed, accel, frametime, s
 end
 
 function PlayerTick.getAirSpeedCap(airSnapshot, suppressCharge, movementConVars)
-    if not airSnapshot then
+    if not airSnapshot then return 30.0 end
+
+    -- If charge is suppressed, we always return the default air speed cap (30)
+    -- regardless of whether the player is actually charging or not.
+    if suppressCharge then
         return 30.0
     end
-    assert(movementConVars, "PlayerTick.getAirSpeedCap: movementConVars missing")
 
     if airSnapshot.hasHookTarget then
         if airSnapshot.carryingRuneType == RuneTypes_t.RUNE_AGILITY then
-            local classIndex = airSnapshot.classIndex
-            if classIndex == E_Character.TF2_Soldier or classIndex == E_Character.TF2_Heavy then
-                return 850
-            end
             return 950
         end
         local grappleMoveSpeed = movementConVars.tf_grapplinghook_move_speed
@@ -956,6 +983,14 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
     local yawDelta = playerCtx.yawDeltaPerTick or 0
     if math.abs(yawDelta) > 0.0001 then
         playerCtx.viewYaw = playerCtx.viewYaw + yawDelta
+
+        local yawDeltaRad = yawDelta * PlayerTick.DEG2RAD
+        local cosDelta = math.cos(yawDeltaRad)
+        local sinDelta = math.sin(yawDeltaRad)
+        local vx = playerCtx.velocity.x
+        local vy = playerCtx.velocity.y
+        playerCtx.velocity.x = cosDelta * vx - sinDelta * vy
+        playerCtx.velocity.y = sinDelta * vx + cosDelta * vy
     end
 
     local is_on_ground, _, surface_friction = PlayerTick.categorizePosition(
@@ -978,7 +1013,14 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
     if playerCtx.isDucked and is_on_ground then
         effectiveMaxspeed = effectiveMaxspeed / 3
     end
-    local wishspeed = effectiveMaxspeed
+    -- When suppressCharge is set, ensure we use cached walking speed, not entity's charge-modified maxspeed
+    if playerCtx.suppressCharge then
+        effectiveMaxspeed = cachedLocalMaxspeed
+        if playerCtx.isDucked and is_on_ground then
+            effectiveMaxspeed = effectiveMaxspeed / 3
+        end
+    end
+    local wishspeed = 0
 
     if wishLen > 0.0001 then
         local yawRad = playerCtx.viewYaw * PlayerTick.DEG2RAD
@@ -989,6 +1031,11 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
         local worldLen = math.sqrt(worldX * worldX + worldY * worldY)
         if worldLen > 0.0001 then
             wishdir = Vector3(worldX / worldLen, worldY / worldLen, 0)
+            if playerCtx.wishdirIsRawInput then
+                wishspeed = math.min(wishLen, effectiveMaxspeed)
+            else
+                wishspeed = effectiveMaxspeed
+            end
         else
             wishdir = Vector3(0, 0, 0)
             wishspeed = 0
@@ -1009,14 +1056,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
 
     if wishspeed > 0 then
         if is_on_ground then
-            PlayerTick.accelerate(
-                playerCtx.velocity,
-                wishdir,
-                wishspeed,
-                simCtx.sv_accelerate,
-                tickinterval,
-                surface_friction
-            )
+            PlayerTick.accelerate(playerCtx.velocity, wishdir, wishspeed, simCtx.sv_accelerate, tickinterval, surface_friction)
         elseif playerCtx.velocity.z < 0 then
             local movementConVars = GetMovementConVarsForTick()
             local airSpeedCap = PlayerTick.getAirSpeedCap(
@@ -1036,7 +1076,7 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
         end
     end
 
-    if is_on_ground and effectiveMaxspeed > 0 then
+    if (is_on_ground or playerCtx.suppressCharge) and effectiveMaxspeed > 0 then
         local horizontalSpeed = Length2D(playerCtx.velocity)
         if horizontalSpeed > effectiveMaxspeed then
             local scale = effectiveMaxspeed / horizontalSpeed
@@ -1151,6 +1191,9 @@ local function clonePlayerContext(src)
         wasOnGround = src.wasOnGround,
         isDucked = src.isDucked,
         airMovementSnapshot = src.airMovementSnapshot,
+        wishdirIsRawInput = src.wishdirIsRawInput,
+        cmdForwardMove = src.cmdForwardMove,
+        cmdSideMove = src.cmdSideMove,
     }
 
     assert(src.origin, "clonePlayerContext: origin missing")
@@ -1383,6 +1426,7 @@ local Menu = {
     -- Misc settings
     Misc = {
         strafePred = true,
+        DebugLocalWishdirBySim = false,
         CritRefill = { Active = true, NumCrits = 1 },
         CritMode = 1,
         CritModes = { "Rage", "On Button" },
@@ -1510,6 +1554,7 @@ local function SafeInitMenu()
     Menu.Misc = Menu.Misc or {}
     Menu.Misc.InstantAttack = Menu.Misc.InstantAttack ~= nil and Menu.Misc.InstantAttack or false
     Menu.Misc.WarpOnAttack = Menu.Misc.WarpOnAttack ~= nil and Menu.Misc.WarpOnAttack or true
+    Menu.Misc.DebugLocalWishdirBySim = Menu.Misc.DebugLocalWishdirBySim ~= nil and Menu.Misc.DebugLocalWishdirBySim or false
 
     -- Initialize other sections if needed
     Menu.Charge = Menu.Charge or {}
@@ -1607,8 +1652,8 @@ local pLocalPath = {}
 local vPlayerPath = {}
 local drawVhitbox = {}
 
--- Track swing ticks after +attack is sent
-local swingTickCounter = 0
+-- Per-tick cached non-charge maxspeed for local player
+local cachedLocalMaxspeed = 240 -- default fallback
 
 -- Helpers for charge-bot yaw clamping
 local function Clamp(val, min, max)
@@ -1686,6 +1731,7 @@ local chargeJumpPendingTick = nil
 
 -- Track the tick index of the last +attack press (user or script)
 local lastAttackTick = -1000 -- initialize far in the past
+local wasAttackHeldLastTick = false
 
 -- Add this function to reset the attack tracking when needed
 local function resetAttackTracking()
@@ -1746,6 +1792,18 @@ local strafeAngles = {} ---@type table<number, number>
 local inaccuracy = {} ---@type table<number, number>
 local pastPositions = {} -- Stores past positions of the local player
 local maxPositions = 4   -- Number of past positions to consider
+local MAX_STRAFE_YAW_DELTA_PER_TICK = 25
+
+local function NormalizeYawDelta(delta)
+    delta = ((delta + 180) % 360) - 180
+    if delta > MAX_STRAFE_YAW_DELTA_PER_TICK then
+        return MAX_STRAFE_YAW_DELTA_PER_TICK
+    end
+    if delta < -MAX_STRAFE_YAW_DELTA_PER_TICK then
+        return -MAX_STRAFE_YAW_DELTA_PER_TICK
+    end
+    return delta
+end
 
 local function CalcStrafe()
     local autostrafe = gui.GetValue("Auto Strafe")
@@ -1796,10 +1854,10 @@ local function CalcStrafe()
             goto continue
         end
 
-        local delta = angle.y - lastAngles[entityIndex].y
+        local delta = NormalizeYawDelta(angle.y - lastAngles[entityIndex].y)
 
         -- Calculate the average delta using exponential smoothing
-        local smoothingFactor = 0.2
+        local smoothingFactor = 0.45
         local avgDelta = (lastDeltas[entityIndex] or delta) * (1 - smoothingFactor) + delta * smoothingFactor
 
         -- Save the average delta
@@ -2031,10 +2089,13 @@ local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd, su
     assert(localPlayer, "PredictPlayer: no local player")
 
     local isLocal = (player == localPlayer)
+    local forceLocalWishdirBySim = isLocal and Menu.Misc.DebugLocalWishdirBySim == true
 
     -- Update tracking systems for enemies
     if not isLocal then
         StrafePredictor.updateAll({ player })
+        WishdirTracker.update(player)
+    elseif forceLocalWishdirBySim then
         WishdirTracker.update(player)
     end
 
@@ -2043,53 +2104,62 @@ local function PredictPlayer(player, t, d, simulateCharge, fixedAngles, pCmd, su
     local playerCtx = createPlayerContext(player)
 
     -- Resolve wishdir
-    if isLocal and pCmd then
+    if isLocal and pCmd and not forceLocalWishdirBySim then
         -- Local player: use actual cmd input (exact, no guessing)
         local forwardMove = pCmd:GetForwardMove()
         local sideMove = pCmd:GetSideMove()
 
+        playerCtx.cmdForwardMove = forwardMove
+        playerCtx.cmdSideMove = sideMove
+
         if math.abs(forwardMove) > 0.1 or math.abs(sideMove) > 0.1 then
-            local inputLen = math.sqrt(forwardMove * forwardMove + sideMove * sideMove)
-            local normFwd = forwardMove / inputLen
-            local normSide = sideMove / inputLen
+            -- Raw held input (simtest-style): preserve cmd magnitude, resolve every tick against predicted yaw.
             -- x = forward, positive y = left (matches DIRECTIONS table convention)
-            playerCtx.relativeWishDir = Vector3(normFwd, -normSide, 0)
+            playerCtx.relativeWishDir = Vector3(forwardMove, sideMove, 0)
+            playerCtx.wishdirIsRawInput = true
         else
             playerCtx.relativeWishDir = Vector3(0, 0, 0)
+            playerCtx.wishdirIsRawInput = true
         end
-    elseif not isLocal then
-        -- Enemy: prefer WishdirTracker (9-candidate sim), fall back to velocity snap
+    elseif forceLocalWishdirBySim or not isLocal then
+        -- Tracker path: prefer WishdirTracker, fall back to continuous yaw-relative velocity wishdir
         local trackedWishdir = WishdirTracker.getRelativeWishdir(player)
         if trackedWishdir then
             playerCtx.relativeWishDir = trackedWishdir
+            playerCtx.wishdirIsRawInput = false
         else
             local vel = playerCtx.velocity
             local horizSpeed = Length2D(vel)
             if horizSpeed > 50 then
-                playerCtx.relativeWishDir = WishdirTracker.clampVelocityTo8Directions(vel, playerCtx.yaw or 0)
+                playerCtx.relativeWishDir = WishdirTracker.resolveRelativeWishdirFromVelocity(vel, playerCtx.yaw or 0)
             else
                 playerCtx.relativeWishDir = Vector3(0, 0, 0)
             end
+            playerCtx.wishdirIsRawInput = false
         end
     else
-        -- Local player without cmd: fall back to velocity direction
+        -- Local player without cmd: use continuous yaw-relative velocity wishdir
         local vel = playerCtx.velocity
         local horizSpeed = Length2D(vel)
         if horizSpeed > 50 then
-            playerCtx.relativeWishDir = WishdirTracker.clampVelocityTo8Directions(vel, playerCtx.yaw or 0)
+            playerCtx.relativeWishDir = WishdirTracker.resolveRelativeWishdirFromVelocity(vel, playerCtx.yaw or 0)
         else
             playerCtx.relativeWishDir = Vector3(0, 0, 0)
         end
+        playerCtx.wishdirIsRawInput = false
     end
 
     -- Local player charge simulation override:
     -- When charging but NOT doing exploit, simulate as walking speed with forward-only wishdir.
     -- This prevents the sim from using charge speed (750) which would over-predict movement.
     if isLocal and suppressChargeInSim then
-        local classIndex = player:GetPropInt("m_iClass") or 4
-        local walkSpeed = TF2_CLASS_SPEED[classIndex] or 280
-        playerCtx.maxspeed = walkSpeed
+        playerCtx.maxspeed = cachedLocalMaxspeed
         playerCtx.suppressCharge = true
+    end
+
+    -- When suppressCharge is set, ensure maxspeed reflects cached non-charge speed
+    if playerCtx.suppressCharge then
+        playerCtx.maxspeed = cachedLocalMaxspeed
     end
 
     -- Local player: clamp horizontal speed to maxspeed.
@@ -2719,6 +2789,7 @@ local function OnCreateMove(pCmd)
     pLocal = entities.GetLocalPlayer()
     Profiler.End("Setup")
     if not pLocal or not pLocal:IsAlive() then
+        wasAttackHeldLastTick = false
         Profiler.EndSystem("SwingPred_Tick")
         goto continue -- Return if the local player entity doesn't exist or is dead
     end
@@ -2728,15 +2799,24 @@ local function OnCreateMove(pCmd)
     -- Update stepSize per-tick based on current player
     stepSize = pLocal:GetPropFloat("localdata", "m_flStepSize") or 18
 
-    -- Track latest +attack input (from user or script) for charge-reach logic
-    if (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
+    -- Track +attack press edge (user or script) for active swing window logic.
+    -- Holding attack must not continuously refresh swing window.
+    local attackHeld = (pCmd:GetButtons() & IN_ATTACK) ~= 0
+    if attackHeld and not wasAttackHeldLastTick then
         lastAttackTick = globals.TickCount()
     end
+    wasAttackHeldLastTick = attackHeld
 
     -- Quick reference values used multiple times
     pLocalClass              = pLocal:GetPropInt("m_iClass")
     chargeLeft               = pLocal:GetPropFloat("m_flChargeMeter")
     local chargeReachEnabled = Menu.Charge and Menu.Charge.ChargeReach == true
+
+    -- Cache last non-charge maxspeed for local player (skip 750 charge speed)
+    local currentMaxspeed = pLocal:GetPropFloat("m_flMaxspeed")
+    if currentMaxspeed and currentMaxspeed > 0 and currentMaxspeed < 750 then
+        cachedLocalMaxspeed = currentMaxspeed
+    end
 
     if not chargeReachEnabled then
         resetAttackTracking()
@@ -3061,12 +3141,18 @@ local function OnCreateMove(pCmd)
             simTicks = Menu.Aimbot.SwingTime
         end
 
-        -- When charging but NOT doing exploit: suppress charge speed in sim.
-        -- Swing cancels charge instantly, so predict at walking speed.
-        -- During exploit execution (swinging during charge): allow full charge speed.
+        -- Allow charge simulation ONLY while actively within swing window.
+        -- Outside that window, swinging would cancel charge immediately, so suppress charge speed.
         local localCharging = pLocal:InCond(17)
-        local localExploitActive = localCharging and IsWithinActiveSwingWindow(pWeapon)
-        local suppressCharge = localCharging and not localExploitActive
+        local allowChargeInSim = localCharging and IsWithinActiveSwingWindow(pWeapon)
+        local suppressCharge = localCharging and not allowChargeInSim
+        if localCharging then
+            if allowChargeInSim then
+                print("[ChargeSim] CHARGE ALLOWED: inSwingWindow:", IsWithinActiveSwingWindow(pWeapon))
+            else
+                print("[ChargeSim] CHARGE SUPPRESSED: inSwingWindow:", IsWithinActiveSwingWindow(pWeapon))
+            end
+        end
         local predData = PredictPlayer(player, simTicks, strafeAngle, false, nil, pCmd, suppressCharge)
         if not predData then
             Profiler.End("LocalPrediction")
@@ -3754,6 +3840,10 @@ local function doDraw()
 
             ImMenu.BeginFrame(1)
             Menu.Misc.strafePred = ImMenu.Checkbox("Local Strafe Pred", Menu.Misc.strafePred)
+            Menu.Misc.DebugLocalWishdirBySim = ImMenu.Checkbox(
+                "Debug Local Wishdir via 9-Sim",
+                Menu.Misc.DebugLocalWishdirBySim
+            )
             ImMenu.EndFrame()
         end
 
