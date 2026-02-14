@@ -449,10 +449,36 @@ end
 local PlayerTick = {}
 PlayerTick.DEG2RAD = math.pi / 180
 PlayerTick.RAD2DEG = 180 / math.pi
-PlayerTick.NON_JUMP_VELOCITY = 140.0
-PlayerTick.GROUND_CHECK_OFFSET = 2.0
+PlayerTick.NON_JUMP_VELOCITY = 180.0
+PlayerTick.GROUND_CHECK_OFFSET = 66.0
 PlayerTick.DIST_EPSILON = 0.03125
 PlayerTick.SV_MAXVELOCITY = 3500
+PlayerTick.MAX_CLIP_PLANES = 5
+PlayerTick.IMPACT_NORMAL_FLOOR = 0.7
+
+local RuneTypes_t = {
+    RUNE_NONE = -1,
+    RUNE_STRENGTH = 0,
+    RUNE_HASTE = 1,
+    RUNE_REGEN = 2,
+    RUNE_RESIST = 3,
+    RUNE_VAMPIRE = 4,
+    RUNE_REFLECT = 5,
+    RUNE_PRECISION = 6,
+    RUNE_AGILITY = 7,
+    RUNE_KNOCKOUT = 8,
+    RUNE_KING = 9,
+    RUNE_PLAGUE = 10,
+    RUNE_SUPERNOVA = 11,
+    RUNE_TYPES_MAX = 12,
+}
+
+local moveTemp1 = Vector3()
+local moveTemp2 = Vector3()
+local moveClipPlanes = {}
+for i = 1, PlayerTick.MAX_CLIP_PLANES do
+    moveClipPlanes[i] = Vector3()
+end
 
 -- Note: Length2D is defined in global helpers section
 
@@ -496,11 +522,17 @@ function PlayerTick.checkIsOnGround(origin, velocity, mins, maxs, index)
         return false
     end
 
-    local down = Vector3(origin.x, origin.y, origin.z - PlayerTick.GROUND_CHECK_OFFSET)
-    currentTraceIndex = index
-    local trace = engine.TraceHull(origin, down, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
+    moveTemp1.x = origin.x
+    moveTemp1.y = origin.y
+    moveTemp1.z = origin.z
+    moveTemp2.x = origin.x
+    moveTemp2.y = origin.y
+    moveTemp2.z = origin.z - PlayerTick.GROUND_CHECK_OFFSET
 
-    if trace and trace.fraction < 1.0 and not trace.startsolid and trace.plane and trace.plane.z >= 0.7 then
+    currentTraceIndex = index
+    local trace = engine.TraceHull(moveTemp1, moveTemp2, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
+
+    if trace and trace.fraction < 0.06 and not trace.startsolid and trace.plane and trace.plane.z >= PlayerTick.IMPACT_NORMAL_FLOOR then
         return true
     end
 
@@ -539,17 +571,14 @@ end
 function PlayerTick.accelerate(velocity, wishdir, wishspeed, accel, frametime, surface_friction)
     surface_friction = surface_friction or 1.0
 
-    local currentspeed = velocity:Dot(wishdir)
+    local currentspeed = velocity:Length()
     local addspeed = wishspeed - currentspeed
 
     if addspeed <= 0 then
         return
     end
 
-    local accelspeed = accel * frametime * wishspeed * surface_friction
-    if accelspeed > addspeed then
-        accelspeed = addspeed
-    end
+    local accelspeed = math.min(accel * frametime * wishspeed * surface_friction, addspeed)
 
     velocity.x = velocity.x + wishdir.x * accelspeed
     velocity.y = velocity.y + wishdir.y * accelspeed
@@ -557,20 +586,54 @@ function PlayerTick.accelerate(velocity, wishdir, wishspeed, accel, frametime, s
 end
 
 function PlayerTick.getAirSpeedCap(target, suppressCharge)
-    if not suppressCharge and target and target:InCond(17) then
-        -- TF_COND_SHIELD_CHARGE: use tf_max_charge_speed (default 750)
+    if not target then
+        return 30.0
+    end
+
+    local hookTarget = target:GetPropEntity("m_hGrapplingHookTarget")
+    if hookTarget then
+        if target.GetCarryingRuneType and target:GetCarryingRuneType() == RuneTypes_t.RUNE_AGILITY then
+            local classIndex = target:GetPropInt("m_iClass")
+            if classIndex == E_Character.TF2_Soldier or classIndex == E_Character.TF2_Heavy then
+                return 850
+            end
+            return 950
+        end
+        local _, grappleMoveSpeed = client.GetConVar("tf_grapplinghook_move_speed")
+        return grappleMoveSpeed or 30.0
+    end
+
+    if not suppressCharge and target:InCond(E_TFCOND.TFCond_Charging) then
         local _, tf_max_charge_speed = client.GetConVar("tf_max_charge_speed")
         return tf_max_charge_speed or 750
     end
-    -- Default air speed cap in Source engine
-    return 30.0
+
+    local flCap = 30.0
+    if target:InCond(E_TFCOND.TFCond_ParachuteDeployed) then
+        local _, parachuteAirControl = client.GetConVar("tf_parachute_aircontrol")
+        flCap = flCap * (parachuteAirControl or 1.0)
+    end
+
+    if target:InCond(E_TFCOND.TFCond_HalloweenKart) then
+        if target:InCond(E_TFCOND.TFCond_HalloweenKartDash) then
+            local _, kartDashSpeed = client.GetConVar("tf_halloween_kart_dash_speed")
+            return kartDashSpeed or flCap
+        end
+        local _, kartAirControl = client.GetConVar("tf_hallowen_kart_aircontrol")
+        flCap = flCap * (kartAirControl or 1.0)
+    end
+
+    local airControlScale = target:AttributeHookFloat("mod_air_control")
+    if not airControlScale then
+        return flCap
+    end
+    return flCap * airControlScale
 end
 
 function PlayerTick.airAccelerate(v, wishdir, wishspeed, accel, dt, surf, target, suppressCharge)
-    -- Clamp wishspeed to air speed cap (Source engine default: 30)
     wishspeed = math.min(wishspeed, PlayerTick.getAirSpeedCap(target, suppressCharge))
 
-    local currentspeed = v:Dot(wishdir)
+    local currentspeed = v:Length()
     local addspeed = wishspeed - currentspeed
     if addspeed <= 0 then
         return
@@ -583,240 +646,200 @@ function PlayerTick.airAccelerate(v, wishdir, wishspeed, accel, dt, surf, target
 end
 
 function PlayerTick.clipVelocity(velocity, normal, overbounce)
-    local backoff = velocity:Dot(normal) * overbounce
+    local backoff = velocity:Dot(normal)
+    if backoff < 0 then
+        backoff = backoff * overbounce
+    else
+        backoff = backoff / overbounce
+    end
 
     velocity.x = velocity.x - normal.x * backoff
     velocity.y = velocity.y - normal.y * backoff
     velocity.z = velocity.z - normal.z * backoff
-
-    if math.abs(velocity.x) < 0.01 then
-        velocity.x = 0
-    end
-    if math.abs(velocity.y) < 0.01 then
-        velocity.y = 0
-    end
-    if math.abs(velocity.z) < 0.01 then
-        velocity.z = 0
-    end
 end
 
-function PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
-    local MAX_CLIP_PLANES = 5
+function PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval, surface_friction)
     local time_left = tickinterval
-    local planes = {}
     local numplanes = 0
 
     for bumpcount = 0, 3 do
-        if time_left <= 0 then
+        if velocity:LengthSqr() < 0.0001 then
             break
         end
 
-        local end_pos = Vector3(
-            origin.x + velocity.x * time_left,
-            origin.y + velocity.y * time_left,
-            origin.z + velocity.z * time_left
-        )
+        moveTemp1.x = origin.x + velocity.x * time_left
+        moveTemp1.y = origin.y + velocity.y * time_left
+        moveTemp1.z = origin.z + velocity.z * time_left
 
         currentTraceIndex = index
         local trace = engine.TraceHull(
             origin,
-            end_pos,
+            moveTemp1,
             mins,
             maxs,
             MASK_PLAYERSOLID,
             TraceFilterOtherPlayers
         )
+
+        if trace.allsolid then
+            velocity.x = 0
+            velocity.y = 0
+            velocity.z = 0
+            break
+        end
 
         if trace.fraction > 0 then
             origin.x = trace.endpos.x
             origin.y = trace.endpos.y
             origin.z = trace.endpos.z
-            numplanes = 0
         end
 
-        if trace.fraction == 1 then
+        if trace.fraction >= 0.99 then
             break
         end
 
-        time_left = time_left - time_left * trace.fraction
+        time_left = time_left * (1 - trace.fraction)
 
-        if trace.plane and numplanes < MAX_CLIP_PLANES then
-            planes[numplanes] = trace.plane
-            numplanes = numplanes + 1
+        if numplanes >= PlayerTick.MAX_CLIP_PLANES then
+            velocity.x = 0
+            velocity.y = 0
+            velocity.z = 0
+            break
         end
 
-        if trace.plane then
-            if trace.plane.z > 0.7 and velocity.z < 0 then
+        local plane = moveClipPlanes[numplanes + 1]
+        plane.x = trace.plane.x
+        plane.y = trace.plane.y
+        plane.z = trace.plane.z
+        numplanes = numplanes + 1
+
+        local overbounce = (trace.plane.z > 0.7) and 1.0 or (1.0 + (1.0 - (surface_friction or 1.0)) * 0.5)
+        PlayerTick.clipVelocity(velocity, plane, overbounce)
+
+        local validVelocity = true
+        for i = 1, numplanes do
+            local normal = moveClipPlanes[i]
+            local planeDot = velocity.x * normal.x + velocity.y * normal.y + velocity.z * normal.z
+            if planeDot < 0 then
+                validVelocity = false
+                break
+            end
+        end
+
+        if not validVelocity and numplanes >= 2 then
+            local plane1 = moveClipPlanes[1]
+            local plane2 = moveClipPlanes[2]
+
+            moveTemp2.x = plane1.y * plane2.z - plane1.z * plane2.y
+            moveTemp2.y = plane1.z * plane2.x - plane1.x * plane2.z
+            moveTemp2.z = plane1.x * plane2.y - plane1.y * plane2.x
+
+            local len = moveTemp2:LengthSqr()
+            if len > 0.001 then
+                moveTemp2.x = moveTemp2.x / len
+                moveTemp2.y = moveTemp2.y / len
+                moveTemp2.z = moveTemp2.z / len
+
+                local scalar = velocity.x * moveTemp2.x + velocity.y * moveTemp2.y + velocity.z * moveTemp2.z
+                velocity.x = moveTemp2.x * scalar
+                velocity.y = moveTemp2.y * scalar
+                velocity.z = moveTemp2.z * scalar
+            else
+                velocity.x = 0
+                velocity.y = 0
                 velocity.z = 0
             end
-
-            local i = 0
-            while i < numplanes do
-                PlayerTick.clipVelocity(velocity, planes[i], 1.0)
-
-                local j = 0
-                while j < numplanes do
-                    if j ~= i then
-                        local dot = velocity:Dot(planes[j])
-                        if dot < 0 then
-                            break
-                        end
-                    end
-                    j = j + 1
-                end
-
-                if j == numplanes then
-                    break
-                end
-
-                i = i + 1
-            end
-
-            if i == numplanes then
-                if numplanes >= 2 then
-                    local dir = Vector3(
-                        planes[0].y * planes[1].z - planes[0].z * planes[1].y,
-                        planes[0].z * planes[1].x - planes[0].x * planes[1].z,
-                        planes[0].x * planes[1].y - planes[0].y * planes[1].x
-                    )
-
-                    local d = dir:Dot(velocity)
-                    velocity.x = dir.x * d
-                    velocity.y = dir.y * d
-                    velocity.z = dir.z * d
-                end
-
-                local dot = velocity:Dot(planes[0])
-                if dot < 0 then
-                    velocity.x = 0
-                    velocity.y = 0
-                    velocity.z = 0
-                    break
-                end
-            end
-        else
-            break
         end
     end
 
     return origin
-end
-
-function PlayerTick.stayOnGround(origin, mins, maxs, stepheight, index)
-    local start_pos = Vector3(origin.x, origin.y, origin.z + 2)
-    local end_pos = Vector3(origin.x, origin.y, origin.z - stepheight)
-
-    currentTraceIndex = index
-    local up_trace = engine.TraceHull(origin, start_pos, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
-
-    local safe_start = up_trace.endpos
-
-    currentTraceIndex = index
-    local down_trace = engine.TraceHull(safe_start, end_pos, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
-
-    if
-        down_trace.fraction > 0
-        and down_trace.fraction < 1.0
-        and not down_trace.startsolid
-        and down_trace.plane
-        and down_trace.plane.z >= 0.7
-    then
-        local delta = math.abs(origin.z - down_trace.endpos.z)
-
-        if delta > 0.5 then
-            origin.x = down_trace.endpos.x
-            origin.y = down_trace.endpos.y
-            origin.z = down_trace.endpos.z
-            return true
-        end
-    end
-
-    return false
 end
 
 function PlayerTick.stepMove(origin, velocity, mins, maxs, index, tickinterval, stepheight)
-    local original_pos = Vector3(origin.x, origin.y, origin.z)
-    local original_vel = Vector3(velocity.x, velocity.y, velocity.z)
+    local originalX, originalY, originalZ = origin.x, origin.y, origin.z
+    local originalVx, originalVy, originalVz = velocity.x, velocity.y, velocity.z
 
-    PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
+    PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval, 1.0)
 
-    local down_pos = Vector3(origin.x, origin.y, origin.z)
-    local down_vel = Vector3(velocity.x, velocity.y, velocity.z)
+    local downDistance = (origin.x - originalX) + (origin.y - originalY)
 
-    origin.x = original_pos.x
-    origin.y = original_pos.y
-    origin.z = original_pos.z
-    velocity.x = original_vel.x
-    velocity.y = original_vel.y
-    velocity.z = original_vel.z
+    if downDistance > 5.0 or (originalVx * originalVx + originalVy * originalVy) < 1.0 then
+        return origin
+    end
 
-    local step_up_dest = Vector3(origin.x, origin.y, origin.z + stepheight + PlayerTick.DIST_EPSILON)
+    origin.x = originalX
+    origin.y = originalY
+    origin.z = originalZ
+    velocity.x = originalVx
+    velocity.y = originalVy
+    velocity.z = originalVz
+
+    moveTemp1.x = origin.x
+    moveTemp1.y = origin.y
+    moveTemp1.z = origin.z + stepheight + PlayerTick.DIST_EPSILON
 
     currentTraceIndex = index
-    local step_trace = engine.TraceHull(origin, step_up_dest, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
+    local upTrace = engine.TraceHull(origin, moveTemp1, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
 
-    if not step_trace.startsolid and not step_trace.allsolid then
-        origin.x = step_trace.endpos.x
-        origin.y = step_trace.endpos.y
-        origin.z = step_trace.endpos.z
+    if not upTrace.startsolid and not upTrace.allsolid then
+        origin.x = upTrace.endpos.x
+        origin.y = upTrace.endpos.y
+        origin.z = upTrace.endpos.z
+    end
 
-        PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval)
+    local upOriginalX, upOriginalY, upOriginalZ = origin.x, origin.y, origin.z
+    PlayerTick.tryPlayerMove(origin, velocity, mins, maxs, index, tickinterval, 1.0)
 
-        local step_down_dest = Vector3(origin.x, origin.y, origin.z - stepheight - PlayerTick.DIST_EPSILON)
+    local upDistance = (origin.x - upOriginalX) + (origin.y - upOriginalY)
+    if upDistance <= downDistance then
+        origin.x = originalX + (origin.x - originalX)
+        origin.y = originalY + (origin.y - originalY)
+        origin.z = originalZ
+        velocity.x = originalVx
+        velocity.y = originalVy
+        velocity.z = originalVz
+        return origin
+    end
 
-        currentTraceIndex = index
-        local step_down_trace = engine.TraceHull(
-            origin,
-            step_down_dest,
-            mins,
-            maxs,
-            MASK_PLAYERSOLID,
-            TraceFilterOtherPlayers
-        )
+    moveTemp1.x = origin.x
+    moveTemp1.y = origin.y
+    moveTemp1.z = origin.z - stepheight - PlayerTick.DIST_EPSILON
+    currentTraceIndex = index
+    local downTrace = engine.TraceHull(origin, moveTemp1, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
 
-        if step_down_trace.plane and step_down_trace.plane.z < 0.7 then
-            origin.x = down_pos.x
-            origin.y = down_pos.y
-            origin.z = down_pos.z
-            velocity.x = down_vel.x
-            velocity.y = down_vel.y
-            velocity.z = down_vel.z
-            return origin
-        end
-
-        if not step_down_trace.startsolid and not step_down_trace.allsolid then
-            origin.x = step_down_trace.endpos.x
-            origin.y = step_down_trace.endpos.y
-            origin.z = step_down_trace.endpos.z
-        end
-
-        local up_pos = Vector3(origin.x, origin.y, origin.z)
-
-        local down_dist = (down_pos.x - original_pos.x) * (down_pos.x - original_pos.x)
-            + (down_pos.y - original_pos.y) * (down_pos.y - original_pos.y)
-        local up_dist = (up_pos.x - original_pos.x) * (up_pos.x - original_pos.x)
-            + (up_pos.y - original_pos.y) * (up_pos.y - original_pos.y)
-
-        if down_dist > up_dist then
-            origin.x = down_pos.x
-            origin.y = down_pos.y
-            origin.z = down_pos.z
-            velocity.x = down_vel.x
-            velocity.y = down_vel.y
-            velocity.z = down_vel.z
-        else
-            velocity.z = down_vel.z
-        end
-    else
-        origin.x = down_pos.x
-        origin.y = down_pos.y
-        origin.z = down_pos.z
-        velocity.x = down_vel.x
-        velocity.y = down_vel.y
-        velocity.z = down_vel.z
+    if downTrace.plane and downTrace.plane.z >= PlayerTick.IMPACT_NORMAL_FLOOR and not downTrace.startsolid and not downTrace.allsolid then
+        origin.x = downTrace.endpos.x
+        origin.y = downTrace.endpos.y
+        origin.z = downTrace.endpos.z
     end
 
     return origin
+end
+
+function PlayerTick.categorizePosition(origin, velocity, mins, maxs, index)
+    moveTemp1.x = origin.x
+    moveTemp1.y = origin.y
+    moveTemp1.z = origin.z
+    moveTemp2.x = origin.x
+    moveTemp2.y = origin.y
+    moveTemp2.z = origin.z - PlayerTick.GROUND_CHECK_OFFSET
+
+    if velocity.z > PlayerTick.NON_JUMP_VELOCITY then
+        return false, nil, 1.0
+    end
+
+    currentTraceIndex = index
+    local trace = engine.TraceHull(moveTemp1, moveTemp2, mins, maxs, MASK_PLAYERSOLID, TraceFilterOtherPlayers)
+    if trace.plane and trace.fraction < 0.06 and trace.plane.z >= PlayerTick.IMPACT_NORMAL_FLOOR then
+        if not trace.startsolid and not trace.allsolid then
+            origin.x = moveTemp1.x + trace.fraction * (moveTemp2.x - moveTemp1.x)
+            origin.y = moveTemp1.y + trace.fraction * (moveTemp2.y - moveTemp1.y)
+            origin.z = moveTemp1.z + trace.fraction * (moveTemp2.z - moveTemp1.z)
+        end
+        return true, trace.plane, 1.0
+    end
+
+    return false, nil, 1.0
 end
 
 function PlayerTick.simulateTick(playerCtx, simCtx)
@@ -836,186 +859,29 @@ function PlayerTick.simulateTick(playerCtx, simCtx)
     local tickinterval = simCtx.tickinterval
     currentTraceTeam = playerCtx.team or -1
 
-    -- Initialize view yaw tracking (used for strafe rotation)
     playerCtx.viewYaw = playerCtx.viewYaw or playerCtx.yaw or 0
-
-    -- Ground check BEFORE movement (matches FullWalkMove order)
-    local is_on_ground =
-        PlayerTick.checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
-    local wasOnGround = playerCtx.wasOnGround
-    if wasOnGround == nil then
-        wasOnGround = is_on_ground
-    end
-
-    -- Apply strafe yaw delta (rotate view each tick)
-    local yawDelta = playerCtx.yawDeltaPerTick or 0
-    if math.abs(yawDelta) > 0.0001 then
-        playerCtx.viewYaw = playerCtx.viewYaw + yawDelta
-    end
-
-    -- Resolve wishdir based on movement mode
-    local baseWish = playerCtx.relativeWishDir or Vector3(0, 0, 0)
-    local wishLen = Length2D(baseWish)
-    local wishdir
-    -- Ducking on ground reduces maxspeed by 1/3 (Source engine behavior)
-    local effectiveMaxspeed = playerCtx.maxspeed
-    if playerCtx.isDucked and is_on_ground then
-        effectiveMaxspeed = effectiveMaxspeed / 3
-    end
-    local wishspeed = effectiveMaxspeed
-
-    if is_on_ground then
-        -- Ground movement: rotate relativeWishDir by viewYaw into world space
-        if wishLen > 0.0001 then
-            local yawRad = playerCtx.viewYaw * PlayerTick.DEG2RAD
-            local cosYaw = math.cos(yawRad)
-            local sinYaw = math.sin(yawRad)
-            local worldX = cosYaw * baseWish.x - sinYaw * baseWish.y
-            local worldY = sinYaw * baseWish.x + cosYaw * baseWish.y
-            local wLen = math.sqrt(worldX * worldX + worldY * worldY)
-            if wLen > 0.0001 then
-                wishdir = Vector3(worldX / wLen, worldY / wLen, 0)
-            else
-                wishdir = Vector3(0, 0, 0)
-                wishspeed = 0
-            end
-        else
-            wishdir = Vector3(0, 0, 0)
-            wishspeed = 0
-        end
-
-        -- Landing transition: if just landed with no wishdir, derive from velocity
-        if not wasOnGround and wishspeed == 0 then
-            local speed2d = Length2D(playerCtx.velocity)
-            if speed2d > playerCtx.maxspeed * 0.015 then
-                wishdir = Vector3(playerCtx.velocity.x / speed2d, playerCtx.velocity.y / speed2d, 0)
-                wishspeed = playerCtx.maxspeed
-            end
-        end
-    else
-        -- Air movement: keep the same rotation model as ground.
-        -- Extra 90-degree correction over-rotates with our yawDelta source and breaks strafing.
-        if wishLen > 0.0001 then
-            local yawRad = playerCtx.viewYaw * PlayerTick.DEG2RAD
-            local cosYaw = math.cos(yawRad)
-            local sinYaw = math.sin(yawRad)
-            local worldX = cosYaw * baseWish.x - sinYaw * baseWish.y
-            local worldY = sinYaw * baseWish.x + cosYaw * baseWish.y
-            local wLen = math.sqrt(worldX * worldX + worldY * worldY)
-            if wLen > 0.0001 then
-                wishdir = Vector3(worldX / wLen, worldY / wLen, 0)
-            else
-                wishdir = Vector3(0, 0, 0)
-                wishspeed = 0
-            end
-        else
-            -- Air with no input: coast (zero acceleration)
-            wishdir = Vector3(0, 0, 0)
-            wishspeed = 0
-        end
-    end
-
-    -- Zero downward velocity when on ground (step fix)
-    if is_on_ground then
-        if playerCtx.velocity.z < 0 then
-            playerCtx.velocity.z = 0
-        end
-    end
-
-    -- Apply friction (before acceleration, matches FullWalkMove)
-    PlayerTick.friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
-
-    -- Clamp velocity
-    PlayerTick.checkVelocity(playerCtx.velocity)
-
-    -- StartGravity (half gravity before movement)
-    if not is_on_ground then
-        playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
-    end
-
-    -- Accelerate
-    if is_on_ground then
-        PlayerTick.accelerate(playerCtx.velocity, wishdir, wishspeed, simCtx.sv_accelerate, tickinterval)
-        playerCtx.velocity.z = 0
-    else
-        if wishspeed > 0 then
-            PlayerTick.airAccelerate(
-                playerCtx.velocity,
-                wishdir,
-                wishspeed,
-                simCtx.sv_airaccelerate,
-                tickinterval,
-                1.0,
-                playerCtx.entity,
-                playerCtx.suppressCharge
-            )
-        end
-    end
-
-    -- Move with collision detection
-    if is_on_ground then
-        playerCtx.origin = PlayerTick.stepMove(
-            playerCtx.origin,
-            playerCtx.velocity,
-            playerCtx.mins,
-            playerCtx.maxs,
-            playerCtx.index,
-            tickinterval,
-            playerCtx.stepheight or 18
-        )
-        PlayerTick.stayOnGround(playerCtx.origin, playerCtx.mins, playerCtx.maxs, playerCtx.stepheight or 18,
-            playerCtx.index)
-    else
-        playerCtx.origin = PlayerTick.tryPlayerMove(
-            playerCtx.origin,
-            playerCtx.velocity,
-            playerCtx.mins,
-            playerCtx.maxs,
-            playerCtx.index,
-            tickinterval
-        )
-    end
-
-    -- Re-categorize position (CategorizePosition)
-    local new_ground_state =
-        PlayerTick.checkIsOnGround(playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
-
-    -- FinishGravity (remaining half gravity after movement)
-    if not new_ground_state then
-        playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
-    end
-
-    -- Zero downward velocity when on ground
-    if new_ground_state and playerCtx.velocity.z < 0 then
-        playerCtx.velocity.z = 0
-    end
-
-    -- Track ground state for next tick's landing transition
-    playerCtx.wasOnGround = new_ground_state
-
-    return Vector3(playerCtx.origin:Unpack())
-end
-
-function PlayerTick.simulateTickLight(playerCtx, simCtx)
-    local tickinterval = simCtx.tickinterval
-    currentTraceTeam = playerCtx.team or -1
-
-    playerCtx.viewYaw = playerCtx.viewYaw or playerCtx.yaw or 0
-
-    local is_on_ground = playerCtx.wasOnGround
-    if is_on_ground == nil then
-        is_on_ground = PlayerTick.checkIsOnGround(
-            playerCtx.origin, playerCtx.velocity, playerCtx.mins, playerCtx.maxs, playerCtx.index)
-    end
 
     local yawDelta = playerCtx.yawDeltaPerTick or 0
     if math.abs(yawDelta) > 0.0001 then
         playerCtx.viewYaw = playerCtx.viewYaw + yawDelta
     end
 
+    local is_on_ground, _, surface_friction = PlayerTick.categorizePosition(
+        playerCtx.origin,
+        playerCtx.velocity,
+        playerCtx.mins,
+        playerCtx.maxs,
+        playerCtx.index
+    )
+
+    if is_on_ground and playerCtx.velocity.z < 0 then
+        playerCtx.velocity.z = 0
+    end
+
     local baseWish = playerCtx.relativeWishDir or Vector3(0, 0, 0)
     local wishLen = Length2D(baseWish)
     local wishdir
+
     local effectiveMaxspeed = playerCtx.maxspeed
     if playerCtx.isDucked and is_on_ground then
         effectiveMaxspeed = effectiveMaxspeed / 3
@@ -1028,9 +894,9 @@ function PlayerTick.simulateTickLight(playerCtx, simCtx)
         local sinYaw = math.sin(yawRad)
         local worldX = cosYaw * baseWish.x - sinYaw * baseWish.y
         local worldY = sinYaw * baseWish.x + cosYaw * baseWish.y
-        local wLen = math.sqrt(worldX * worldX + worldY * worldY)
-        if wLen > 0.0001 then
-            wishdir = Vector3(worldX / wLen, worldY / wLen, 0)
+        local worldLen = math.sqrt(worldX * worldX + worldY * worldY)
+        if worldLen > 0.0001 then
+            wishdir = Vector3(worldX / worldLen, worldY / worldLen, 0)
         else
             wishdir = Vector3(0, 0, 0)
             wishspeed = 0
@@ -1040,81 +906,93 @@ function PlayerTick.simulateTickLight(playerCtx, simCtx)
         wishspeed = 0
     end
 
-    if is_on_ground and playerCtx.velocity.z < 0 then
-        playerCtx.velocity.z = 0
-    end
+    PlayerTick.friction(
+        playerCtx.velocity,
+        is_on_ground,
+        tickinterval,
+        simCtx.sv_friction,
+        simCtx.sv_stopspeed,
+        surface_friction
+    )
 
-    PlayerTick.friction(playerCtx.velocity, is_on_ground, tickinterval, simCtx.sv_friction, simCtx.sv_stopspeed)
-
-    if not is_on_ground then
-        playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * 0.5 * tickinterval)
+    if wishspeed > 0 then
+        if is_on_ground then
+            PlayerTick.accelerate(
+                playerCtx.velocity,
+                wishdir,
+                wishspeed,
+                simCtx.sv_accelerate,
+                tickinterval,
+                surface_friction
+            )
+        elseif playerCtx.velocity.z < 0 then
+            PlayerTick.airAccelerate(
+                playerCtx.velocity,
+                wishdir,
+                wishspeed,
+                simCtx.sv_airaccelerate,
+                tickinterval,
+                surface_friction,
+                playerCtx.entity,
+                playerCtx.suppressCharge
+            )
+        end
     end
 
     if is_on_ground then
-        PlayerTick.accelerate(playerCtx.velocity, wishdir, wishspeed, simCtx.sv_accelerate, tickinterval)
-        playerCtx.velocity.z = 0
-    elseif wishspeed > 0 then
-        PlayerTick.airAccelerate(
-            playerCtx.velocity, wishdir, wishspeed,
-            simCtx.sv_airaccelerate, tickinterval, 1.0,
-            playerCtx.entity, playerCtx.suppressCharge)
+        local velLength = playerCtx.velocity:Length()
+        if velLength > effectiveMaxspeed and effectiveMaxspeed > 0 then
+            local scale = effectiveMaxspeed / velLength
+            playerCtx.velocity.x = playerCtx.velocity.x * scale
+            playerCtx.velocity.y = playerCtx.velocity.y * scale
+            playerCtx.velocity.z = playerCtx.velocity.z * scale
+        end
+    end
+
+    if is_on_ground then
+        playerCtx.origin = PlayerTick.stepMove(
+            playerCtx.origin,
+            playerCtx.velocity,
+            playerCtx.mins,
+            playerCtx.maxs,
+            playerCtx.index,
+            tickinterval,
+            playerCtx.stepheight or 18
+        )
+    else
+        playerCtx.origin = PlayerTick.tryPlayerMove(
+            playerCtx.origin,
+            playerCtx.velocity,
+            playerCtx.mins,
+            playerCtx.maxs,
+            playerCtx.index,
+            tickinterval,
+            surface_friction
+        )
     end
 
     PlayerTick.checkVelocity(playerCtx.velocity)
 
-    local vel = playerCtx.velocity
-    local orig = playerCtx.origin
-    local endPos = Vector3(
-        orig.x + vel.x * tickinterval,
-        orig.y + vel.y * tickinterval,
-        orig.z + vel.z * tickinterval)
-
-    currentTraceIndex = playerCtx.index
-    local wallTrace = engine.TraceHull(
-        orig, endPos, playerCtx.mins, playerCtx.maxs,
-        MASK_PLAYERSOLID, TraceFilterOtherPlayers)
-
-    if wallTrace.fraction < 1 then
-        orig.x = wallTrace.endpos.x
-        orig.y = wallTrace.endpos.y
-        orig.z = wallTrace.endpos.z
-        if wallTrace.plane then
-            PlayerTick.clipVelocity(vel, wallTrace.plane, 1.0)
-        end
-    else
-        orig.x = endPos.x
-        orig.y = endPos.y
-        orig.z = endPos.z
+    if not is_on_ground then
+        playerCtx.velocity.z = playerCtx.velocity.z - (simCtx.sv_gravity * tickinterval)
+    elseif playerCtx.velocity.z < 0 then
+        playerCtx.velocity.z = 0
     end
 
-    local new_ground_state
-    local stepDown = is_on_ground and (playerCtx.stepheight or 18) or PlayerTick.GROUND_CHECK_OFFSET
-    local groundStart = Vector3(orig.x, orig.y, orig.z + 2)
-    local groundEnd = Vector3(orig.x, orig.y, orig.z - stepDown)
-
-    currentTraceIndex = playerCtx.index
-    local groundTrace = engine.TraceHull(
-        groundStart, groundEnd, playerCtx.mins, playerCtx.maxs,
-        MASK_PLAYERSOLID, TraceFilterOtherPlayers)
-
-    if groundTrace.fraction < 1 and not groundTrace.startsolid
-        and groundTrace.plane and groundTrace.plane.z >= 0.7 then
-        new_ground_state = true
-        orig.x = groundTrace.endpos.x
-        orig.y = groundTrace.endpos.y
-        orig.z = groundTrace.endpos.z
-        if vel.z < 0 then vel.z = 0 end
-    else
-        new_ground_state = false
-    end
-
-    if not new_ground_state then
-        vel.z = vel.z - (simCtx.sv_gravity * 0.5 * tickinterval)
-    end
-
+    local new_ground_state = PlayerTick.checkIsOnGround(
+        playerCtx.origin,
+        playerCtx.velocity,
+        playerCtx.mins,
+        playerCtx.maxs,
+        playerCtx.index
+    )
     playerCtx.wasOnGround = new_ground_state
 
-    return Vector3(orig:Unpack())
+    return Vector3(playerCtx.origin:Unpack())
+end
+
+function PlayerTick.simulateTickLight(playerCtx, simCtx)
+    return PlayerTick.simulateTick(playerCtx, simCtx)
 end
 
 -- Simulation context creator
